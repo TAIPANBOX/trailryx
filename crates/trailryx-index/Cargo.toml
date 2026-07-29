@@ -1,0 +1,15 @@
+[package]
+name = "trailryx-index"
+description = "The authenticated index: Merkle history tree and proofs of inclusion, consistency and completeness"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+trailryx-crypto = { path = "../trailryx-crypto" }
+trailryx-record = { path = "../trailryx-record" }
+
+[lints]
+workspace = true
