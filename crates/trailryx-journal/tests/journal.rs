@@ -404,9 +404,8 @@ fn a_refused_write_never_splits_the_journal() {
         let mut n = 1u128;
         for _ in 0..80 {
             match j.append(&minimal(n), &mut io).unwrap() {
-                Appended::Written { .. } => n += 1,
-                Appended::Duplicate { .. } => n += 1,
-                Appended::Stalled { .. } => {}
+                Appended::Written { .. } | Appended::Duplicate { .. } => n += 1,
+                Appended::Stalled { .. } | Appended::Busy { .. } => {}
             }
             if j.sync_due() {
                 let _ = j.sync(&mut io);
@@ -430,4 +429,60 @@ fn a_gap_is_counted_rather_than_swallowed() {
     assert_eq!(j.gaps(), 0);
     j.note_gap();
     assert_eq!(j.gaps(), 1, "a lost record must leave a trace");
+}
+
+#[test]
+fn a_record_is_never_dropped_while_another_is_pending() {
+    // The first version ignored the argument entirely when something was
+    // pending and returned Written for the *previous* record, so the caller was
+    // told its record had landed while it had been discarded and nothing
+    // counted it.
+    // A disk that refuses almost everything. Not everything: one that never
+    // accepts a byte cannot host a journal at all, and open() says so.
+    let faults = IoFaults {
+        no_space_ppm: 950_000,
+        ..IoFaults::NONE
+    };
+    let mut io = SimIo::new(11, faults);
+    let mut j = open(&mut io);
+
+    // Record 1 cannot get through in one go.
+    assert!(matches!(
+        j.append(&minimal(1), &mut io).unwrap(),
+        Appended::Stalled { .. }
+    ));
+    assert!(j.has_pending());
+
+    // A different record must be refused by name, not silently swallowed.
+    match j.append(&minimal(2), &mut io).unwrap() {
+        Appended::Busy { pending_seq } => assert_eq!(pending_seq, 1),
+        other => panic!("record 2 was accepted while record 1 was pending: {other:?}"),
+    }
+    assert_eq!(j.written(), 0, "nothing completed");
+
+    // Retrying the same record continues it rather than starting again.
+    let mut finished = false;
+    for _ in 0..500 {
+        if let Appended::Written { seq, .. } = j.append(&minimal(1), &mut io).unwrap() {
+            assert_eq!(seq, 1);
+            finished = true;
+            break;
+        }
+    }
+    assert!(finished, "the outstanding record never completed");
+    assert!(!j.has_pending());
+}
+
+#[test]
+fn a_duplicate_reports_where_the_original_landed() {
+    let mut io = SimIo::new(12, IoFaults::NONE);
+    let mut j = open(&mut io);
+    for n in 1..=5u128 {
+        j.append(&minimal(n), &mut io).unwrap();
+    }
+    // Record 2 landed at position 2, not at the current watermark of 5.
+    match j.append(&minimal(2), &mut io).unwrap() {
+        Appended::Duplicate { seq } => assert_eq!(seq, 2),
+        other => panic!("expected a duplicate, got {other:?}"),
+    }
 }

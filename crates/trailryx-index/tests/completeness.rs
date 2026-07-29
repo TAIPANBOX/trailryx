@@ -74,7 +74,10 @@ fn an_honest_range_verifies() {
 
     let proof = idx.range(&lo, &hi);
     assert_eq!(proof.matched(), 6, "times 1030..=1080 inclusive");
-    assert_eq!(proof.verify(Dimension::RecordedAt, &lo, &hi, root), Ok(()));
+    assert_eq!(
+        proof.verify(Dimension::RecordedAt, &lo, &hi, root, idx.len()),
+        Ok(())
+    );
 }
 
 #[test]
@@ -91,7 +94,8 @@ fn a_range_at_each_edge_verifies() {
             Dimension::RecordedAt,
             &Dimension::time_key(0),
             &Dimension::time_key(u64::MAX),
-            root
+            root,
+            idx.len()
         ),
         Ok(())
     );
@@ -104,7 +108,8 @@ fn a_range_at_each_edge_verifies() {
             Dimension::RecordedAt,
             &Dimension::time_key(5_000),
             &Dimension::time_key(6_000),
-            root
+            root,
+            idx.len()
         ),
         Ok(())
     );
@@ -117,7 +122,11 @@ fn every_dimension_answers_and_proves() {
         let idx = SortedIndex::build(*d, &c);
         let root = idx.root();
         let proof = idx.range(&[], &[0xff; 32]);
-        assert_eq!(proof.verify(*d, &[], &[0xff; 32], root), Ok(()), "{d:?}");
+        assert_eq!(
+            proof.verify(*d, &[], &[0xff; 32], root, idx.len()),
+            Ok(()),
+            "{d:?}"
+        );
     }
 }
 
@@ -129,7 +138,10 @@ fn one_agents_records_are_provably_all_of_them() {
 
     let proof = idx.range(&key, &key);
     assert_eq!(proof.matched(), 4);
-    assert_eq!(proof.verify(Dimension::AgentId, &key, &key, root), Ok(()));
+    assert_eq!(
+        proof.verify(Dimension::AgentId, &key, &key, root, idx.len()),
+        Ok(())
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -149,7 +161,7 @@ fn hiding_a_record_breaks_the_proof() {
     proof.entry_proofs.remove(2);
 
     let err = proof
-        .verify(Dimension::RecordedAt, &lo, &hi, root)
+        .verify(Dimension::RecordedAt, &lo, &hi, root, idx.len())
         .unwrap_err();
     assert!(
         matches!(err, ProofFailure::NotContiguous { .. }),
@@ -172,7 +184,7 @@ fn hiding_the_last_record_of_a_range_breaks_the_proof() {
     lazy.entries.pop();
     lazy.entry_proofs.pop();
     let err = lazy
-        .verify(Dimension::RecordedAt, &lo, &hi, root)
+        .verify(Dimension::RecordedAt, &lo, &hi, root, idx.len())
         .unwrap_err();
     assert!(
         matches!(
@@ -190,7 +202,7 @@ fn hiding_the_last_record_of_a_range_breaks_the_proof() {
     let hidden_proof = careful.entry_proofs.pop().expect("proof exists");
     careful.right_boundary = Some((hidden, hidden_proof));
     let err = careful
-        .verify(Dimension::RecordedAt, &lo, &hi, root)
+        .verify(Dimension::RecordedAt, &lo, &hi, root, idx.len())
         .unwrap_err();
     assert_eq!(
         err,
@@ -212,7 +224,7 @@ fn hiding_the_first_record_of_a_range_breaks_the_proof() {
     lazy.entry_proofs.remove(0);
     lazy.first_index += 1;
     let err = lazy
-        .verify(Dimension::RecordedAt, &lo, &hi, root)
+        .verify(Dimension::RecordedAt, &lo, &hi, root, idx.len())
         .unwrap_err();
     assert!(
         matches!(
@@ -229,7 +241,7 @@ fn hiding_the_first_record_of_a_range_breaks_the_proof() {
     careful.first_index += 1;
     careful.left_boundary = Some((hidden, hidden_proof));
     let err = careful
-        .verify(Dimension::RecordedAt, &lo, &hi, root)
+        .verify(Dimension::RecordedAt, &lo, &hi, root, idx.len())
         .unwrap_err();
     assert_eq!(
         err,
@@ -249,7 +261,7 @@ fn inventing_a_record_breaks_the_proof() {
     proof.entries[1].record_leaf = Sha384::digest(b"a record that never existed");
 
     let err = proof
-        .verify(Dimension::RecordedAt, &lo, &hi, root)
+        .verify(Dimension::RecordedAt, &lo, &hi, root, idx.len())
         .unwrap_err();
     assert!(
         matches!(err, ProofFailure::EntryNotInTree { at: 1 }),
@@ -267,14 +279,14 @@ fn dropping_a_boundary_breaks_the_proof() {
     let mut proof = idx.range(&lo, &hi);
     proof.right_boundary = None;
     assert_eq!(
-        proof.verify(Dimension::RecordedAt, &lo, &hi, root),
+        proof.verify(Dimension::RecordedAt, &lo, &hi, root, idx.len()),
         Err(ProofFailure::MissingRightBoundary)
     );
 
     let mut proof = idx.range(&lo, &hi);
     proof.left_boundary = None;
     assert_eq!(
-        proof.verify(Dimension::RecordedAt, &lo, &hi, root),
+        proof.verify(Dimension::RecordedAt, &lo, &hi, root, idx.len()),
         Err(ProofFailure::MissingLeftBoundary)
     );
 }
@@ -293,7 +305,7 @@ fn a_boundary_that_does_not_bound_is_rejected() {
     proof.right_boundary = Some((inner.entries[0].clone(), inner.entry_proofs[0].clone()));
 
     let err = proof
-        .verify(Dimension::RecordedAt, &lo, &hi, root)
+        .verify(Dimension::RecordedAt, &lo, &hi, root, idx.len())
         .unwrap_err();
     assert!(
         matches!(
@@ -318,7 +330,8 @@ fn a_proof_for_one_range_does_not_answer_another() {
                 Dimension::RecordedAt,
                 &Dimension::time_key(1_000),
                 &Dimension::time_key(1_120),
-                root
+                root,
+                idx.len()
             )
             .is_err()
     );
@@ -330,7 +343,13 @@ fn a_proof_from_one_dimension_does_not_answer_another() {
     let by_time = SortedIndex::build(Dimension::RecordedAt, &c);
     let proof = by_time.range(&Dimension::time_key(0), &Dimension::time_key(u64::MAX));
     assert_eq!(
-        proof.verify(Dimension::AgentId, &[], &[0xff], by_time.root()),
+        proof.verify(
+            Dimension::AgentId,
+            &[],
+            &[0xff],
+            by_time.root(),
+            by_time.len()
+        ),
         Err(ProofFailure::WrongDimension)
     );
 }
@@ -353,7 +372,7 @@ fn a_proof_does_not_verify_against_another_segments_root() {
 
     assert!(
         proof
-            .verify(Dimension::RecordedAt, &lo, &hi, other.root())
+            .verify(Dimension::RecordedAt, &lo, &hi, other.root(), idx.len())
             .is_err()
     );
 }
@@ -368,7 +387,11 @@ fn reordering_the_answer_is_rejected() {
     let mut proof = idx.range(&lo, &hi);
     proof.entries.swap(0, 1);
 
-    assert!(proof.verify(Dimension::RecordedAt, &lo, &hi, root).is_err());
+    assert!(
+        proof
+            .verify(Dimension::RecordedAt, &lo, &hi, root, idx.len())
+            .is_err()
+    );
 }
 
 #[test]
@@ -384,7 +407,7 @@ fn every_sub_range_of_the_corpus_verifies() {
             let hi = Dimension::time_key(hi_t);
             let proof = idx.range(&lo, &hi);
             assert_eq!(
-                proof.verify(Dimension::RecordedAt, &lo, &hi, root),
+                proof.verify(Dimension::RecordedAt, &lo, &hi, root, idx.len()),
                 Ok(()),
                 "range {lo_t}..={hi_t}"
             );
@@ -397,4 +420,63 @@ fn every_sub_range_of_the_corpus_verifies() {
             assert_eq!(proof.matched(), expected, "range {lo_t}..={hi_t}");
         }
     }
+}
+
+// ---------------------------------------------------------------------------
+// The shape of the answer must not come from the answer
+// ---------------------------------------------------------------------------
+
+#[test]
+fn an_empty_proof_does_not_verify_against_a_non_empty_index() {
+    // The attack that defeated the first version: declare size 0 and there are
+    // no entries to check, no boundaries to demand, and the root is never read.
+    // It verified against every root, including one belonging to a segment full
+    // of matching records.
+    let idx = SortedIndex::build(Dimension::RecordedAt, &corpus());
+    let forged = trailryx_index::completeness::CompletenessProof {
+        dimension: Dimension::RecordedAt,
+        size: 0,
+        first_index: 0,
+        entries: Vec::new(),
+        entry_proofs: Vec::new(),
+        left_boundary: None,
+        right_boundary: None,
+    };
+
+    let lo = Dimension::time_key(0);
+    let hi = Dimension::time_key(u64::MAX);
+    assert_eq!(
+        forged.verify(Dimension::RecordedAt, &lo, &hi, idx.root(), idx.len()),
+        Err(ProofFailure::WrongSize {
+            expected: 12,
+            got: 0
+        })
+    );
+    // Even told the size it claims, it cannot borrow another index's root.
+    assert_eq!(
+        forged.verify(Dimension::RecordedAt, &lo, &hi, idx.root(), 0),
+        Err(ProofFailure::EmptyAnswerAgainstNonEmptyIndex)
+    );
+}
+
+#[test]
+fn an_honestly_empty_index_still_answers() {
+    let idx = SortedIndex::build(Dimension::RecordedAt, &[]);
+    let lo = Dimension::time_key(0);
+    let hi = Dimension::time_key(u64::MAX);
+    let proof = idx.range(&lo, &hi);
+    assert_eq!(proof.matched(), 0);
+    assert_eq!(
+        proof.verify(Dimension::RecordedAt, &lo, &hi, idx.root(), 0),
+        Ok(())
+    );
+}
+
+#[test]
+fn a_reversed_range_is_empty_rather_than_a_panic() {
+    // A query surface forwards whatever a caller typed; a slice index is not
+    // where that should be discovered.
+    let idx = SortedIndex::build(Dimension::RecordedAt, &corpus());
+    let proof = idx.range(&Dimension::time_key(1_090), &Dimension::time_key(1_010));
+    assert_eq!(proof.matched(), 0);
 }

@@ -11,7 +11,7 @@ use crate::wire::{
     self, Frame, WireError, decode_frame, decode_record, decode_segment_header, encode_frame,
     encode_record, encode_segment_header,
 };
-use std::collections::{BTreeSet, VecDeque};
+use std::collections::{BTreeMap, VecDeque};
 use trailryx_crypto::{ChainState, Hash};
 use trailryx_record::{Record, RecordId, SegmentId, ShardIx, Timestamp};
 use trailryx_sim::{Clock, FileId, Io, IoError};
@@ -53,9 +53,18 @@ struct SegmentHeaderLen(usize);
 pub enum Appended {
     /// Fully on the file. Not durable yet: that needs a sync.
     Written { seq: u64, link: Hash },
-    /// Seen before. The store is idempotent on record id, so at-least-once
-    /// sources are safe to point at it.
+    /// Seen before, at this position. The store is idempotent on record id, so
+    /// at-least-once sources are safe to point at it.
     Duplicate { seq: u64 },
+    /// A different record is still going to disk. This one was **not** taken:
+    /// finish the outstanding one first, or count a gap.
+    ///
+    /// The first version silently ignored the argument in this case and
+    /// returned `Written` for the *previous* record, so a caller was told its
+    /// record had landed when the record had been dropped and nothing counted
+    /// it. `docs/durability.md` §5 calls silent loss the one behaviour that
+    /// would make the product dishonest.
+    Busy { pending_seq: u64 },
     /// The device would not take it all. The record stays outstanding and the
     /// next call continues it from where it stopped; no new record starts
     /// meanwhile, because orphaned bytes mid-stream would cut the journal in
@@ -101,7 +110,9 @@ impl Recovered {
 /// journal where it is visible rather than silently absorbed.
 #[derive(Debug)]
 pub struct DedupWindow {
-    seen: BTreeSet<RecordId>,
+    /// Position each id landed at, so a duplicate can be told where its
+    /// original went rather than where the journal happens to be now.
+    seen: BTreeMap<RecordId, u64>,
     order: VecDeque<RecordId>,
     capacity: usize,
 }
@@ -109,18 +120,23 @@ pub struct DedupWindow {
 impl DedupWindow {
     pub fn new(capacity: usize) -> Self {
         Self {
-            seen: BTreeSet::new(),
+            seen: BTreeMap::new(),
             order: VecDeque::new(),
             capacity: capacity.max(1),
         }
     }
 
     pub fn contains(&self, id: RecordId) -> bool {
-        self.seen.contains(&id)
+        self.seen.contains_key(&id)
     }
 
-    fn remember(&mut self, id: RecordId) {
-        if self.seen.insert(id) {
+    /// Where this id landed, if it is still in the window.
+    pub fn position(&self, id: RecordId) -> Option<u64> {
+        self.seen.get(&id).copied()
+    }
+
+    fn remember(&mut self, id: RecordId, seq: u64) {
+        if self.seen.insert(id, seq).is_none() {
             self.order.push_back(id);
             if self.order.len() > self.capacity {
                 if let Some(old) = self.order.pop_front() {
@@ -285,7 +301,7 @@ impl Journal {
 
             chain.append(frame.body);
             records += 1;
-            ids.push(rec.id);
+            ids.push((rec.id, rec.seq));
             off += frame.total_len;
         }
 
@@ -296,8 +312,8 @@ impl Journal {
             io.truncate(self.file, good_bytes)?;
         }
 
-        for id in ids {
-            self.dedup.remember(id);
+        for (id, seq) in ids {
+            self.dedup.remember(id, seq);
         }
 
         self.chain = chain;
@@ -323,9 +339,15 @@ impl Journal {
     /// The caller's `seq`, `prev_hash` and `segment_id` are overwritten: the
     /// journal owns them, because they are what the chain is made of.
     pub fn append<I: Io>(&mut self, record: &Record, io: &mut I) -> JournalResult<Appended> {
-        if self.pending.is_none() {
-            if self.dedup.contains(record.id) {
-                return Ok(Appended::Duplicate { seq: self.written });
+        // A record already going to disk must finish before any other starts,
+        // and the caller has to be told which one it is talking about.
+        if let Some(p) = self.pending.as_ref() {
+            if p.id != record.id {
+                return Ok(Appended::Busy { pending_seq: p.seq });
+            }
+        } else {
+            if let Some(seq) = self.dedup.position(record.id) {
+                return Ok(Appended::Duplicate { seq });
             }
 
             let seq = self.written + 1;
@@ -383,7 +405,7 @@ impl Journal {
         self.good_bytes += body_len as u64;
         self.since_sync += 1;
         self.degraded = false;
-        self.dedup.remember(p.id);
+        self.dedup.remember(p.id, p.seq);
 
         Ok(Appended::Written {
             seq: p.seq,

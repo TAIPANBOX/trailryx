@@ -4,45 +4,45 @@
 //! record → segment → shard → store → federation
 //! ```
 //!
-//! Each level is a Merkle tree over the roots of the level below, and the same
-//! verification code serves all of them. That is deliberate: composing shard
-//! proofs inside one node and composing peer proofs across clouds are the same
-//! problem, so writing it twice would mean two chances to get it wrong.
+//! Each level is a Merkle tree over the level below, and the same verification
+//! code serves all of them. Composing shard proofs inside one node and composing
+//! peer proofs across clouds are the same problem, so writing it twice would be
+//! two chances to get it wrong.
 //!
-//! # Skipping a segment has to be checkable
+//! # One rule underneath all of this
 //!
-//! An answer that spans a store does not want to carry an empty proof from
-//! every segment that obviously cannot match. But skipping one is only sound if
-//! the verifier can confirm the segment really could not have matched, and the
-//! only thing it can confirm is what the manifest commits to.
+//! > **A verifier must never learn the shape of an answer from the answer.**
 //!
-//! So a segment may be excluded **only** on a dimension whose bounds the
-//! manifest carries, which today means time. On every other dimension each
-//! segment must answer, even if the answer is empty. Anything looser would let
-//! an omission hide behind the word "irrelevant".
+//! How many shards exist, how many segments a shard holds, how many entries an
+//! index has, what span a segment covers: each has to come from something
+//! committed, because a server able to state a number is a server able to
+//! understate it. The first version of this file got that right for the shard
+//! count and wrong for everything else, and every one of those mistakes
+//! produced an answer that verified while hiding records.
 
-use crate::completeness::{CompletenessProof, Dimension, ProofFailure, SortedIndex};
-use crate::merkle::{InclusionProof, MerkleTree, leaf_hash};
+use crate::completeness::{CompletenessProof, Dimension, Entry, ProofFailure, SortedIndex};
+use crate::merkle::{InclusionProof, MerkleTree, empty_root, leaf_hash};
 use trailryx_crypto::{Digest, Hash, Sha384, digests_equal};
 use trailryx_record::{Algorithms, Record, SegmentId, ShardIx, Timestamp};
 
 /// What a sealed segment commits to.
-///
-/// One hash over this covers the records, every index built on them, and the
-/// metadata a verifier needs in order to reason about what the segment could
-/// possibly have contained.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SegmentManifest {
     pub format_version: u16,
     pub segment: SegmentId,
     pub shard: ShardIx,
     pub records: u64,
-    /// Merkle root over record leaves in journal order.
+    /// Merkle root over the records' chain links, in journal order.
     pub history_root: Hash,
     /// Index roots, in the fixed order of [`Dimension::ALL`].
     pub index_roots: Vec<(Dimension, Hash)>,
-    /// Time bounds, which are the only thing that may justify skipping this
-    /// segment when answering a range query.
+    /// The shard's chain head before this segment's first record, and after its
+    /// last.
+    ///
+    /// Without them a shard's segments are independent chains, and deleting a
+    /// whole file leaves every remaining one internally valid.
+    pub chain_before: Hash,
+    pub chain_after: Hash,
     pub first_recorded_at: Timestamp,
     pub last_recorded_at: Timestamp,
     pub algorithms: Algorithms,
@@ -58,15 +58,20 @@ impl SegmentManifest {
         h.update(&self.shard.0.to_be_bytes());
         h.update(&self.records.to_be_bytes());
         h.update(self.history_root.as_bytes());
-        // Fixed order, so two honest sealers agree byte for byte.
+        h.update(self.chain_before.as_bytes());
+        h.update(self.chain_after.as_bytes());
+        // Length-prefixed and in fixed order, so two honest sealers agree byte
+        // for byte and no run of entries can be reinterpreted as another.
+        h.update(&(self.index_roots.len() as u64).to_be_bytes());
         for (d, r) in &self.index_roots {
-            h.update(d.as_str().as_bytes());
-            h.update(&[0]);
+            let name = d.as_str().as_bytes();
+            h.update(&(name.len() as u64).to_be_bytes());
+            h.update(name);
             h.update(r.as_bytes());
         }
         h.update(&self.first_recorded_at.as_nanos().to_be_bytes());
         h.update(&self.last_recorded_at.as_nanos().to_be_bytes());
-        h.update(&[algorithm_code(self.algorithms)]);
+        h.update(&algorithm_code(self.algorithms));
         h.finish()
     }
 
@@ -76,30 +81,36 @@ impl SegmentManifest {
             .find(|(dim, _)| *dim == d)
             .map(|(_, r)| *r)
     }
-
-    /// Whether a time range could possibly touch this segment.
-    fn overlaps_time(&self, lo: u64, hi: u64) -> bool {
-        !(hi < self.first_recorded_at.as_nanos() || lo > self.last_recorded_at.as_nanos())
-    }
 }
 
-fn algorithm_code(a: Algorithms) -> u8 {
-    // One byte is enough while there is one choice per slot; it exists so the
-    // manifest commits to which algorithms produced it, which is what the 2030
-    // migration will need in order to enumerate what to re-sign.
+/// One byte per slot, so a future algorithm cannot alias an existing one the
+/// way a packed byte would.
+fn algorithm_code(a: Algorithms) -> [u8; 3] {
     use trailryx_record::{HashAlg, KemAlg, SigAlg};
-    let h = match a.hash {
-        HashAlg::Sha384 => 1u8,
-    };
-    let s = match a.signature {
-        SigAlg::Es256 => 1u8,
-        SigAlg::MlDsa65 => 2,
-        SigAlg::SlhDsa => 3,
-    };
-    let k = match a.kem {
-        KemAlg::X25519MlKem768 => 1u8,
-    };
-    (h << 5) | (s << 2) | k
+    [
+        match a.hash {
+            HashAlg::Sha384 => 1,
+        },
+        match a.signature {
+            SigAlg::Es256 => 1,
+            SigAlg::MlDsa65 => 2,
+            SigAlg::SlhDsa => 3,
+        },
+        match a.kem {
+            KemAlg::X25519MlKem768 => 1,
+        },
+    ]
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SealError {
+    /// Two entries would occupy the same position in the same dimension, which
+    /// makes every range covering both permanently unverifiable: a data
+    /// condition turning into a denial of service.
+    DuplicateKey { dimension: Dimension, seq: u64 },
+    /// The segment mixes algorithms, so one manifest cannot say which produced
+    /// it, and the migration those fields exist for could not enumerate it.
+    MixedAlgorithms,
 }
 
 /// A sealed segment: immutable, and the unit everything above is built from.
@@ -111,34 +122,57 @@ pub struct Segment {
 }
 
 impl Segment {
-    /// Seal records into a segment. Records arrive in journal order.
-    pub fn seal(segment: SegmentId, shard: ShardIx, records: &[Record]) -> Self {
+    /// Seal records into a segment.
+    ///
+    /// Takes each record **with its chain link**, and the link is what becomes
+    /// the history leaf. The first version hashed the sequence number, so the
+    /// history root was a function of a set of integers: two segments differing
+    /// in verdict, cost, tenant and payload reference produced identical roots,
+    /// and a completeness proof said nothing about the records a query would
+    /// return beside it.
+    pub fn seal(
+        segment: SegmentId,
+        shard: ShardIx,
+        chain_before: Hash,
+        records: &[(Record, Hash)],
+    ) -> Result<Self, SealError> {
+        if let Some((first, _)) = records.first()
+            && records
+                .iter()
+                .any(|(r, _)| r.algorithms != first.algorithms)
+        {
+            return Err(SealError::MixedAlgorithms);
+        }
+
         let history = MerkleTree::from_leaf_hashes(
             records
                 .iter()
-                .map(|r| leaf_hash(&r.seq.to_be_bytes()))
+                .map(|(_, link)| leaf_hash(link.as_bytes()))
                 .collect(),
         );
 
-        let with_leaves: Vec<(Record, Hash)> = records
-            .iter()
-            .enumerate()
-            .map(|(i, r)| (r.clone(), history.leaf(i).expect("leaf exists")))
-            .collect();
-
         let indexes: Vec<SortedIndex> = Dimension::ALL
             .iter()
-            .map(|d| SortedIndex::build(*d, &with_leaves))
+            .map(|d| SortedIndex::build(*d, records))
             .collect();
+
+        for idx in &indexes {
+            if let Some(seq) = idx.first_duplicate_position() {
+                return Err(SealError::DuplicateKey {
+                    dimension: idx.dimension(),
+                    seq,
+                });
+            }
+        }
 
         let first = records
             .iter()
-            .map(|r| r.recorded_at)
+            .map(|(r, _)| r.recorded_at)
             .min()
             .unwrap_or(Timestamp::ZERO);
         let last = records
             .iter()
-            .map(|r| r.recorded_at)
+            .map(|(r, _)| r.recorded_at)
             .max()
             .unwrap_or(Timestamp::ZERO);
 
@@ -149,16 +183,21 @@ impl Segment {
             records: records.len() as u64,
             history_root: history.root(),
             index_roots: indexes.iter().map(|i| (i.dimension(), i.root())).collect(),
+            chain_before,
+            chain_after: records.last().map(|(_, l)| *l).unwrap_or(chain_before),
             first_recorded_at: first,
             last_recorded_at: last,
-            algorithms: records.first().map(|r| r.algorithms).unwrap_or_default(),
+            algorithms: records
+                .first()
+                .map(|(r, _)| r.algorithms)
+                .unwrap_or_default(),
         };
 
-        Self {
+        Ok(Self {
             manifest,
             indexes,
             history,
-        }
+        })
     }
 
     pub fn manifest(&self) -> &SegmentManifest {
@@ -180,6 +219,36 @@ impl Segment {
     pub fn range(&self, d: Dimension, lo: &[u8], hi: &[u8]) -> Option<CompletenessProof> {
         self.index(d).map(|i| i.range(lo, hi))
     }
+
+    /// The evidence a skip has to be backed by: the first and last entries of
+    /// the time index, each with an inclusion proof. `None` for an empty
+    /// segment, whose emptiness the manifest already commits to.
+    pub fn time_span(&self) -> Option<Box<TimeSpan>> {
+        let idx = self.index(Dimension::RecordedAt)?;
+        if idx.is_empty() {
+            return None;
+        }
+        let last = idx.len() - 1;
+        Some(Box::new(TimeSpan {
+            min: idx.entry(0)?.clone(),
+            min_proof: idx.inclusion(0)?,
+            max: idx.entry(last)?.clone(),
+            max_proof: idx.inclusion(last)?,
+        }))
+    }
+}
+
+/// Proof of what a segment's time index actually spans.
+///
+/// Committed bounds in the manifest are written by the sealer, and the sealer
+/// is the party being audited. A skip justified by its own declaration is a
+/// skip justified by nothing.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TimeSpan {
+    pub min: Entry,
+    pub min_proof: InclusionProof,
+    pub max: Entry,
+    pub max_proof: InclusionProof,
 }
 
 /// A shard: an ordered list of sealed segments.
@@ -200,7 +269,7 @@ impl ShardTree {
     }
 
     pub fn push(&mut self, manifest: SegmentManifest) {
-        self.tree.push_leaf(leaf_of(manifest.root()));
+        self.tree.push_leaf(leaf_hash(manifest.root().as_bytes()));
         self.manifests.push(manifest);
     }
 
@@ -229,23 +298,43 @@ impl ShardTree {
     }
 }
 
-/// The store: an ordered list of shards, fixed at creation.
+/// The leaf a shard occupies in the store tree.
 ///
-/// Fixed because shard identity is part of a proof path. Re-splitting later
-/// would invalidate every proof already issued, so the count is chosen once,
-/// generously, and a different count means a new epoch with explicit lineage
-/// rather than a rebuild of this one.
+/// It commits the segment **count** as well as the root. Without that, an
+/// answer omitting every segment of a shard passed: the per-segment loop simply
+/// never ran, and nothing else looked.
+fn shard_leaf(shard: ShardIx, segments: usize, root: Hash) -> Hash {
+    let mut h = Sha384::new();
+    h.update(b"trailryx/store-leaf/v1\0");
+    h.update(&shard.0.to_be_bytes());
+    h.update(&(segments as u64).to_be_bytes());
+    h.update(root.as_bytes());
+    leaf_hash(h.finish().as_bytes())
+}
+
+/// The store: an ordered list of shards, fixed at creation.
 #[derive(Debug, Clone, Default)]
 pub struct StoreTree {
-    shard_roots: Vec<Hash>,
+    shards: Vec<(ShardIx, usize, Hash)>,
     tree: MerkleTree,
 }
 
 impl StoreTree {
     pub fn from_shards(shards: &[ShardTree]) -> Self {
-        let shard_roots: Vec<Hash> = shards.iter().map(ShardTree::root).collect();
-        let tree = MerkleTree::from_leaf_hashes(shard_roots.iter().map(|r| leaf_of(*r)).collect());
-        Self { shard_roots, tree }
+        let entries: Vec<(ShardIx, usize, Hash)> = shards
+            .iter()
+            .map(|s| (s.shard(), s.len(), s.root()))
+            .collect();
+        let tree = MerkleTree::from_leaf_hashes(
+            entries
+                .iter()
+                .map(|(ix, n, r)| shard_leaf(*ix, *n, *r))
+                .collect(),
+        );
+        Self {
+            shards: entries,
+            tree,
+        }
     }
 
     pub fn root(&self) -> Hash {
@@ -253,11 +342,7 @@ impl StoreTree {
     }
 
     pub fn shards(&self) -> usize {
-        self.shard_roots.len()
-    }
-
-    pub fn shard_root(&self, i: usize) -> Option<Hash> {
-        self.shard_roots.get(i).copied()
+        self.shards.len()
     }
 
     pub fn inclusion(&self, i: usize) -> Option<InclusionProof> {
@@ -265,27 +350,23 @@ impl StoreTree {
     }
 }
 
-fn leaf_of(h: Hash) -> Hash {
-    leaf_hash(h.as_bytes())
-}
-
 /// What one segment contributed to a store-wide answer.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SegmentContribution {
-    /// The segment answered, with a proof covering its own index.
-    ///
-    /// The proof is boxed because it dwarfs the other variant, and a vector of
-    /// these would otherwise pay the larger size for every skipped segment.
+    /// The segment answered. Boxed because it dwarfs the other variant.
     Answered {
         manifest: SegmentManifest,
         manifest_proof: InclusionProof,
         proof: Box<CompletenessProof>,
     },
-    /// The segment was skipped because its committed time bounds put it outside
-    /// the range. Only legitimate on the time dimension.
+    /// The segment was skipped because its time index provably lies outside the
+    /// range. `span` is absent only for a segment the manifest says is empty.
     ExcludedByTime {
         manifest: SegmentManifest,
         manifest_proof: InclusionProof,
+        /// Boxed for the same reason as the answer: neither variant should
+        /// make a vector of the other pay its size.
+        span: Option<Box<TimeSpan>>,
     },
 }
 
@@ -310,11 +391,13 @@ impl SegmentContribution {
 pub struct ShardContribution {
     pub shard: ShardIx,
     pub shard_root: Hash,
+    /// How many segments this shard holds. Committed in the store leaf, so a
+    /// contribution cannot quietly answer with fewer.
+    pub segments_in_shard: usize,
     pub shard_proof: InclusionProof,
     pub segments: Vec<SegmentContribution>,
 }
 
-/// A store-wide answer, with everything needed to show nothing was left out.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CompositeProof {
     pub dimension: Dimension,
@@ -323,9 +406,6 @@ pub struct CompositeProof {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CompositeFailure {
-    /// Fewer shards answered than the store contains. The failure the whole
-    /// construction exists to catch: forgetting a node silently shrinks an
-    /// answer.
     ShardMissing {
         expected: usize,
         got: usize,
@@ -333,27 +413,38 @@ pub enum CompositeFailure {
     ShardNotInStore {
         shard: ShardIx,
     },
+    /// A shard answered with fewer segments than its store leaf commits to.
+    SegmentsMissing {
+        shard: ShardIx,
+        expected: usize,
+        got: usize,
+    },
     SegmentNotInShard {
         shard: ShardIx,
         at: usize,
     },
-    /// A segment was skipped whose committed bounds do not exclude the range.
+    /// A manifest claims a shard other than the one presenting it.
+    ManifestShardMismatch {
+        shard: ShardIx,
+        at: usize,
+    },
     ExclusionNotJustified {
         shard: ShardIx,
         at: usize,
     },
-    /// A segment was skipped on a dimension where the manifest commits to no
-    /// bounds, so the exclusion cannot be checked at all.
     ExclusionNotCheckable {
         dimension: Dimension,
     },
-    /// A segment's own completeness proof did not hold.
+    /// A skip was offered without proof of what the segment actually spans.
+    ExclusionUnproven {
+        shard: ShardIx,
+        at: usize,
+    },
     SegmentProof {
         shard: ShardIx,
         at: usize,
         why: ProofFailure,
     },
-    /// The proof was verified against an index root the manifest does not name.
     IndexRootMissing {
         shard: ShardIx,
         at: usize,
@@ -374,10 +465,8 @@ impl CompositeProof {
 
     /// Verify the whole answer against the store root.
     ///
-    /// `shards_in_store` is not taken from the proof: a proof that could state
-    /// how many shards exist could also understate it, which is exactly the
-    /// omission being guarded against. It comes from the store's own committed
-    /// configuration.
+    /// `shards_in_store` comes from the store's committed configuration. Every
+    /// other count in here is committed too, for the same reason.
     pub fn verify(
         &self,
         dimension: Dimension,
@@ -393,10 +482,10 @@ impl CompositeProof {
             });
         }
 
-        // Checked up front, because it is a property of the answer's shape
-        // rather than of any one segment: on a dimension whose bounds nothing
-        // commits to, "this segment could not have matched" is an unverifiable
-        // claim, and no amount of valid proofs elsewhere repairs it.
+        // A property of the answer's shape, checked before anything else: on a
+        // dimension whose extent nothing commits to, "this segment could not
+        // have matched" is unverifiable, and valid proofs elsewhere do not
+        // repair it.
         if dimension != Dimension::RecordedAt
             && self
                 .shards
@@ -408,65 +497,114 @@ impl CompositeProof {
         }
 
         for (i, sc) in self.shards.iter().enumerate() {
-            if sc.shard_proof.index != i
-                || sc.shard_proof.size != shards_in_store
-                || !sc.shard_proof.verify(leaf_of(sc.shard_root), store_root)
-            {
+            if !sc.shard_proof.verify_at(
+                shard_leaf(sc.shard, sc.segments_in_shard, sc.shard_root),
+                store_root,
+                i,
+                shards_in_store,
+            ) {
                 return Err(CompositeFailure::ShardNotInStore { shard: sc.shard });
+            }
+
+            if sc.segments.len() != sc.segments_in_shard {
+                return Err(CompositeFailure::SegmentsMissing {
+                    shard: sc.shard,
+                    expected: sc.segments_in_shard,
+                    got: sc.segments.len(),
+                });
             }
 
             for (j, contribution) in sc.segments.iter().enumerate() {
                 let manifest = contribution.manifest();
-                let mp = contribution.manifest_proof();
-                if mp.index != j
-                    || mp.size != sc.segments.len()
-                    || !mp.verify(leaf_of(manifest.root()), sc.shard_root)
-                {
+                if manifest.shard != sc.shard {
+                    return Err(CompositeFailure::ManifestShardMismatch {
+                        shard: sc.shard,
+                        at: j,
+                    });
+                }
+                if !contribution.manifest_proof().verify_at(
+                    leaf_hash(manifest.root().as_bytes()),
+                    sc.shard_root,
+                    j,
+                    sc.segments_in_shard,
+                ) {
                     return Err(CompositeFailure::SegmentNotInShard {
                         shard: sc.shard,
                         at: j,
                     });
                 }
 
+                let size = usize::try_from(manifest.records).unwrap_or(usize::MAX);
+
                 match contribution {
-                    SegmentContribution::ExcludedByTime { manifest, .. } => {
-                        let (lo_n, hi_n) = (be_u64(lo), be_u64(hi));
-                        if manifest.overlaps_time(lo_n, hi_n) {
-                            return Err(CompositeFailure::ExclusionNotJustified {
+                    SegmentContribution::ExcludedByTime { manifest, span, .. } => {
+                        let time_root = manifest.index_root(Dimension::RecordedAt).ok_or(
+                            CompositeFailure::IndexRootMissing {
                                 shard: sc.shard,
                                 at: j,
-                            });
+                            },
+                        )?;
+
+                        match span {
+                            // An empty segment excludes itself from everything,
+                            // and its emptiness is committed twice over.
+                            None => {
+                                if manifest.records != 0
+                                    || !digests_equal(&time_root, &empty_root())
+                                {
+                                    return Err(CompositeFailure::ExclusionUnproven {
+                                        shard: sc.shard,
+                                        at: j,
+                                    });
+                                }
+                            }
+                            Some(s) => {
+                                let bounded =
+                                    s.min_proof.verify_at(s.min.leaf_hash(), time_root, 0, size)
+                                        && s.max_proof.verify_at(
+                                            s.max.leaf_hash(),
+                                            time_root,
+                                            size.saturating_sub(1),
+                                            size,
+                                        );
+                                if !bounded {
+                                    return Err(CompositeFailure::ExclusionUnproven {
+                                        shard: sc.shard,
+                                        at: j,
+                                    });
+                                }
+                                // The same byte comparison the range check
+                                // uses, so the two orderings cannot disagree.
+                                let outside =
+                                    s.max.key.as_slice() < lo || s.min.key.as_slice() > hi;
+                                if !outside {
+                                    return Err(CompositeFailure::ExclusionNotJustified {
+                                        shard: sc.shard,
+                                        at: j,
+                                    });
+                                }
+                            }
                         }
                     }
-                    SegmentContribution::Answered {
-                        manifest, proof, ..
-                    } => {
+                    SegmentContribution::Answered { proof, .. } => {
                         let Some(index_root) = manifest.index_root(dimension) else {
                             return Err(CompositeFailure::IndexRootMissing {
                                 shard: sc.shard,
                                 at: j,
                             });
                         };
-                        proof.verify(dimension, lo, hi, index_root).map_err(|why| {
-                            CompositeFailure::SegmentProof {
+                        proof
+                            .verify(dimension, lo, hi, index_root, size)
+                            .map_err(|why| CompositeFailure::SegmentProof {
                                 shard: sc.shard,
                                 at: j,
                                 why,
-                            }
-                        })?;
+                            })?;
                     }
                 }
             }
         }
 
-        let _ = digests_equal(&store_root, &store_root);
         Ok(())
     }
-}
-
-fn be_u64(key: &[u8]) -> u64 {
-    let mut b = [0u8; 8];
-    let n = key.len().min(8);
-    b[8 - n..].copy_from_slice(&key[key.len() - n..]);
-    u64::from_be_bytes(b)
 }

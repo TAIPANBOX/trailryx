@@ -182,11 +182,40 @@ impl SortedIndex {
         self.entries.is_empty()
     }
 
+    pub fn entry(&self, i: usize) -> Option<&Entry> {
+        self.entries.get(i)
+    }
+
+    pub fn inclusion(&self, i: usize) -> Option<InclusionProof> {
+        self.tree.inclusion_proof(i, self.entries.len())
+    }
+
+    /// The sequence number of the first entry whose `(key, seq)` position is
+    /// not strictly greater than its predecessor's.
+    ///
+    /// Two entries at the same position make every range covering both
+    /// permanently unverifiable, because the answer can never be strictly
+    /// ordered. Catching it at seal turns a data condition that would deny
+    /// service into a refusal to seal.
+    pub fn first_duplicate_position(&self) -> Option<u64> {
+        self.entries
+            .windows(2)
+            .find(|w| (w[0].key.as_slice(), w[0].seq) >= (w[1].key.as_slice(), w[1].seq))
+            .map(|w| w[1].seq)
+    }
+
     /// Answer a range query with everything needed to prove nothing is missing.
     pub fn range(&self, lo: &[u8], hi: &[u8]) -> CompletenessProof {
         let size = self.entries.len();
         let first = self.entries.partition_point(|e| e.key.as_slice() < lo);
-        let after = self.entries.partition_point(|e| e.key.as_slice() <= hi);
+        // A reversed range yields `after < first`. Clamping keeps it an empty
+        // answer instead of a panic: a query surface will eventually forward
+        // whatever a caller typed, and a slice index is not the place to find
+        // out.
+        let after = self
+            .entries
+            .partition_point(|e| e.key.as_slice() <= hi)
+            .max(first);
 
         let entries: Vec<Entry> = self.entries[first..after].to_vec();
         let entry_proofs: Vec<InclusionProof> = (first..after)
@@ -226,6 +255,13 @@ impl SortedIndex {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ProofFailure {
     WrongDimension,
+    /// The index is not the size the caller's committed data says it is.
+    WrongSize {
+        expected: usize,
+        got: usize,
+    },
+    /// An empty answer was offered for an index that is not empty.
+    EmptyAnswerAgainstNonEmptyIndex,
     CountMismatch,
     /// An entry is not in the tree the root describes.
     EntryNotInTree {
@@ -286,18 +322,41 @@ impl CompletenessProof {
     }
 
     /// Check the answer against the root, for the range it claims to cover.
+    /// `expected_size` is how many entries the index holds, and it comes from
+    /// the caller: from a committed manifest, never from this proof.
+    ///
+    /// Without it an answer could simply declare `size: 0`, in which case there
+    /// are no entries to check, no boundaries to demand, and the root is never
+    /// read at all. That proof verified against every root, including a root
+    /// belonging to a segment full of matching records.
     pub fn verify(
         &self,
         dimension: Dimension,
         lo: &[u8],
         hi: &[u8],
         root: Hash,
+        expected_size: usize,
     ) -> Result<(), ProofFailure> {
         if self.dimension != dimension {
             return Err(ProofFailure::WrongDimension);
         }
+        if self.size != expected_size {
+            return Err(ProofFailure::WrongSize {
+                expected: expected_size,
+                got: self.size,
+            });
+        }
         if self.entries.len() != self.entry_proofs.len() {
             return Err(ProofFailure::CountMismatch);
+        }
+        if self.size == 0 {
+            // An empty index has exactly one honest root, so an empty answer is
+            // still an answer about something.
+            return if digests_equal(&root, &crate::merkle::empty_root()) {
+                Ok(())
+            } else {
+                Err(ProofFailure::EmptyAnswerAgainstNonEmptyIndex)
+            };
         }
 
         for (k, (entry, proof)) in self.entries.iter().zip(&self.entry_proofs).enumerate() {
@@ -308,7 +367,7 @@ impl CompletenessProof {
                     got: proof.index,
                 });
             }
-            if !proof.verify(entry.leaf_hash(), root) {
+            if !proof.verify_at(entry.leaf_hash(), root, expected, self.size) {
                 return Err(ProofFailure::EntryNotInTree { at: k });
             }
             if entry.key.as_slice() < lo || entry.key.as_slice() > hi {
@@ -338,10 +397,7 @@ impl CompletenessProof {
                         got: proof.index,
                     });
                 }
-                if proof.size != self.size {
-                    return Err(ProofFailure::BoundaryNotInTree { side: "left" });
-                }
-                if !proof.verify(entry.leaf_hash(), root) {
+                if !proof.verify_at(entry.leaf_hash(), root, first - 1, self.size) {
                     return Err(ProofFailure::BoundaryNotInTree { side: "left" });
                 }
                 if entry.key.as_slice() >= lo {
@@ -365,10 +421,7 @@ impl CompletenessProof {
                         got: proof.index,
                     });
                 }
-                if proof.size != self.size {
-                    return Err(ProofFailure::BoundaryNotInTree { side: "right" });
-                }
-                if !proof.verify(entry.leaf_hash(), root) {
+                if !proof.verify_at(entry.leaf_hash(), root, after, self.size) {
                     return Err(ProofFailure::BoundaryNotInTree { side: "right" });
                 }
                 if entry.key.as_slice() <= hi {
@@ -377,7 +430,6 @@ impl CompletenessProof {
             }
         }
 
-        let _ = digests_equal(&root, &root);
         Ok(())
     }
 }

@@ -186,7 +186,26 @@ pub struct InclusionProof {
 
 impl InclusionProof {
     /// Recompute the root from a leaf and the sibling path.
-    pub fn verify(&self, leaf: Hash, root: Hash) -> bool {
+    ///
+    /// `expected_index` and `expected_size` come from the caller, never from
+    /// the proof. A proof that supplies its own position and tree size is a
+    /// proof that can choose a shape in which it happens to be valid: see the
+    /// size-substitution attack described on [`ConsistencyProof::verify`].
+    pub fn verify_at(
+        &self,
+        leaf: Hash,
+        root: Hash,
+        expected_index: usize,
+        expected_size: usize,
+    ) -> bool {
+        self.index == expected_index && self.size == expected_size && self.recompute(leaf, root)
+    }
+
+    /// Check the path alone, taking position and size from the proof.
+    ///
+    /// Only safe where the caller has already pinned both, which is why every
+    /// call site in the store uses [`Self::verify_at`] instead.
+    pub fn recompute(&self, leaf: Hash, root: Hash) -> bool {
         if self.index >= self.size {
             return false;
         }
@@ -224,9 +243,29 @@ pub struct ConsistencyProof {
 }
 
 impl ConsistencyProof {
-    /// Check that `new_root` is the root of a tree that extends the one whose
-    /// root was `old_root`, with nothing rewritten in between.
-    pub fn verify(&self, old_root: Hash, new_root: Hash) -> bool {
+    /// Check that `new_root` extends `old_root`, at the sizes the **caller**
+    /// states.
+    ///
+    /// Taking the sizes from the proof looks harmless and is not. An auditor
+    /// holding a signed head for a five-leaf log can be handed
+    /// `{old_size: 8, new_size: 16, nodes: [X]}` together with a freshly signed
+    /// `new_root = node_hash(old_root, X)`: with a power-of-two old size the
+    /// climb terminates immediately, the first hash is taken to be `old_root`
+    /// itself, and the single node walks the accumulator up to `new_root`. It
+    /// verifies, and the auditor now believes in an append-only log that has
+    /// nothing to do with the records they signed for.
+    pub fn verify_between(
+        &self,
+        old_root: Hash,
+        old_size: usize,
+        new_root: Hash,
+        new_size: usize,
+    ) -> bool {
+        self.old_size == old_size && self.new_size == new_size && self.recompute(old_root, new_root)
+    }
+
+    /// Check the node list alone, taking both sizes from the proof.
+    fn recompute(&self, old_root: Hash, new_root: Hash) -> bool {
         if self.old_size == 0 || self.old_size > self.new_size {
             return false;
         }
@@ -318,7 +357,7 @@ mod tests {
             for i in 0..size {
                 let p = t.inclusion_proof(i, size).expect("proof exists");
                 let leaf = t.leaf(i).unwrap();
-                assert!(p.verify(leaf, root), "size {size} index {i}");
+                assert!(p.verify_at(leaf, root, i, size), "size {size} index {i}");
             }
         }
     }
@@ -328,9 +367,9 @@ mod tests {
         let t = tree(17);
         let root = t.root();
         let p = t.inclusion_proof(5, 17).unwrap();
-        assert!(p.verify(t.leaf(5).unwrap(), root));
-        assert!(!p.verify(t.leaf(6).unwrap(), root));
-        assert!(!p.verify(leaf_hash(b"forged"), root));
+        assert!(p.verify_at(t.leaf(5).unwrap(), root, 5, 17));
+        assert!(!p.verify_at(t.leaf(6).unwrap(), root, 5, 17));
+        assert!(!p.verify_at(leaf_hash(b"forged"), root, 5, 17));
     }
 
     #[test]
@@ -339,7 +378,7 @@ mod tests {
         let root = t.root();
         let mut p = t.inclusion_proof(7, 20).unwrap();
         p.path[0] = leaf_hash(b"swapped");
-        assert!(!p.verify(t.leaf(7).unwrap(), root));
+        assert!(!p.verify_at(t.leaf(7).unwrap(), root, 7, 20));
     }
 
     #[test]
@@ -348,7 +387,7 @@ mod tests {
         let root = t.root();
         let mut p = t.inclusion_proof(3, 12).unwrap();
         p.path.push(leaf_hash(b"extra"));
-        assert!(!p.verify(t.leaf(3).unwrap(), root));
+        assert!(!p.verify_at(t.leaf(3).unwrap(), root, 3, 12));
     }
 
     #[test]
@@ -364,7 +403,7 @@ mod tests {
                     .consistency_proof(old_size, new_size)
                     .expect("proof exists");
                 assert!(
-                    p.verify(old_root, new_root),
+                    p.verify_between(old_root, old_size, new_root, new_size),
                     "old {old_size} new {new_size}"
                 );
             }
@@ -384,8 +423,8 @@ mod tests {
             }
         }
         let p = honest.consistency_proof(8, 16).unwrap();
-        assert!(!p.verify(rewritten.root_at(8).unwrap(), honest.root()));
-        assert!(!p.verify(honest.root_at(8).unwrap(), rewritten.root()));
+        assert!(!p.verify_between(rewritten.root_at(8).unwrap(), 8, honest.root(), 16));
+        assert!(!p.verify_between(honest.root_at(8).unwrap(), 8, rewritten.root(), 16));
     }
 
     #[test]
@@ -401,9 +440,45 @@ mod tests {
         let old_root = t.root_at(9).unwrap();
         let new_root = t.root();
         let mut p = t.consistency_proof(9, 24).unwrap();
-        assert!(p.verify(old_root, new_root));
+        assert!(p.verify_between(old_root, 9, new_root, 24));
         p.nodes[0] = leaf_hash(b"swapped");
-        assert!(!p.verify(old_root, new_root));
+        assert!(!p.verify_between(old_root, 9, new_root, 24));
+    }
+
+    #[test]
+    fn a_proof_cannot_choose_its_own_sizes() {
+        // The size-substitution attack. An auditor holds a signed head for a
+        // five-leaf log. The operator picks any X, publishes and signs
+        // new_root = node_hash(old_root, X), and serves a proof claiming the
+        // sizes were 8 and 16. With a power-of-two old size the climb ends at
+        // once, the accumulator starts at old_root and matches, and the single
+        // node walks it up to new_root. Believing the proof's own sizes accepts
+        // an append-only log that has nothing to do with the signed records.
+        let t = tree(5);
+        let old_root = t.root();
+        let x = leaf_hash(b"anything at all");
+        let new_root = node_hash(&old_root, &x);
+
+        let forged = ConsistencyProof {
+            old_size: 8,
+            new_size: 16,
+            nodes: vec![x],
+        };
+        assert!(
+            !forged.verify_between(old_root, 5, new_root, 6),
+            "sizes must come from the caller, not the proof"
+        );
+    }
+
+    #[test]
+    fn an_inclusion_proof_cannot_choose_its_own_position() {
+        let t = tree(9);
+        let root = t.root();
+        let p = t.inclusion_proof(4, 9).unwrap();
+        let leaf = t.leaf(4).unwrap();
+        assert!(p.verify_at(leaf, root, 4, 9));
+        assert!(!p.verify_at(leaf, root, 5, 9));
+        assert!(!p.verify_at(leaf, root, 4, 8));
     }
 
     #[test]
