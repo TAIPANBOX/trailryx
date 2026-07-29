@@ -4,10 +4,10 @@
 
 **The tamper-evident record database for AI agents.**
 
-![Stage](https://img.shields.io/badge/stage-5%20of%2013-blue.svg)
+![Stage](https://img.shields.io/badge/stage-6%20of%2013-blue.svg)
 ![Core](https://img.shields.io/badge/core-frozen-success.svg)
 ![Rust](https://img.shields.io/badge/rust-1.85%2B-orange.svg)
-![Tests](https://img.shields.io/badge/tests-196-success.svg)
+![Tests](https://img.shields.io/badge/tests-244-success.svg)
 ![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)
 ![Dependencies](https://img.shields.io/badge/dependencies-0-success.svg)
 ![Unsafe](https://img.shields.io/badge/unsafe-forbidden-success.svg)
@@ -45,7 +45,7 @@ standards that would say *how* are not cited in the Official Journal yet.
 
 ## What exists
 
-Stages 0 to 5. The core is **frozen**: the journal format, the index structures
+Stages 0 to 6. The core is **frozen**: the journal format, the index structures
 and the proof shapes do not change without a version and a migration.
 
 | Crate | What it is | Tests |
@@ -57,13 +57,14 @@ and the proof shapes do not change without a version and a migration.
 | `trailryx-journal` | wire format, append-only write path, recovery | 24 |
 | `trailryx-index` | Merkle history tree, completeness proofs, segment composition | 53 |
 | `trailryx-store` | sealing, the read surface, causal reconstruction | 27 |
+| `trailryx-otlp` | protobuf reader, OTLP decode, the GenAI semconv mapper | 46 |
 
 **Zero dependencies.** `unsafe` forbidden at the workspace level.
 
 ## Try it
 
 ```bash
-cargo test                                    # 196 tests
+cargo test                                    # 244 tests
 cargo run --bin trailryx-sim-run -- --help
 ```
 
@@ -105,6 +106,39 @@ five. Everything else is answered honestly as a filter **without** a proof, and
 every answer carries a status saying which it is. An answer that quietly mixes
 proved rows with filtered ones is worse than an openly unproved one, because it
 looks like the first kind.
+
+## Writing to it without changing your agent
+
+An agent instrumented with a stock OpenTelemetry SDK writes here as it stands.
+`trailryx-otlp` decodes OTLP trace batches and maps the GenAI semantic
+conventions onto records: `chat` becomes a model call, `execute_tool` a tool
+call, `invoke_agent` a request or a delegation depending on whether somebody
+else started it. Protobuf is decoded by hand, like everything else here, with a
+depth limit, because a few hundred bytes of nested length prefixes will
+otherwise overflow the stack and a stack overflow in Rust aborts the process.
+
+The mapper's rule: **an attribute goes into a typed metadata field only if it
+parses into one, and everything else goes to the payload plane.** Unrecognised
+OpenTelemetry attributes routinely contain prompts, so a mapper that does not
+recognise something must never decide it is safe. The consequence is tested as
+an invariant: every attribute lands in exactly one plane, never both, never
+neither. Nothing is repaired on the way: a model name that does not fit its
+field leaves the field empty rather than being lowercased into a different
+model.
+
+And the honest half. A span records that a call happened. It does not record
+the grounds on which it was allowed to happen: there is no OTLP attribute for a
+policy version, a budget state or a memory reference, so those stay empty. That
+gap is the difference between telemetry and evidence, and it is why the store
+has an envelope of its own.
+
+What the receiver refuses, each with a test written from the sender's side: a
+span choosing its own tenant, an agent name forging a trust domain, a value
+smuggling a separator into the payload, a message nested past the limit, an
+operation name this version does not know (refused rather than mapped to
+something adjacent, because a wrong event type is worse than a missing record).
+Everything dropped is counted, and the counts become a record: a gap nobody
+wrote down is worse than a gap, because the trail looks complete.
 
 ## What a review found
 
@@ -179,9 +213,13 @@ Actions become free and that script becomes the workflow unchanged.
 
 ## Next
 
-Stage 6 onward: OTLP ingest and the semantic-convention mapper, crypto-erasure
-against a real KMS, the evidence pack and its offline verifier, Parquet
-projections, the SQL facade, object storage, federation.
+Stage 7 onward: crypto-erasure against a real KMS, the evidence pack and its
+offline verifier, Parquet projections, the SQL facade, object storage,
+federation.
+
+Stage 6 is done for OTLP traces and their mapping. Two pieces of it are not:
+the HTTP and gRPC transport, so the receiver takes bytes rather than listening
+on a socket, and the NDJSON source that gives the demo live data.
 
 Two known costs, both deferred deliberately. A range answer currently carries an
 inclusion proof per entry, so a full range is O(n²) hashing; the fix is a

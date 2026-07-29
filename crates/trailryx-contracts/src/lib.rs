@@ -28,4 +28,4 @@ pub use contracts::{
     Peer, PeerDescriptor, PeerResponse, Principal, ProofStatus, PutOutcome, Sink, SinkDescriptor,
     Source, SourceDescriptor, Trust,
 };
-pub use ingest::{Cursor, Ingest, MetaDraft, PayloadPart};
+pub use ingest::{Correlation, Cursor, Ingest, MetaDraft, PayloadPart, SourceKey};

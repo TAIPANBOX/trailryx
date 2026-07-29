@@ -1,0 +1,16 @@
+[package]
+name = "trailryx-otlp"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+description = "OTLP ingest and the OpenTelemetry GenAI semantic-convention mapper"
+
+[dependencies]
+trailryx-record = { path = "../trailryx-record" }
+trailryx-crypto = { path = "../trailryx-crypto" }
+trailryx-contracts = { path = "../trailryx-contracts" }
+
+[lints]
+workspace = true

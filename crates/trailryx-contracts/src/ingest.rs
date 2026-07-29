@@ -76,11 +76,61 @@ impl PayloadPart {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Default)]
 pub struct Cursor(pub u64);
 
+/// A source's own name for one event: a span id, a message id, an offset.
+///
+/// Bounded and opaque. We never parse it, never display it and never store it;
+/// it is compared for equality inside one batch and then dropped. That is why
+/// it may be raw bytes here while [`MetaDraft`] has no such field: a span id
+/// that happened to contain somebody's name would be a leak if it reached a
+/// record, and it does not reach one.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct SourceKey {
+    len: u8,
+    bytes: [u8; Self::MAX_BYTES],
+}
+
+impl SourceKey {
+    pub const MAX_BYTES: usize = 32;
+
+    /// Longer input is refused rather than truncated: two keys that differed
+    /// only past the cut would become equal, and equality is the one thing
+    /// this type is for.
+    pub fn new(raw: &[u8]) -> Option<Self> {
+        if raw.is_empty() || raw.len() > Self::MAX_BYTES {
+            return None;
+        }
+        let mut bytes = [0u8; Self::MAX_BYTES];
+        bytes[..raw.len()].copy_from_slice(raw);
+        Some(Self {
+            len: raw.len() as u8,
+            bytes,
+        })
+    }
+
+    pub fn as_bytes(&self) -> &[u8] {
+        &self.bytes[..self.len as usize]
+    }
+}
+
+/// How one event relates to another **in the source's own terms**.
+///
+/// The ingest path resolves this into `caused_by` once record ids exist, and
+/// then forgets it. Without it a batch of spans arrives as a heap of unrelated
+/// events and the causal graph, which is half of what the store is for, has to
+/// be reconstructed by guesswork.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Correlation {
+    pub id: SourceKey,
+    pub parent: Option<SourceKey>,
+}
+
 /// One unit handed over by a source.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Ingest {
     pub meta: MetaDraft,
     pub payload: Vec<PayloadPart>,
+    /// Present when the source can say how this event relates to another.
+    pub correlation: Option<Correlation>,
     pub cursor: Cursor,
 }
 
@@ -99,6 +149,23 @@ mod tests {
         let p = PayloadPart::unmapped(b"gen_ai.prompt=Ivan Petrenko, born 1979".to_vec());
         assert_eq!(p.class, PayloadClass::Diagnostic);
         assert!(!p.bytes.is_empty());
+    }
+
+    #[test]
+    fn an_oversize_correlation_key_is_refused_rather_than_cut() {
+        // Truncating would make two different parents equal, and equality is
+        // the only thing this type does.
+        assert!(SourceKey::new(&[7u8; SourceKey::MAX_BYTES]).is_some());
+        assert!(SourceKey::new(&[7u8; SourceKey::MAX_BYTES + 1]).is_none());
+        assert!(SourceKey::new(&[]).is_none());
+    }
+
+    #[test]
+    fn correlation_keys_compare_on_their_real_length() {
+        let short = SourceKey::new(b"ab").unwrap();
+        let padded = SourceKey::new(b"ab\0").unwrap();
+        assert_ne!(short, padded, "the zero padding is not part of the key");
+        assert_eq!(short.as_bytes(), b"ab");
     }
 
     #[test]
