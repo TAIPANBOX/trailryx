@@ -1,0 +1,14 @@
+[package]
+name = "trailryx-crypto"
+description = "Digest abstraction and a portable SHA-384, to be replaced by a validated module"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+trailryx-record = { path = "../trailryx-record" }
+
+[lints]
+workspace = true
