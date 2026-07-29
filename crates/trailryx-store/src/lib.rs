@@ -18,4 +18,4 @@ pub mod seal;
 pub use causal::{Bounds, Hop, Reconstruction, Stopped, reconstruct};
 pub use evidence::PackBuilder;
 pub use query::{Answer, Filter, ProofStatus, Query, query_segment};
-pub use seal::{ChainStart, SealOutcome, SealedSegment, StoreError, seal_segment};
+pub use seal::{SealOutcome, SealedSegment, StoreError, seal_segment};

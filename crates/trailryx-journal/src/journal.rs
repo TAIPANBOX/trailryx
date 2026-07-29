@@ -206,12 +206,35 @@ struct Pending {
     id: RecordId,
 }
 
+/// Where a journal file's hash chain begins.
+///
+/// An enum because the alternative is a `Hash` parameter whose wrong value,
+/// `Hash::ZERO`, compiles and produces a journal that recovers, seals, and fails
+/// only in an offline verifier several stages downstream. A shard's segments are
+/// one chain, and the only way to say "this is the beginning" without being able
+/// to say it by accident is to have a word for it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ChainStart {
+    /// The first segment of this shard. The chain starts at a genesis derived
+    /// from the file's own header, so a file cannot be adopted as a different
+    /// shard's or a different segment's.
+    First,
+    /// A later segment, continuing from the head the previous one ended on.
+    ///
+    /// The chain starts there literally, which is what makes a shard's segments
+    /// one chain rather than a set of independent ones. It also means reopening
+    /// this file under a different predecessor fails at the very first record,
+    /// so the file cannot be quietly re-pointed either.
+    After(Hash),
+}
+
 #[derive(Debug)]
 pub struct Journal {
     file: FileId,
     shard: ShardIx,
     segment: SegmentId,
     created_at: Timestamp,
+    start: ChainStart,
     /// Where this file's chain started. See [`Journal::genesis_head`].
     genesis: Hash,
     chain: ChainState,
@@ -238,6 +261,7 @@ impl Journal {
         segment: SegmentId,
         name: &str,
         sync_every: u64,
+        start: ChainStart,
         io: &mut I,
         clock: &C,
     ) -> JournalResult<(Self, Recovered)> {
@@ -248,6 +272,7 @@ impl Journal {
             shard,
             segment,
             created_at: Timestamp(clock.wall_nanos()),
+            start,
             // Replaced by recovery, which is where the header exists to derive
             // it from. Zero here would be a lie for exactly as long as the next
             // line takes to run, and recovery cannot fail to set it.
@@ -385,11 +410,13 @@ impl Journal {
         self.genesis
     }
 
-    /// Where a shard's chain starts for this file.
+    /// Where the **first** segment of a shard starts.
     ///
     /// The header rather than zero, so a file opened under a different shard or
     /// segment produces a different chain from its first link and cannot be
-    /// quietly adopted as another journal.
+    /// quietly adopted as another journal. A continuing segment does not use
+    /// this: it starts at its predecessor's head, and the header equality check
+    /// in `ensure_header` is what keeps its identity honest.
     fn genesis(header_bytes: &[u8]) -> Hash {
         let mut h = trailryx_crypto::Sha384::new();
         trailryx_crypto::Digest::update(&mut h, b"trailryx/segment-genesis/v1\0");
@@ -407,7 +434,14 @@ impl Journal {
         let header_len = self.ensure_header(io)?;
         let bytes = io.read_all(self.file)?;
         let header = decode_segment_header(&bytes).map_err(JournalError::NotAJournal)?;
-        let genesis = Self::genesis(&bytes[..header_len]);
+        // A continuing segment starts where the previous one ended, which is
+        // what makes a shard's segments one chain. The first segment of a shard
+        // has no predecessor, so it starts at a genesis derived from its own
+        // header: not zero, so a file cannot be adopted as a different shard's.
+        let genesis = match self.start {
+            ChainStart::First => Self::genesis(&bytes[..header_len]),
+            ChainStart::After(head) => head,
+        };
         self.genesis = genesis;
 
         let walked = Self::walk(&bytes, &header, genesis);
@@ -597,8 +631,12 @@ impl Journal {
     pub fn read_all<I: Io>(&self, io: &mut I) -> JournalResult<Walked> {
         let bytes = io.read_all(self.file)?;
         let header = decode_segment_header(&bytes).map_err(JournalError::NotAJournal)?;
-        let genesis = Self::genesis(&bytes[..header.len]);
-        Ok(Self::walk(&bytes, &header, genesis))
+        // The head this file's chain actually began at, not a fresh derivation
+        // from the header. Recomputing it here was correct while every file
+        // started at its own genesis and became wrong the moment a segment could
+        // continue the one before it: a continuing file would walk from the wrong
+        // start and report its own first record as a broken chain.
+        Ok(Self::walk(&bytes, &header, self.genesis))
     }
 }
 

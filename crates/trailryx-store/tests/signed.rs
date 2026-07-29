@@ -11,7 +11,7 @@
 
 use std::path::PathBuf;
 use std::process::Command;
-use trailryx_crypto::chain_step;
+use trailryx_crypto::{Sha384, chain_step};
 use trailryx_index::segment::{Segment, ShardTree, StoreTree};
 use trailryx_journal::wire::encode_record;
 use trailryx_record::{
@@ -23,6 +23,16 @@ use trailryx_store::evidence::PackBuilder;
 use trailryx_verify::{Level, verify};
 
 const GENERATED_AT: Timestamp = Timestamp(1_700_000_000_000_000_000);
+
+/// A plausible place for a shard's first chain to begin.
+///
+/// Not `Hash::ZERO`: a journal derives its first segment's start from the file's
+/// own header, so zero is a value no journal produces and the verifier says so.
+/// This fixture builds a segment by hand and has to look like something a journal
+/// made.
+fn genesis() -> Hash {
+    Sha384::digest(b"trailryx-test/segment-genesis")
+}
 
 // ---------------------------------------------------------------------------
 // A signer that is somebody else's code
@@ -169,7 +179,7 @@ fn record(id: u128, seq: u64) -> Record {
 
 fn segment() -> Segment {
     let records = [record(1, 1), record(2, 2), record(3, 3)];
-    let mut link = Hash::ZERO;
+    let mut link = genesis();
     let leaves: Vec<(Record, Hash)> = records
         .iter()
         .map(|r| {
@@ -177,7 +187,7 @@ fn segment() -> Segment {
             (r.clone(), link)
         })
         .collect();
-    Segment::seal(SegmentId(1), ShardIx(0), Hash::ZERO, &leaves).unwrap()
+    Segment::seal(SegmentId(1), ShardIx(0), genesis(), &leaves).unwrap()
 }
 
 struct Built {

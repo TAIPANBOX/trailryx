@@ -16,7 +16,8 @@ pub mod journal;
 pub mod wire;
 
 pub use journal::{
-    Appended, DedupWindow, Journal, JournalError, JournalResult, Recovered, StoppedBecause,
+    Appended, ChainStart, DedupWindow, Journal, JournalError, JournalResult, Recovered,
+    StoppedBecause,
 };
 pub use wire::{
     FORMAT_VERSION, FRAME_VERSION, WireError, decode_frame, decode_record, encode_frame,

@@ -7,7 +7,7 @@
 ![Stage](https://img.shields.io/badge/stage-10%20of%2013-blue.svg)
 ![Core](https://img.shields.io/badge/core-frozen-success.svg)
 ![Rust](https://img.shields.io/badge/rust-1.85%2B-orange.svg)
-![Tests](https://img.shields.io/badge/tests-413-success.svg)
+![Tests](https://img.shields.io/badge/tests-415-success.svg)
 ![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)
 ![Dependencies](https://img.shields.io/badge/dependencies-0-success.svg)
 ![Unsafe](https://img.shields.io/badge/unsafe-forbidden-success.svg)
@@ -63,10 +63,37 @@ The worst was quiet: a journal's chain starts at a genesis derived from its file
 header, not at zero, and `seal_segment` took any `Hash` a caller offered. Passing
 `Hash::ZERO` compiled, sealed, built a pack, and failed only at the offline
 verifier, four stages downstream. Every existing seal test passed the same wrong
-value and passed. The chain start is now an enum whose easy case is the correct
-one, the seam checks the records agree, and a test that claimed a shard's segments
-chain across files has been replaced by one that says plainly that they do not
-yet.
+value and passed. `seal_segment` no longer takes the chain start at all: the
+journal knows where its own chain began, so it is asked, and the mistake is
+unspellable.
+
+Behind that was something worse than a bug, and the fix is below.
+
+## A shard is one chain, across as many files as it takes
+
+A test called `segments_chain_to_one_another` sealed a single journal file twice
+under two different chain starts and asserted the roots differed. It proved
+something real, that the incoming head is committed to the manifest root, while
+claiming a property the implementation did not have: **a shard's segments did not
+chain across files.** Every journal started at a genesis derived from its own
+header, so deleting a whole segment file left every remaining file internally
+valid and the shard's history quietly shorter. The manifest had carried
+`chain_before` and `chain_after` for exactly this since stage 3, and nothing
+implemented them.
+
+Now a continuing segment starts literally at the head the one before it ended on.
+The first segment of a shard still starts at its own header-derived genesis, so a
+file cannot be adopted as a different shard's, and a continuing file cannot be
+re-pointed either: reopening it under another predecessor makes its very first
+record fail to verify and the bytes are discarded.
+
+The verifier gained the other half. Dropping a segment from the middle of a shard
+breaks a pair; dropping the oldest or the newest does not, so the numbering is
+checked as well. And it now says out loud what it cannot check: a shard's first
+segment begins at a head derived from a journal header the pack does not carry, so
+that one value is asserted rather than proved.
+
+No on-disk format changed to do this.
 
 ## The question nobody else answers
 
@@ -112,7 +139,7 @@ and the proof shapes do not change without a version and a migration.
 ## Try it
 
 ```bash
-cargo test                                    # 413 tests
+cargo test                                    # 415 tests
 cargo run --bin trailryx-sim-run -- --help
 ```
 

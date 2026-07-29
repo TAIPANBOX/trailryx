@@ -4,7 +4,7 @@
 //! path and the real recovery, and the same crash model is pointed at them.
 
 use trailryx_crypto::{ChainState, Sha384};
-use trailryx_journal::journal::{Appended, Journal, StoppedBecause};
+use trailryx_journal::journal::{Appended, ChainStart, Journal, StoppedBecause};
 use trailryx_journal::wire::{decode_frame, decode_record, encode_record};
 use trailryx_record::{
     AgentId, Algorithms, Basis, ErrorCode, EventType, Hash, MapperVersion, ModelId, Outcome,
@@ -92,7 +92,16 @@ fn maximal(n: u128) -> Record {
 
 fn open(io: &mut SimIo) -> Journal {
     let clock = SimClock::new(1_800_000_000_000_000_000);
-    let (j, _) = Journal::open(ShardIx(0), SegmentId(1), "s0.journal", 4, io, &clock).unwrap();
+    let (j, _) = Journal::open(
+        ShardIx(0),
+        SegmentId(1),
+        "s0.journal",
+        4,
+        ChainStart::First,
+        io,
+        &clock,
+    )
+    .unwrap();
     j
 }
 
@@ -536,6 +545,7 @@ fn opening_a_foreign_file_refuses_rather_than_erasing_it() {
         SegmentId(1),
         "not-a-journal",
         4,
+        ChainStart::First,
         &mut io,
         &clock,
     );
@@ -558,8 +568,16 @@ fn a_torn_header_is_still_ours_to_restart() {
     io.fsync(f).unwrap();
 
     let clock = SimClock::new(1_800_000_000_000_000_000);
-    let (mut j, rep) =
-        Journal::open(ShardIx(0), SegmentId(1), "s0.journal", 4, &mut io, &clock).expect("opens");
+    let (mut j, rep) = Journal::open(
+        ShardIx(0),
+        SegmentId(1),
+        "s0.journal",
+        4,
+        ChainStart::First,
+        &mut io,
+        &clock,
+    )
+    .expect("opens");
     assert_eq!(rep.records, 0);
     assert!(matches!(
         j.append(&minimal(1), &mut io).unwrap(),
@@ -576,8 +594,16 @@ fn a_file_cannot_be_adopted_as_another_shards_journal() {
     let mut io = SimIo::new(30, IoFaults::NONE);
     let clock = SimClock::new(1_800_000_000_000_000_000);
 
-    let (mut j, _) =
-        Journal::open(ShardIx(0), SegmentId(1), "s0.journal", 4, &mut io, &clock).unwrap();
+    let (mut j, _) = Journal::open(
+        ShardIx(0),
+        SegmentId(1),
+        "s0.journal",
+        4,
+        ChainStart::First,
+        &mut io,
+        &clock,
+    )
+    .unwrap();
     for n in 1..=5u128 {
         j.append(&minimal(n), &mut io).unwrap();
     }
@@ -586,7 +612,15 @@ fn a_file_cannot_be_adopted_as_another_shards_journal() {
     // The same bytes, opened under a different identity. Refused outright:
     // checking each record against the file's own header would have accepted
     // everything, because the file is perfectly consistent with itself.
-    let result = Journal::open(ShardIx(7), SegmentId(99), "s0.journal", 4, &mut io, &clock);
+    let result = Journal::open(
+        ShardIx(7),
+        SegmentId(99),
+        "s0.journal",
+        4,
+        ChainStart::First,
+        &mut io,
+        &clock,
+    );
     assert!(
         matches!(
             result,
@@ -596,8 +630,16 @@ fn a_file_cannot_be_adopted_as_another_shards_journal() {
     );
 
     // And the records are still there for their rightful owner.
-    let (_, rep) =
-        Journal::open(ShardIx(0), SegmentId(1), "s0.journal", 4, &mut io, &clock).unwrap();
+    let (_, rep) = Journal::open(
+        ShardIx(0),
+        SegmentId(1),
+        "s0.journal",
+        4,
+        ChainStart::First,
+        &mut io,
+        &clock,
+    )
+    .unwrap();
     assert_eq!(rep.records, 5);
 }
 

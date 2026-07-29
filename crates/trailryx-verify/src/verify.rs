@@ -24,7 +24,7 @@
 use crate::merkle::{leaf_hash, root_of};
 use crate::pack::{Pack, PackError, Segment};
 use crate::record::{Fields, fields, key_for};
-use crate::sha384::{Hash, Sha384};
+use crate::sha384::{HASH_BYTES, Hash, Sha384};
 
 /// How bad a finding is.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -190,6 +190,55 @@ pub fn verify(bytes: &[u8]) -> Result<Report, PackError> {
                     segments.len()
                 ),
             );
+        }
+
+        // Contiguous from one, or a whole segment is missing from an end where
+        // the pairwise chain check cannot see it. Dropping the middle of a shard
+        // breaks a pair; dropping the oldest or the newest does not, and the
+        // numbering is the only thing left that notices.
+        //
+        // A pack is a complete snapshot of the shards it lists, not a slice of
+        // one: the store root is recomputed from everything present, so a
+        // subset would not verify against it anyway.
+        for (at, segment) in segments.iter().enumerate() {
+            let expected = at as u64 + 1;
+            if segment.segment != expected {
+                report.broken(
+                    "segment-numbering",
+                    format!(
+                        "shard {} jumps to segment {} where {} was expected, so a segment is missing",
+                        shard.shard, segment.segment, expected
+                    ),
+                );
+                break;
+            }
+        }
+
+        // What this cannot check, said rather than left to be assumed. The first
+        // segment of a shard begins at a head derived from its journal file's own
+        // header, and the header is not in the pack, so its starting point is
+        // taken on the pack's word. Every later segment's start is checked
+        // against the one before it.
+        if let Some(first) = segments.first() {
+            if first.chain_before == [0u8; HASH_BYTES] {
+                report.broken(
+                    "first-segment-start",
+                    format!(
+                        "shard {} begins at a zero chain head, which no journal produces",
+                        shard.shard
+                    ),
+                );
+            } else {
+                report.note(
+                    "first-segment-start",
+                    format!(
+                        "shard {} begins at {}, which this pack asserts and does not prove: the \
+                         journal header it derives from is not carried here",
+                        shard.shard,
+                        hex(&first.chain_before)
+                    ),
+                );
+            }
         }
 
         let mut previous_chain_after: Option<Hash> = None;

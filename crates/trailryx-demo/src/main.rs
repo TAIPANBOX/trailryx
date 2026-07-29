@@ -40,7 +40,7 @@ use trailryx_index::segment::{ShardTree, StoreTree};
 use trailryx_ingest::config::Config;
 use trailryx_ingest::handler::Ingest as HttpIngest;
 use trailryx_ingest::server::{Server, silent_log};
-use trailryx_journal::journal::{Appended, Journal};
+use trailryx_journal::journal::{Appended, ChainStart, Journal};
 use trailryx_otlp::{MapperConfig, OtlpSource};
 use trailryx_record::{
     AgentId, Basis, ErrorCode, EventType, Hash, ModelId, PayloadClass, PolicyVersion, PrincipalId,
@@ -52,7 +52,7 @@ use trailryx_sim::clock::{Clock, SystemClock};
 use trailryx_sim::io::StdIo;
 use trailryx_store::evidence::PackBuilder;
 use trailryx_store::query::{ProofStatus, Query, query_segment};
-use trailryx_store::seal::{ChainStart, SealOutcome, seal_segment};
+use trailryx_store::seal::{SealOutcome, seal_segment};
 
 type Vaults = Vault<MemoryObjectStore, MemoryKeyProvider, Sha384Ctr, PredictableKeys>;
 
@@ -154,6 +154,7 @@ fn walk(dir: &Path) -> Result<(), Failure> {
         SegmentId(1),
         "shard-0-000001.trlx",
         1,
+        ChainStart::First,
         &mut io,
         &clock,
     )
@@ -245,14 +246,8 @@ fn walk(dir: &Path) -> Result<(), Failure> {
     ));
 
     // ---------------------------------------------------------------
-    let sealed = match seal_segment(
-        &journal,
-        SegmentId(1),
-        ShardIx(0),
-        ChainStart::Genesis,
-        &mut io,
-    )
-    .map_err(|e| format!("sealing: {e}"))?
+    let sealed = match seal_segment(&journal, SegmentId(1), ShardIx(0), &mut io)
+        .map_err(|e| format!("sealing: {e}"))?
     {
         SealOutcome::Sealed(sealed) => sealed,
         SealOutcome::NothingDurable => return Err("nothing durable to seal".into()),
@@ -504,22 +499,18 @@ fn walk(dir: &Path) -> Result<(), Failure> {
         objects.len()
     ));
 
-    // And the erasure record inside a sealed segment of its own.
-    //
-    // A second segment means a second journal file, because a file's records
-    // belong to the segment its header names. Which surfaces a real gap, and one
-    // worth stating rather than stepping around: a journal's chain starts at a
-    // genesis derived from its own header, so segment two's chain does not
-    // continue segment one's. The manifest has `chain_before` and `chain_after`
-    // precisely so a shard's segments form one chain rather than a set of
-    // independent ones, and the journal does not yet carry the previous head
-    // across a file boundary to make that true. Until it does, each segment is
-    // verifiable on its own and the link between them is not there.
+    // And the erasure record inside a sealed segment of its own, chained to the
+    // one before it. A second segment means a second journal file, because a
+    // file's records belong to the segment its header names, and the second file
+    // starts where the first ended.
     let (mut second, recovered_two) = Journal::open(
         ShardIx(0),
         SegmentId(2),
         "shard-0-000002.trlx",
         1,
+        // The point of this whole change: segment two continues segment one's
+        // chain rather than starting a new one.
+        ChainStart::After(segment_one.manifest().chain_after),
         &mut io,
         &clock,
     )
@@ -531,14 +522,8 @@ fn walk(dir: &Path) -> Result<(), Failure> {
     second
         .sync(&mut io)
         .map_err(|e| format!("syncing the second journal: {e}"))?;
-    let two = match seal_segment(
-        &second,
-        SegmentId(2),
-        ShardIx(0),
-        ChainStart::Genesis,
-        &mut io,
-    )
-    .map_err(|e| format!("sealing the second segment: {e}"))?
+    let two = match seal_segment(&second, SegmentId(2), ShardIx(0), &mut io)
+        .map_err(|e| format!("sealing the second segment: {e}"))?
     {
         SealOutcome::Sealed(sealed) => sealed.segment,
         SealOutcome::NothingDurable => return Err("the erasure record was not durable".into()),
@@ -551,11 +536,18 @@ fn walk(dir: &Path) -> Result<(), Failure> {
         return Err("the erasure record is not in a sealed segment".into());
     }
     note(&format!(
-        "erasure sealed as segment 2, seq {}, and it is verifiable on its own",
+        "erasure sealed as segment 2, seq {}",
         erasure_again.seq
     ));
-    note("Cross-file chain continuation is not implemented, so segment 2 does not");
-    note("continue segment 1's chain. Stated rather than implied by the manifest.");
+    if two.manifest().chain_before != segment_one.manifest().chain_after {
+        return Err("segment 2 does not continue segment 1's chain".into());
+    }
+    note(&format!(
+        "and it continues segment 1: chain_before {} is segment 1's chain_after",
+        short(&two.manifest().chain_before)
+    ));
+    note("So deleting a whole segment file leaves a gap the pair no longer covers,");
+    note("rather than leaving every remaining file perfectly valid on its own.");
 
     // ---------------------------------------------------------------
     step(8, "what primitives is this store actually standing on");

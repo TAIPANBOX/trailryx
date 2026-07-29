@@ -6,6 +6,16 @@
 //! what it noticed.
 
 use trailryx_crypto::{Sha384, chain_step};
+
+/// A plausible place for a shard's first chain to begin.
+///
+/// Not `Hash::ZERO`: a journal derives its first segment's start from the file's
+/// own header, so zero is a value no journal produces and the verifier now says
+/// so. These fixtures build segments by hand and have to look like something a
+/// journal made.
+fn genesis() -> Hash {
+    Sha384::digest(b"trailryx-test/segment-genesis")
+}
 use trailryx_index::segment::{Segment, ShardTree, StoreTree};
 use trailryx_journal::wire::encode_record;
 use trailryx_record::{
@@ -68,7 +78,7 @@ fn store() -> Store {
     let a = seal(
         1,
         0,
-        Hash::ZERO,
+        genesis(),
         &[
             record(1, 0, 1, "agent://acme.example/billing", "run-a", 1_000),
             record(2, 0, 2, "agent://acme.example/billing", "run-a", 1_010),
@@ -87,7 +97,7 @@ fn store() -> Store {
     let c = seal(
         1,
         1,
-        Hash::ZERO,
+        genesis(),
         &[
             record(6, 1, 1, "agent://acme.example/triage", "run-d", 1_005),
             record(7, 1, 2, "agent://acme.example/triage", "run-d", 1_015),
@@ -223,7 +233,7 @@ fn a_record_removed_from_a_segment_is_caught() {
             seal(
                 1,
                 0,
-                Hash::ZERO,
+                genesis(),
                 &[
                     record(1, 0, 1, "agent://acme.example/billing", "run-a", 1_000),
                     record(3, 0, 3, "agent://acme.example/support", "run-b", 1_020),
@@ -372,4 +382,44 @@ fn the_verifier_and_the_store_agree_on_sha384() {
 fn write_a_pack_for_the_binary() {
     let path = std::env::var("PACK_OUT").unwrap();
     std::fs::write(path, pack_of(&store())).unwrap();
+}
+
+#[test]
+fn a_segment_missing_from_an_end_is_caught_by_its_number() {
+    // The pairwise chain check sees a hole in the middle of a shard and cannot
+    // see one at either end: drop the oldest or the newest segment and every
+    // remaining pair still lines up. The numbering is what notices.
+    let s = store();
+    let mut t0 = ShardTree::new(ShardIx(0));
+    for segment in &s.shard0 {
+        t0.push(segment.manifest().clone());
+    }
+    let tree = StoreTree::from_shards(&[t0.clone()]);
+
+    // Only the second segment, so the shard now begins at number two.
+    let bytes = PackBuilder::new(TenantId::parse("acme").unwrap(), Timestamp(1))
+        .shard(&t0, &[&s.shard0[1]])
+        .build(&tree);
+
+    let checks = broken(&bytes);
+    assert!(
+        checks.contains(&"segment-numbering".to_owned()),
+        "{checks:?}"
+    );
+}
+
+#[test]
+fn what_the_pack_cannot_prove_about_its_own_beginning_is_said_out_loud() {
+    // A shard's first segment starts at a head derived from its journal file's
+    // header, and the header is not in the pack. So that one value is asserted
+    // rather than proved, and a verifier that stayed quiet about it would be
+    // overstating what it checked.
+    let report = verify(&pack_of(&store())).unwrap();
+    let finding = report
+        .findings
+        .iter()
+        .find(|f| f.check == "first-segment-start")
+        .expect("the verifier should say so");
+    assert_eq!(finding.level, Level::Note);
+    assert!(finding.detail.contains("does not prove"), "{finding}");
 }

@@ -102,38 +102,19 @@ pub enum SealOutcome {
     NothingDurable,
 }
 
-/// Where a segment's chain begins.
-///
-/// An enum rather than a `Hash`, because the obvious `Hash::ZERO` is wrong and
-/// wrong in the worst way: it compiles, it seals, and the segment it produces
-/// declares a chain that does not match its own records. Nothing notices until
-/// the offline verifier looks, at the far end of a pipeline, and by then the
-/// mistake is several stages upstream.
-///
-/// A journal's chain does not start at zero. It starts at a genesis derived from
-/// the file's header, so a file opened under a different shard or segment
-/// produces a different chain from its very first link and cannot be quietly
-/// adopted as another journal.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ChainStart {
-    /// The first segment of this journal file. Asks the journal.
-    Genesis,
-    /// A later segment, continuing from where the previous one ended.
-    Continues(Hash),
-}
-
 /// Seal the durable prefix of a journal into a segment.
+///
+/// Where the chain begins is not a parameter. It used to be, and the wrong value
+/// was `Hash::ZERO`, which compiled, sealed, built an evidence pack, and failed
+/// only in the offline verifier four stages downstream. The journal knows where
+/// its own chain started, so it is asked.
 pub fn seal_segment<I: Io>(
     journal: &Journal,
     segment: SegmentId,
     shard: ShardIx,
-    start: ChainStart,
     io: &mut I,
 ) -> Result<SealOutcome, StoreError> {
-    let chain_before = match start {
-        ChainStart::Genesis => journal.genesis_head(),
-        ChainStart::Continues(head) => head,
-    };
+    let chain_before = journal.genesis_head();
     let walked = journal.read_all(io)?;
 
     // A torn tail is ordinary and the acked prefix is unaffected by it. A chain
@@ -162,15 +143,9 @@ pub fn seal_segment<I: Io>(
         .take(usize::try_from(acked).unwrap_or(usize::MAX))
         .collect();
 
-    // A segment declares where its chain begins, and until now nothing checked
-    // that its records agree. `Segment::seal` cannot check it: recomputing a
-    // link needs the canonical codec, which lives on the journal's side of the
-    // seam. So it is checked here, which is the only place with both halves.
-    //
-    // Without this a caller can seal a segment whose declared chain its own
-    // records do not follow, and the only thing that ever notices is the
-    // offline verifier, several stages downstream, reporting a broken chain for
-    // a mistake made long before.
+    // Belt and braces now that the start comes from the journal rather than a
+    // caller. `Segment::seal` cannot make this check itself: recomputing a link
+    // needs the canonical codec, which lives on the journal's side of the seam.
     if let Some((first, _)) = durable.first()
         && first.prev_hash != chain_before
     {
