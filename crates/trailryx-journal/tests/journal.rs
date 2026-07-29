@@ -486,3 +486,75 @@ fn a_duplicate_reports_where_the_original_landed() {
         other => panic!("expected a duplicate, got {other:?}"),
     }
 }
+
+// ---------------------------------------------------------------------------
+// Encoding is one shape, and a foreign file is not ours to erase
+// ---------------------------------------------------------------------------
+
+#[test]
+fn an_overlong_varint_is_refused() {
+    // [0x81, 0x00] also means 1. Accepting it would give one record several
+    // valid byte forms, and the chain hashes those bytes: a verifier that
+    // decoded and re-encoded a record would disagree with the disk.
+    use trailryx_journal::wire::Reader;
+    assert!(Reader::new(&[0x01]).varint().is_ok());
+    assert!(Reader::new(&[0x81, 0x00]).varint().is_err());
+    assert!(Reader::new(&[0x80, 0x80, 0x00]).varint().is_err());
+    // Ten groups is the most a u64 holds, and the tenth carries one bit.
+    assert!(
+        Reader::new(&[0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0x01])
+            .varint()
+            .is_ok()
+    );
+    assert!(
+        Reader::new(&[0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0x02])
+            .varint()
+            .is_err()
+    );
+}
+
+#[test]
+fn opening_a_foreign_file_refuses_rather_than_erasing_it() {
+    // A mistyped path used to cost somebody their file: anything that did not
+    // decode as a header was truncated to zero.
+    let mut io = SimIo::new(20, IoFaults::NONE);
+    let f = io.create("not-a-journal").unwrap();
+    io.append(f, b"somebody else's data, thank you").unwrap();
+    io.fsync(f).unwrap();
+
+    let clock = SimClock::new(1_800_000_000_000_000_000);
+    let result = Journal::open(
+        ShardIx(0),
+        SegmentId(1),
+        "not-a-journal",
+        4,
+        &mut io,
+        &clock,
+    );
+    assert!(
+        matches!(result, Err(trailryx_journal::JournalError::NotAJournal(_))),
+        "a foreign file must be refused, not erased"
+    );
+
+    let still_there = io.read_all(f).unwrap();
+    assert_eq!(still_there, b"somebody else's data, thank you");
+}
+
+#[test]
+fn a_torn_header_is_still_ours_to_restart() {
+    // The other half: our own file, cut short before the header landed, must
+    // start clean rather than refusing forever.
+    let mut io = SimIo::new(21, IoFaults::NONE);
+    let f = io.create("s0.journal").unwrap();
+    io.append(f, b"TRL").unwrap(); // half the magic, then a crash
+    io.fsync(f).unwrap();
+
+    let clock = SimClock::new(1_800_000_000_000_000_000);
+    let (mut j, rep) =
+        Journal::open(ShardIx(0), SegmentId(1), "s0.journal", 4, &mut io, &clock).expect("opens");
+    assert_eq!(rep.records, 0);
+    assert!(matches!(
+        j.append(&minimal(1), &mut io).unwrap(),
+        Appended::Written { seq: 1, .. }
+    ));
+}

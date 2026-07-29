@@ -48,9 +48,14 @@ pub enum WireError {
     BadMagic,
     UnknownVersion(u8),
     BadCrc,
-    BadDiscriminant { field: &'static str, got: u8 },
+    BadDiscriminant {
+        field: &'static str,
+        got: u8,
+    },
     TooLarge(usize),
     BadId(&'static str, IdError),
+    /// The bytes decode, but they are not the bytes an encoder would produce.
+    NonCanonical(&'static str),
     Trailing(usize),
 }
 
@@ -66,6 +71,7 @@ impl std::fmt::Display for WireError {
             }
             Self::TooLarge(n) => write!(f, "declared length {n} exceeds the maximum"),
             Self::BadId(field, e) => write!(f, "invalid {field}: {e}"),
+            Self::NonCanonical(why) => write!(f, "non-canonical encoding: {why}"),
             Self::Trailing(n) => write!(f, "{n} bytes left over after decoding"),
         }
     }
@@ -181,18 +187,33 @@ impl<'a> Reader<'a> {
         Ok(b)
     }
 
+    /// LEB128, **canonical only**.
+    ///
+    /// An overlong encoding such as `[0x81, 0x00]` also means 1, so accepting
+    /// it would give one record several valid byte forms. The chain hashes
+    /// those bytes: an offline verifier that decodes a record and re-encodes it
+    /// to recompute a link would then disagree with the disk, and the module
+    /// promises exactly one byte sequence per record. Cheap to enforce now, a
+    /// format break later.
     pub fn varint(&mut self) -> WireResult<u64> {
         let mut out = 0u64;
         let mut shift = 0u32;
+        let mut groups = 0u32;
         loop {
             let b = self.u8()?;
-            // Ten groups of seven bits is the most a u64 can hold; beyond that
-            // the input is malformed rather than merely large.
-            if shift >= 64 {
-                return Err(WireError::Truncated);
+            groups += 1;
+            // Ten groups of seven bits is the most a u64 can hold, and the
+            // tenth may only carry the single remaining bit.
+            if groups > 10 || (groups == 10 && b & 0x7e != 0) {
+                return Err(WireError::NonCanonical("varint overflows u64"));
             }
             out |= u64::from(b & 0x7f) << shift;
             if b & 0x80 == 0 {
+                // A continuation byte that contributed nothing means the value
+                // was padded rather than encoded.
+                if groups > 1 && b == 0 {
+                    return Err(WireError::NonCanonical("overlong varint"));
+                }
                 return Ok(out);
             }
             shift += 7;
@@ -593,7 +614,12 @@ pub struct SegmentHeader {
 }
 
 pub fn decode_segment_header(buf: &[u8]) -> WireResult<SegmentHeader> {
-    if buf.len() < 4 || &buf[..4] != SEGMENT_MAGIC {
+    // Too short to judge is not the same as belonging to somebody else, and
+    // the caller decides very different things about the two.
+    if buf.len() < 4 {
+        return Err(WireError::Truncated);
+    }
+    if &buf[..4] != SEGMENT_MAGIC {
         return Err(WireError::BadMagic);
     }
     let mut r = Reader::new(&buf[4..]);

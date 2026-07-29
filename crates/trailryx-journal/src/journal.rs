@@ -228,12 +228,19 @@ impl Journal {
     /// momentarily unhappy disk into a store that refuses to start.
     fn ensure_header<I: Io>(&mut self, io: &mut I) -> JournalResult<usize> {
         let bytes = io.read_all(self.file)?;
-        if let Ok(h) = decode_segment_header(&bytes) {
-            return Ok(h.len);
+        match decode_segment_header(&bytes) {
+            Ok(h) => return Ok(h.len),
+            // A new file. Nothing to protect, everything to initialise.
+            Err(_) if bytes.is_empty() => {}
+            // Empty, or ours but torn: start the segment clean.
+            Err(WireError::Truncated) | Err(WireError::BadCrc) => {}
+            // Not ours, or a version we do not read. Truncating here would
+            // destroy somebody else's file because a path was mistyped, or
+            // destroy our own because a newer build wrote it. Refuse instead:
+            // this is the case `NotAJournal` was added for and never wired to.
+            Err(e) => return Err(JournalError::NotAJournal(e)),
         }
 
-        // Missing or torn. Start the segment clean rather than appending after
-        // bytes nothing can interpret.
         io.truncate(self.file, 0)?;
         let header = encode_segment_header(self.shard, self.created_at);
         let mut done = 0usize;

@@ -40,12 +40,27 @@ pub enum Plane {
     Payload,
 }
 
-/// Whether a field can ever carry personal data.
+/// Whether a field can carry personal data, and if so who decides.
+///
+/// Three values rather than two, because the middle one is real and pretending
+/// otherwise is how the erasure promise quietly becomes false.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Pii {
-    /// Cannot, by construction: the type does not admit it.
+    /// Cannot, by construction: an enum, a number, a hash, a timestamp, or an
+    /// identifier this store generates itself.
     Never,
-    /// Can, so it must be in the payload plane.
+    /// The value is supplied by the operator and could contain personal data if
+    /// they put it there. It stays in the metadata plane because queries and
+    /// proofs need it in the clear, which means **erasure cannot reach it**:
+    /// identifiers end up committed inside immutable index roots, and no key
+    /// destruction touches a Merkle root that was published years ago.
+    ///
+    /// The character set stops a sentence but not a name:
+    /// `agent://acme.example/ivan.petrenko.1979` passes every check this schema
+    /// makes. So the guarantee here is contractual rather than technical, and
+    /// saying so is the honest part. See `docs/identifiers.md`.
+    OperatorPseudonymous,
+    /// Content. Payload plane only, under a subject key, erasable.
     Possible,
 }
 
@@ -125,6 +140,12 @@ impl Schema {
     pub fn violations(&self) -> Vec<Violation> {
         let mut out = Vec::new();
         for f in self.fields {
+            if f.plane == Plane::Payload && f.pii != Pii::Possible {
+                out.push(Violation {
+                    path: f.path,
+                    reason: "a payload field is content and must be classified as such",
+                });
+            }
             if f.plane == Plane::Metadata {
                 if f.kind.is_unbounded() {
                     out.push(Violation {
@@ -135,7 +156,15 @@ impl Schema {
                 if f.pii == Pii::Possible {
                     out.push(Violation {
                         path: f.path,
-                        reason: "field that may hold personal data is not in the payload plane",
+                        reason: "content-bearing field is not in the payload plane",
+                    });
+                }
+                // An operator-supplied token is unerasable by construction, so
+                // it may never be the shape that can hold a document.
+                if f.pii == Pii::OperatorPseudonymous && !matches!(f.kind, Kind::Token { .. }) {
+                    out.push(Violation {
+                        path: f.path,
+                        reason: "only a bounded token may be operator-supplied in metadata",
                     });
                 }
                 if let Kind::Token { max_bytes, charset } = f.kind
@@ -169,6 +198,18 @@ impl Schema {
             }
         }
         out
+    }
+
+    /// Fields whose values the operator supplies and erasure cannot reach.
+    ///
+    /// Deliberately enumerable: the list is short, it is pinned by a test, and
+    /// adding to it should be a decision somebody makes on purpose.
+    pub fn unerasable_fields(&self) -> Vec<&'static str> {
+        self.fields
+            .iter()
+            .filter(|f| f.pii == Pii::OperatorPseudonymous)
+            .map(|f| f.path)
+            .collect()
     }
 
     pub fn provable_fields(&self) -> Vec<&'static str> {
@@ -239,6 +280,7 @@ impl Schema {
                 "\"x-pii\": \"{}\", ",
                 match f.pii {
                     Pii::Never => "never",
+                    Pii::OperatorPseudonymous => "operator-pseudonymous",
                     Pii::Possible => "possible",
                 }
             ));
@@ -303,7 +345,7 @@ const FIELDS: &[Field] = &[
         optional: false,
         repeated: false,
         plane: Plane::Metadata,
-        pii: Pii::Never,
+        pii: Pii::OperatorPseudonymous,
         provable: false,
         why: "Isolation boundary chosen by the operator. An organisation name at most, never a person.",
     },
@@ -326,7 +368,7 @@ const FIELDS: &[Field] = &[
         optional: false,
         repeated: false,
         plane: Plane::Metadata,
-        pii: Pii::Never,
+        pii: Pii::OperatorPseudonymous,
         provable: true,
         why: "agent:// URI naming a machine actor. Not a natural person; a person appears only via on_behalf_of.",
     },
@@ -339,7 +381,7 @@ const FIELDS: &[Field] = &[
         optional: false,
         repeated: false,
         plane: Plane::Metadata,
-        pii: Pii::Never,
+        pii: Pii::OperatorPseudonymous,
         provable: true,
         why: "One execution. High cardinality by nature, which is why this is a sharded store and not a metrics one.",
     },
@@ -352,7 +394,7 @@ const FIELDS: &[Field] = &[
         optional: true,
         repeated: false,
         plane: Plane::Metadata,
-        pii: Pii::Never,
+        pii: Pii::OperatorPseudonymous,
         provable: false,
         why: "The run that spawned this one. Crosses shards, so causal traversal is a cross-shard operation.",
     },
@@ -365,7 +407,7 @@ const FIELDS: &[Field] = &[
         optional: true,
         repeated: true,
         plane: Plane::Metadata,
-        pii: Pii::Never,
+        pii: Pii::OperatorPseudonymous,
         provable: false,
         why: "Delegation chain, root first. A user:// URI is a pseudonymous handle chosen by the operator, not a name; operators are told not to put names in it.",
     },
@@ -459,7 +501,7 @@ const FIELDS: &[Field] = &[
         optional: true,
         repeated: false,
         plane: Plane::Metadata,
-        pii: Pii::Never,
+        pii: Pii::OperatorPseudonymous,
         provable: false,
         why: "Which policy was in force. A version label produced by the operator's own tooling.",
     },
@@ -492,7 +534,7 @@ const FIELDS: &[Field] = &[
         optional: true,
         repeated: false,
         plane: Plane::Metadata,
-        pii: Pii::Never,
+        pii: Pii::OperatorPseudonymous,
         provable: false,
         why: "Model name. The character set refuses anything shaped like an address or a sentence.",
     },
@@ -535,7 +577,7 @@ const FIELDS: &[Field] = &[
         optional: true,
         repeated: true,
         plane: Plane::Metadata,
-        pii: Pii::Never,
+        pii: Pii::OperatorPseudonymous,
         provable: false,
         why: "Which tools were in scope. Names only; arguments are payload.",
     },
@@ -548,7 +590,7 @@ const FIELDS: &[Field] = &[
         optional: true,
         repeated: true,
         plane: Plane::Metadata,
-        pii: Pii::Never,
+        pii: Pii::OperatorPseudonymous,
         provable: false,
         why: "Delegation in force at decision time, root first. Same pseudonymity rule as on_behalf_of.",
     },
@@ -792,7 +834,50 @@ mod tests {
                 "{} is unbounded and sits in metadata",
                 f.path
             );
-            assert_eq!(f.pii, Pii::Never, "{} may hold personal data", f.path);
+            assert_ne!(
+                f.pii,
+                Pii::Possible,
+                "{} is content and does not belong in metadata",
+                f.path
+            );
+        }
+    }
+
+    #[test]
+    fn the_unerasable_fields_are_exactly_these_nine() {
+        // Pinned on purpose. Each of these is committed into immutable index
+        // roots, so no key destruction will ever reach it, and the guarantee
+        // that it holds no personal data is contractual rather than technical.
+        // Adding a tenth should be a decision, not a diff nobody reads.
+        let mut got = RECORD_V1.unerasable_fields();
+        got.sort_unstable();
+        assert_eq!(
+            got,
+            vec![
+                "agent_id",
+                "basis.identity_chain",
+                "basis.model",
+                "basis.policy_version",
+                "basis.tool_manifest",
+                "on_behalf_of",
+                "parent_run_id",
+                "run_id",
+                "tenant",
+            ]
+        );
+    }
+
+    #[test]
+    fn every_provable_dimension_is_either_generated_or_declared_unerasable() {
+        // A proof needs its dimension in the clear, so a provable field can
+        // never be erasable. Saying which of the two it is, for each, is the
+        // point.
+        for f in RECORD_V1.fields.iter().filter(|f| f.provable) {
+            assert!(
+                f.pii == Pii::Never || f.pii == Pii::OperatorPseudonymous,
+                "{} is provable and must be classified",
+                f.path
+            );
         }
     }
 
