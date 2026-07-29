@@ -1,0 +1,18 @@
+[package]
+name = "trailryx-core"
+description = "Sharded deterministic core skeleton and its simulator"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+trailryx-sim = { path = "../trailryx-sim" }
+
+[[bin]]
+name = "trailryx-sim-run"
+path = "src/bin/sim_run.rs"
+
+[lints]
+workspace = true
