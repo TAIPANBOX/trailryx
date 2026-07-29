@@ -23,6 +23,14 @@ use trailryx_sim::Io;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum StoreError {
+    /// The segment was told its chain begins somewhere its records do not.
+    ///
+    /// Almost always a caller that passed `Hash::ZERO`, or the head of a
+    /// different file, where [`ChainStart::Genesis`] was meant.
+    ChainDoesNotStartThere {
+        declared: Hash,
+        actual: Hash,
+    },
     Journal(JournalError),
     Seal(SealError),
     /// The journal stopped for a reason a seal must not paper over. Sealing a
@@ -58,6 +66,12 @@ impl std::fmt::Display for StoreError {
                 promised,
                 recovered,
             } => write!(f, "promised {promised} records, recovered {recovered}"),
+            Self::ChainDoesNotStartThere { declared, actual } => write!(
+                f,
+                "the segment declares its chain begins at {} and its first record continues from {}",
+                &declared.to_hex()[..16],
+                &actual.to_hex()[..16]
+            ),
         }
     }
 }
@@ -88,17 +102,38 @@ pub enum SealOutcome {
     NothingDurable,
 }
 
-/// Seal the durable prefix of a journal into a segment.
+/// Where a segment's chain begins.
 ///
-/// `chain_before` is the head the previous segment ended on, so a shard's
-/// segments form one chain rather than a set of independent ones.
+/// An enum rather than a `Hash`, because the obvious `Hash::ZERO` is wrong and
+/// wrong in the worst way: it compiles, it seals, and the segment it produces
+/// declares a chain that does not match its own records. Nothing notices until
+/// the offline verifier looks, at the far end of a pipeline, and by then the
+/// mistake is several stages upstream.
+///
+/// A journal's chain does not start at zero. It starts at a genesis derived from
+/// the file's header, so a file opened under a different shard or segment
+/// produces a different chain from its very first link and cannot be quietly
+/// adopted as another journal.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ChainStart {
+    /// The first segment of this journal file. Asks the journal.
+    Genesis,
+    /// A later segment, continuing from where the previous one ended.
+    Continues(Hash),
+}
+
+/// Seal the durable prefix of a journal into a segment.
 pub fn seal_segment<I: Io>(
     journal: &Journal,
     segment: SegmentId,
     shard: ShardIx,
-    chain_before: Hash,
+    start: ChainStart,
     io: &mut I,
 ) -> Result<SealOutcome, StoreError> {
+    let chain_before = match start {
+        ChainStart::Genesis => journal.genesis_head(),
+        ChainStart::Continues(head) => head,
+    };
     let walked = journal.read_all(io)?;
 
     // A torn tail is ordinary and the acked prefix is unaffected by it. A chain
@@ -126,6 +161,24 @@ pub fn seal_segment<I: Io>(
         .into_iter()
         .take(usize::try_from(acked).unwrap_or(usize::MAX))
         .collect();
+
+    // A segment declares where its chain begins, and until now nothing checked
+    // that its records agree. `Segment::seal` cannot check it: recomputing a
+    // link needs the canonical codec, which lives on the journal's side of the
+    // seam. So it is checked here, which is the only place with both halves.
+    //
+    // Without this a caller can seal a segment whose declared chain its own
+    // records do not follow, and the only thing that ever notices is the
+    // offline verifier, several stages downstream, reporting a broken chain for
+    // a mistake made long before.
+    if let Some((first, _)) = durable.first()
+        && first.prev_hash != chain_before
+    {
+        return Err(StoreError::ChainDoesNotStartThere {
+            declared: chain_before,
+            actual: first.prev_hash,
+        });
+    }
 
     let chain_after = durable.last().map(|(_, l)| *l).unwrap_or(chain_before);
     let sealed = Segment::seal(segment, shard, chain_before, &durable)?;

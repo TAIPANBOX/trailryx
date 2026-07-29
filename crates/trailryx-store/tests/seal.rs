@@ -12,7 +12,7 @@ use trailryx_record::{
     SegmentId, Severity, ShardIx, TenantId, Timestamp, Untrusted, Verdict,
 };
 use trailryx_sim::{Io, IoFaults, SimClock, SimIo};
-use trailryx_store::{SealOutcome, StoreError, seal_segment};
+use trailryx_store::{ChainStart, SealOutcome, StoreError, seal_segment};
 
 fn rec(n: u128, at: u64) -> Record {
     Record {
@@ -64,7 +64,7 @@ fn a_sealed_segment_proves_things_about_the_records_on_disk() {
     let j = journal_with(&mut io, 10, true);
 
     let SealOutcome::Sealed(sealed) =
-        seal_segment(&j, SegmentId(1), ShardIx(0), Hash::ZERO, &mut io).unwrap()
+        seal_segment(&j, SegmentId(1), ShardIx(0), ChainStart::Genesis, &mut io).unwrap()
     else {
         panic!("ten acked records should seal");
     };
@@ -94,7 +94,7 @@ fn the_segment_commits_to_the_journals_own_chain_links() {
     let walked = j.read_all(&mut io).unwrap();
 
     let SealOutcome::Sealed(sealed) =
-        seal_segment(&j, SegmentId(1), ShardIx(0), Hash::ZERO, &mut io).unwrap()
+        seal_segment(&j, SegmentId(1), ShardIx(0), ChainStart::Genesis, &mut io).unwrap()
     else {
         panic!("should seal");
     };
@@ -117,7 +117,7 @@ fn only_the_durable_prefix_is_sealed() {
     assert_eq!(j.acked(), 4);
 
     let SealOutcome::Sealed(sealed) =
-        seal_segment(&j, SegmentId(1), ShardIx(0), Hash::ZERO, &mut io).unwrap()
+        seal_segment(&j, SegmentId(1), ShardIx(0), ChainStart::Genesis, &mut io).unwrap()
     else {
         panic!("should seal");
     };
@@ -130,34 +130,81 @@ fn an_idle_journal_seals_nothing_and_that_is_not_an_error() {
     let mut io = SimIo::new(4, IoFaults::NONE);
     let j = journal_with(&mut io, 0, false);
     assert!(matches!(
-        seal_segment(&j, SegmentId(1), ShardIx(0), Hash::ZERO, &mut io).unwrap(),
+        seal_segment(&j, SegmentId(1), ShardIx(0), ChainStart::Genesis, &mut io).unwrap(),
         SealOutcome::NothingDurable
     ));
 }
 
 #[test]
-fn segments_chain_to_one_another() {
-    let mut io = SimIo::new(5, IoFaults::NONE);
-    let j = journal_with(&mut io, 5, true);
+fn a_shards_segments_do_not_yet_chain_across_files() {
+    // This test replaces one called `segments_chain_to_one_another`, which
+    // sealed the same journal file twice under two different chain starts and
+    // asserted the roots differed. That did prove something real, that the
+    // incoming head is committed to the manifest root, and it proved it while
+    // claiming a property the implementation does not have. It passed because
+    // nothing checked the chain start against the records.
+    //
+    // What is actually true today: a journal's chain begins at a genesis derived
+    // from its own file header, so a second file starts a new chain rather than
+    // continuing the first. The manifest carries `chain_before` and
+    // `chain_after` so that a shard's segments can form one chain, and the
+    // journal does not yet carry the previous head across a file boundary to
+    // make it so.
+    //
+    // Written down as a test rather than a comment, so it fails the day somebody
+    // implements it and forgets to come back here.
+    let mut io = SimIo::new(7, IoFaults::NONE);
+    let clock = SimClock::new(1_800_000_000_000_000_000);
 
+    let (mut one, _) = Journal::open(
+        ShardIx(0),
+        SegmentId(1),
+        "s0-1.journal",
+        1_000,
+        &mut io,
+        &clock,
+    )
+    .unwrap();
+    one.append(&rec(1, 1_010), &mut io).unwrap();
+    one.sync(&mut io).unwrap();
     let SealOutcome::Sealed(first) =
-        seal_segment(&j, SegmentId(1), ShardIx(0), Hash::ZERO, &mut io).unwrap()
+        seal_segment(&one, SegmentId(1), ShardIx(0), ChainStart::Genesis, &mut io).unwrap()
     else {
         panic!("should seal");
     };
 
-    // A second segment continuing the same shard.
-    let SealOutcome::Sealed(second) =
-        seal_segment(&j, SegmentId(2), ShardIx(0), first.chain_after, &mut io).unwrap()
-    else {
-        panic!("should seal");
-    };
-    assert_eq!(second.manifest().chain_before, first.chain_after);
-    assert_ne!(
-        first.manifest().root(),
-        second.manifest().root(),
-        "the incoming head is committed, so the same records seal differently"
-    );
+    let (mut two, _) = Journal::open(
+        ShardIx(0),
+        SegmentId(2),
+        "s0-2.journal",
+        1_000,
+        &mut io,
+        &clock,
+    )
+    .unwrap();
+    two.append(&rec(2, 1_020), &mut io).unwrap();
+    two.sync(&mut io).unwrap();
+
+    // The second file's chain does not start where the first one ended, and
+    // asking it to is refused rather than silently accepted.
+    assert_ne!(two.genesis_head(), first.chain_after);
+    assert!(matches!(
+        seal_segment(
+            &two,
+            SegmentId(2),
+            ShardIx(0),
+            ChainStart::Continues(first.chain_after),
+            &mut io
+        ),
+        Err(StoreError::ChainDoesNotStartThere { .. })
+    ));
+
+    // Each is verifiable on its own, which is what the store can honestly
+    // claim until the head crosses the boundary.
+    assert!(matches!(
+        seal_segment(&two, SegmentId(2), ShardIx(0), ChainStart::Genesis, &mut io),
+        Ok(SealOutcome::Sealed(_))
+    ));
 }
 
 #[test]
@@ -165,7 +212,7 @@ fn a_tampered_record_changes_what_the_segment_commits_to() {
     let mut io = SimIo::new(6, IoFaults::NONE);
     let j = journal_with(&mut io, 5, true);
     let SealOutcome::Sealed(honest) =
-        seal_segment(&j, SegmentId(1), ShardIx(0), Hash::ZERO, &mut io).unwrap()
+        seal_segment(&j, SegmentId(1), ShardIx(0), ChainStart::Genesis, &mut io).unwrap()
     else {
         panic!("should seal");
     };
@@ -196,7 +243,7 @@ fn a_suspect_journal_is_not_sealed() {
     let f = io.create("s0.journal").unwrap();
     io.append(f, b"\xa7\x01\x05partial").unwrap();
     assert!(matches!(
-        seal_segment(&j, SegmentId(1), ShardIx(0), Hash::ZERO, &mut io).unwrap(),
+        seal_segment(&j, SegmentId(1), ShardIx(0), ChainStart::Genesis, &mut io).unwrap(),
         SealOutcome::Sealed(_)
     ));
 
@@ -207,8 +254,44 @@ fn a_suspect_journal_is_not_sealed() {
     io.truncate(f, 0).unwrap();
     io.append(f, &bytes).unwrap();
 
-    match seal_segment(&j, SegmentId(1), ShardIx(0), Hash::ZERO, &mut io) {
+    match seal_segment(&j, SegmentId(1), ShardIx(0), ChainStart::Genesis, &mut io) {
         Err(StoreError::JournalSuspect(_)) | Err(StoreError::DurabilityViolation { .. }) => {}
         other => panic!("a damaged journal must not seal quietly: {other:?}"),
     }
+}
+
+#[test]
+fn a_segment_cannot_declare_a_chain_its_records_do_not_follow() {
+    // Every test in this file used to pass `Hash::ZERO` here, and every one of
+    // them passed, because nothing checked it. A journal's chain does not start
+    // at zero: it starts at a genesis derived from the file's header, so a file
+    // opened under a different shard or segment produces a different chain from
+    // its very first link.
+    //
+    // The cost of not checking was paid at the far end of a pipeline. The
+    // segment sealed happily, the pack built happily, and the offline verifier
+    // reported a broken chain for a mistake made four stages earlier.
+    let mut io = SimIo::new(1, IoFaults::NONE);
+    let j = journal_with(&mut io, 1, true);
+
+    let refused = seal_segment(
+        &j,
+        SegmentId(1),
+        ShardIx(0),
+        ChainStart::Continues(Hash::ZERO),
+        &mut io,
+    );
+    match refused {
+        Err(StoreError::ChainDoesNotStartThere { declared, actual }) => {
+            assert_eq!(declared, Hash::ZERO);
+            assert_eq!(actual, j.genesis_head());
+        }
+        other => panic!("a wrong chain start was accepted: {other:?}"),
+    }
+
+    // And the right one is the easy one to write.
+    assert!(matches!(
+        seal_segment(&j, SegmentId(1), ShardIx(0), ChainStart::Genesis, &mut io),
+        Ok(SealOutcome::Sealed(_))
+    ));
 }

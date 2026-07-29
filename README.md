@@ -7,7 +7,7 @@
 ![Stage](https://img.shields.io/badge/stage-10%20of%2013-blue.svg)
 ![Core](https://img.shields.io/badge/core-frozen-success.svg)
 ![Rust](https://img.shields.io/badge/rust-1.85%2B-orange.svg)
-![Tests](https://img.shields.io/badge/tests-412-success.svg)
+![Tests](https://img.shields.io/badge/tests-413-success.svg)
 ![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)
 ![Dependencies](https://img.shields.io/badge/dependencies-0-success.svg)
 ![Unsafe](https://img.shields.io/badge/unsafe-forbidden-success.svg)
@@ -25,6 +25,48 @@ Two sentences carry the whole design.
 > A verifier must never learn the shape of an answer from the answer.
 
 ---
+
+## See it do all of it
+
+```bash
+cargo run --release --bin trailryx-demo -- --runs 2
+```
+
+Eight steps, twice in a row, from an empty directory. Nothing in it is narrated:
+each step does the thing and fails the run if it did not.
+
+An agent spends its budget and is refused, and six records carry the grounds:
+policy version, budget at each point, the model and its parameters, the prompt by
+hash, the tools in scope. Then the same incident as a stock OpenTelemetry SDK
+would have left it, posted over a real socket, gzipped as a Collector sends it,
+so the difference is visible rather than argued:
+
+```
+ 3. model_call       -   policy=v-7 budget=900000 model=gpt-4o-mini prompt=hashed tools=2
+    POST http://127.0.0.1:56518/v1/traces  Content-Encoding: gzip  ->  HTTP 200
+ 7. model_call       -   model=gpt-4o-mini
+    ^ no policy version, no budget, no memory reference
+```
+
+Then the chain is unrolled, a query comes back with a completeness proof that is
+verified against the segment's own declared root, an evidence pack is signed and
+witnessed and written to a file, and the offline verifier reads it. Then the
+person is forgotten, and the same pack verifies again, byte for byte, while every
+payload has become unreachable.
+
+One payload arrived with no idea whose it was, which is the normal case: an agent
+rarely knows whose data is in a prompt when it sends one. Attribution catches up
+later, nothing is re-encrypted, and the erasure still reaches it.
+
+**Writing this found four real defects**, which is what an end-to-end run is for.
+The worst was quiet: a journal's chain starts at a genesis derived from its file
+header, not at zero, and `seal_segment` took any `Hash` a caller offered. Passing
+`Hash::ZERO` compiled, sealed, built a pack, and failed only at the offline
+verifier, four stages downstream. Every existing seal test passed the same wrong
+value and passed. The chain start is now an enum whose easy case is the correct
+one, the seam checks the records agree, and a test that claimed a shard's segments
+chain across files has been replaced by one that says plainly that they do not
+yet.
 
 ## The question nobody else answers
 
@@ -63,13 +105,14 @@ and the proof shapes do not change without a version and a migration.
 | `trailryx-projection` | Thrift, a Parquet writer, and columnar projections | 18 |
 | `trailryx-sign` | what gets signed, and what a witness attests to | 4 |
 | `trailryx-ingest` | the OTLP/HTTP server: HTTP/1.1, gzip, all hand-written | 73 |
+| `trailryx-demo` | the eight acceptance steps, walked end to end | - |
 
 **Zero dependencies.** `unsafe` forbidden at the workspace level.
 
 ## Try it
 
 ```bash
-cargo test                                    # 412 tests
+cargo test                                    # 413 tests
 cargo run --bin trailryx-sim-run -- --help
 ```
 

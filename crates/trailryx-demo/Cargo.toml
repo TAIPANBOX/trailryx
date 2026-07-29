@@ -1,0 +1,29 @@
+[package]
+name = "trailryx-demo"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+description = "The eight acceptance steps, walked end to end"
+
+[dependencies]
+trailryx-contracts = { path = "../trailryx-contracts" }
+trailryx-crypto = { path = "../trailryx-crypto" }
+trailryx-erasure = { path = "../trailryx-erasure" }
+trailryx-index = { path = "../trailryx-index" }
+trailryx-ingest = { path = "../trailryx-ingest" }
+trailryx-journal = { path = "../trailryx-journal" }
+trailryx-otlp = { path = "../trailryx-otlp" }
+trailryx-record = { path = "../trailryx-record" }
+trailryx-sign = { path = "../trailryx-sign" }
+trailryx-sim = { path = "../trailryx-sim" }
+trailryx-store = { path = "../trailryx-store" }
+trailryx-verify = { path = "../trailryx-verify" }
+
+[[bin]]
+name = "trailryx-demo"
+path = "src/main.rs"
+
+[lints]
+workspace = true

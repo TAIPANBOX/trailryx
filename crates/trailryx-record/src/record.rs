@@ -343,7 +343,11 @@ impl Default for Algorithms {
     fn default() -> Self {
         Self {
             hash: HashAlg::Sha384,
-            signature: SigAlg::Es256,
+            // What the store actually signs with. It said `Es256` until the
+            // demo printed the primitive inventory next to a signature made
+            // with P-384, and a record that misdeclares its own algorithms
+            // makes the migration those fields exist for impossible to plan.
+            signature: SigAlg::Es384,
             kem: KemAlg::X25519MlKem768,
         }
     }

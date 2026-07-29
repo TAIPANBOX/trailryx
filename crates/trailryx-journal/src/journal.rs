@@ -212,6 +212,8 @@ pub struct Journal {
     shard: ShardIx,
     segment: SegmentId,
     created_at: Timestamp,
+    /// Where this file's chain started. See [`Journal::genesis_head`].
+    genesis: Hash,
     chain: ChainState,
     /// Records fully on the file, durable or not.
     written: u64,
@@ -246,6 +248,10 @@ impl Journal {
             shard,
             segment,
             created_at: Timestamp(clock.wall_nanos()),
+            // Replaced by recovery, which is where the header exists to derive
+            // it from. Zero here would be a lie for exactly as long as the next
+            // line takes to run, and recovery cannot fail to set it.
+            genesis: Hash::ZERO,
             chain: ChainState::genesis(),
             written: 0,
             acked: 0,
@@ -369,6 +375,16 @@ impl Journal {
         }
     }
 
+    /// Where this file's chain started.
+    ///
+    /// Kept so a caller sealing the first segment of a file can ask rather than
+    /// guess. Guessing produces a segment whose declared chain does not match
+    /// its own records, and the only thing that notices is the offline verifier,
+    /// at the far end of a pipeline.
+    pub fn genesis_head(&self) -> Hash {
+        self.genesis
+    }
+
     /// Where a shard's chain starts for this file.
     ///
     /// The header rather than zero, so a file opened under a different shard or
@@ -392,6 +408,7 @@ impl Journal {
         let bytes = io.read_all(self.file)?;
         let header = decode_segment_header(&bytes).map_err(JournalError::NotAJournal)?;
         let genesis = Self::genesis(&bytes[..header_len]);
+        self.genesis = genesis;
 
         let walked = Self::walk(&bytes, &header, genesis);
         let discarded = bytes.len() as u64 - walked.good_bytes;
