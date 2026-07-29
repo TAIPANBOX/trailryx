@@ -22,6 +22,11 @@ pub enum JournalError {
     Wire(WireError),
     /// The file exists but is not one of ours, or is a version we do not read.
     NotAJournal(WireError),
+    /// The file is a journal, for somebody else.
+    WrongOwner {
+        file_shard: ShardIx,
+        file_segment: SegmentId,
+    },
 }
 
 impl From<IoError> for JournalError {
@@ -36,6 +41,10 @@ impl std::fmt::Display for JournalError {
             Self::Io(e) => write!(f, "io: {e}"),
             Self::Wire(e) => write!(f, "wire: {e}"),
             Self::NotAJournal(e) => write!(f, "not a journal: {e}"),
+            Self::WrongOwner {
+                file_shard,
+                file_segment,
+            } => write!(f, "journal belongs to {file_shard} {file_segment}"),
         }
     }
 }
@@ -43,10 +52,6 @@ impl std::fmt::Display for JournalError {
 impl std::error::Error for JournalError {}
 
 pub type JournalResult<T> = Result<T, JournalError>;
-
-/// Newtype so the header length cannot be confused with any other offset.
-#[derive(Debug, Clone, Copy)]
-struct SegmentHeaderLen(usize);
 
 /// What happened to one append.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -82,6 +87,32 @@ pub enum StoppedBecause {
     /// A frame parsed but its chain link did not follow. Not a disk problem:
     /// something rewrote history, or the writer is wrong.
     ChainBroken { at_seq: u64 },
+    /// A record inside the file belongs to a different shard or segment than
+    /// the header says. One file cannot be two journals.
+    WrongOwner { at_seq: u64 },
+}
+
+/// Acked data that did not come back. Not our bug when the disk lied, but never
+/// something to discover from a silently lowered watermark.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct DurabilityViolation {
+    pub promised: u64,
+    pub recovered: u64,
+}
+
+/// The result of walking a journal file once.
+///
+/// One walk, used by recovery and by reading alike. Two implementations of
+/// "read the journal" is two sets of rules about what counts as valid, and the
+/// weaker one becomes the foundation of whatever is built next: the first
+/// version's `read_all` checked the chain link but not the sequence or the
+/// previous head, and returned a silent prefix when it stopped.
+#[derive(Debug)]
+pub struct Walked {
+    pub records: Vec<Record>,
+    pub chain: ChainState,
+    pub good_bytes: u64,
+    pub stopped_because: StoppedBecause,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -92,13 +123,17 @@ pub struct Recovered {
     pub good_bytes: u64,
     pub discarded_bytes: u64,
     pub stopped_because: StoppedBecause,
+    /// Set when less came back than had been promised durable.
+    pub durability_violation: Option<DurabilityViolation>,
 }
 
 impl Recovered {
-    /// A torn tail is expected after a crash. A broken chain is not, and the
-    /// difference decides whether this is a routine restart or an incident.
+    /// A torn tail is expected after a crash. A broken chain is not, and
+    /// neither is losing something that was promised durable. The difference
+    /// decides whether this is a routine restart or an incident.
     pub fn is_suspicious(&self) -> bool {
         matches!(self.stopped_because, StoppedBecause::ChainBroken { .. })
+            || self.durability_violation.is_some()
     }
 }
 
@@ -229,7 +264,20 @@ impl Journal {
     fn ensure_header<I: Io>(&mut self, io: &mut I) -> JournalResult<usize> {
         let bytes = io.read_all(self.file)?;
         match decode_segment_header(&bytes) {
-            Ok(h) => return Ok(h.len),
+            Ok(h) => {
+                // The file says who it belongs to, and we say who we are. If
+                // those disagree the file is not ours to read, let alone to
+                // append to: checking each record against the file's own header
+                // would have accepted the whole thing, because the file is
+                // perfectly consistent with itself.
+                if h.shard != self.shard || h.segment != self.segment {
+                    return Err(JournalError::WrongOwner {
+                        file_shard: h.shard,
+                        file_segment: h.segment,
+                    });
+                }
+                return Ok(h.len);
+            }
             // A new file. Nothing to protect, everything to initialise.
             Err(_) if bytes.is_empty() => {}
             // Empty, or ours but torn: start the segment clean.
@@ -242,7 +290,7 @@ impl Journal {
         }
 
         io.truncate(self.file, 0)?;
-        let header = encode_segment_header(self.shard, self.created_at);
+        let header = encode_segment_header(self.shard, self.segment, self.created_at);
         let mut done = 0usize;
         let mut attempts = 0u32;
         while done < header.len() {
@@ -260,27 +308,17 @@ impl Journal {
         Ok(header.len())
     }
 
-    /// Read the file back, adopt the longest prefix that verifies, and cut off
-    /// whatever follows.
-    ///
-    /// Truncation is not optional. Appending after bytes that failed to verify
-    /// would break the journal permanently: every later recovery would stop at
-    /// the same offset while the writer kept believing it was making progress.
-    pub fn recover<I: Io>(&mut self, io: &mut I) -> JournalResult<Recovered> {
-        let header_len = self.ensure_header(io)?;
-        let bytes = io.read_all(self.file)?;
-        let header = SegmentHeaderLen(header_len);
-
-        let mut chain = ChainState::genesis();
-        let mut off = header.0;
-        let mut records = 0u64;
+    /// Walk a journal file once, applying every rule in `docs/durability.md`
+    /// §3: the frame parses and its checksum matches, the record decodes, the
+    /// sequence follows, the previous head matches, the chain link recomputes,
+    /// and the record belongs to this shard and segment.
+    fn walk(bytes: &[u8], header: &wire::SegmentHeader, genesis: Hash) -> Walked {
+        let mut chain = ChainState::resume(genesis, 0);
+        let mut off = header.len;
+        let mut records = Vec::new();
         let mut stopped = StoppedBecause::EndOfFile;
-        let mut ids = Vec::new();
 
-        loop {
-            if off >= bytes.len() {
-                break;
-            }
+        while off < bytes.len() {
             let frame: Frame<'_> = match decode_frame(&bytes[off..]) {
                 Ok(f) => f,
                 Err(e) => {
@@ -297,6 +335,11 @@ impl Journal {
             };
 
             let expect_seq = chain.length() + 1;
+            if rec.shard != header.shard || rec.segment_id != header.segment {
+                stopped = StoppedBecause::WrongOwner { at_seq: expect_seq };
+                break;
+            }
+
             let prev = chain.head();
             if rec.seq != expect_seq
                 || rec.prev_hash != prev
@@ -307,37 +350,75 @@ impl Journal {
             }
 
             chain.append(frame.body);
-            records += 1;
-            ids.push((rec.id, rec.seq));
+            records.push(rec);
             off += frame.total_len;
         }
 
-        let good_bytes = off as u64;
-        let discarded = bytes.len() as u64 - good_bytes;
+        Walked {
+            records,
+            chain,
+            good_bytes: off as u64,
+            stopped_because: stopped,
+        }
+    }
+
+    /// Where a shard's chain starts for this file.
+    ///
+    /// The header rather than zero, so a file opened under a different shard or
+    /// segment produces a different chain from its first link and cannot be
+    /// quietly adopted as another journal.
+    fn genesis(header_bytes: &[u8]) -> Hash {
+        let mut h = trailryx_crypto::Sha384::new();
+        trailryx_crypto::Digest::update(&mut h, b"trailryx/segment-genesis/v1\0");
+        trailryx_crypto::Digest::update(&mut h, header_bytes);
+        trailryx_crypto::Digest::finish(h)
+    }
+
+    /// Read the file back, adopt the longest prefix that verifies, and cut off
+    /// whatever follows.
+    ///
+    /// Truncation is not optional. Appending after bytes that failed to verify
+    /// would break the journal permanently: every later recovery would stop at
+    /// the same offset while the writer kept believing it was making progress.
+    pub fn recover<I: Io>(&mut self, io: &mut I) -> JournalResult<Recovered> {
+        let header_len = self.ensure_header(io)?;
+        let bytes = io.read_all(self.file)?;
+        let header = decode_segment_header(&bytes).map_err(JournalError::NotAJournal)?;
+        let genesis = Self::genesis(&bytes[..header_len]);
+
+        let walked = Self::walk(&bytes, &header, genesis);
+        let discarded = bytes.len() as u64 - walked.good_bytes;
 
         if discarded > 0 {
-            io.truncate(self.file, good_bytes)?;
+            io.truncate(self.file, walked.good_bytes)?;
         }
 
-        for (id, seq) in ids {
-            self.dedup.remember(id, seq);
+        for rec in &walked.records {
+            self.dedup.remember(rec.id, rec.seq);
         }
 
-        self.chain = chain;
-        self.written = self.chain.length();
-        self.acked = self.acked.min(self.written);
-        self.good_bytes = good_bytes;
+        let promised = self.acked;
+        let recovered = walked.chain.length();
+        let violation = (recovered < promised).then_some(DurabilityViolation {
+            promised,
+            recovered,
+        });
+
+        self.chain = walked.chain;
+        self.written = recovered;
+        self.acked = self.acked.min(recovered);
         self.since_sync = 0;
         self.pending = None;
         self.degraded = false;
 
         Ok(Recovered {
-            records,
-            max_seq: self.chain.length(),
+            records: walked.records.len() as u64,
+            max_seq: recovered,
             head: self.chain.head(),
-            good_bytes,
+            good_bytes: walked.good_bytes,
             discarded_bytes: discarded,
-            stopped_because: stopped,
+            stopped_because: walked.stopped_because,
+            durability_violation: violation,
         })
     }
 
@@ -485,31 +566,15 @@ impl Journal {
         self.pending.is_some()
     }
 
-    /// Read every record back, verifying the chain as it goes.
-    pub fn read_all<I: Io>(&self, io: &mut I) -> JournalResult<Vec<Record>> {
+    /// Read every record back, applying exactly the rules recovery applies.
+    ///
+    /// Returns why it stopped alongside what it found, so a caller cannot
+    /// mistake a truncated prefix for the whole journal.
+    pub fn read_all<I: Io>(&self, io: &mut I) -> JournalResult<Walked> {
         let bytes = io.read_all(self.file)?;
-        let Ok(header) = decode_segment_header(&bytes) else {
-            return Ok(Vec::new());
-        };
-        let mut out = Vec::new();
-        let mut chain = ChainState::genesis();
-        let mut off = header.len;
-
-        while off < bytes.len() {
-            let Ok(frame) = decode_frame(&bytes[off..]) else {
-                break;
-            };
-            let Ok(rec) = decode_record(frame.body) else {
-                break;
-            };
-            if !ChainState::verify_step(chain.head(), rec.seq, frame.body, frame.chain_link) {
-                break;
-            }
-            chain.append(frame.body);
-            out.push(rec);
-            off += frame.total_len;
-        }
-        Ok(out)
+        let header = decode_segment_header(&bytes).map_err(JournalError::NotAJournal)?;
+        let genesis = Self::genesis(&bytes[..header.len]);
+        Ok(Self::walk(&bytes, &header, genesis))
     }
 }
 

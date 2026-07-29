@@ -42,7 +42,8 @@ where, for every frame in order:
 2. the record body decodes, including re-parsing every identifier;
 3. `seq` is exactly one more than the previous;
 4. `prev_hash` equals the running chain head;
-5. the stored chain link equals `chain_step(prev_hash, seq, body)`.
+5. the stored chain link equals `chain_step(prev_hash, seq, body)`;
+6. the record names this shard and this segment.
 
 Everything after the first failure is **discarded and truncated away**.
 
@@ -59,8 +60,23 @@ Recovery reports *why* it stopped, and the distinction is operational:
 - **ChainBroken**: a frame parsed cleanly but did not follow from the previous
   one. That is not something a disk does. Either history was rewritten or the
   writer is wrong, and either way it is an incident.
+- **WrongOwner**: a record inside the file belongs to a different shard or
+  segment than the header. One file cannot be two journals.
 
-An operator should never have to guess which of the two happened.
+An operator should never have to guess which happened.
+
+Separately, if less comes back than had been promised durable, recovery reports
+a **durability violation** carrying both numbers. The watermark still drops,
+because pretending otherwise would be worse, but it never drops in silence.
+
+### The file knows whose it is
+
+The segment header carries the shard and the segment id, the chain begins at a
+hash **of the header** rather than at zero, and every recovered record is
+checked against the header. Opening one shard's file under another shard's
+identity is refused outright rather than accepted: a file is perfectly
+consistent with itself, so checking records against the file's own header would
+have adopted the lot.
 
 ## 4. Writes that are refused
 
@@ -116,7 +132,15 @@ it through the ring buys nothing and costs a thread pool on the critical path.
 The related trap is `O_DIRECT_NO_FSYNC`, which produces a real write hole: the
 log reports data as flushed when nothing made it durable. We do not use it.
 
-## 9. How this is verified
+## 9. One walk, not two
+
+Recovery and reading use the same function, applying the same six rules. Two
+implementations of "read the journal" means two sets of rules about what counts
+as valid, and the weaker one becomes the foundation of whatever gets built next.
+The first version's reader checked the chain link but not the sequence or the
+previous head, and returned a silent prefix when it stopped early.
+
+## 10. How this is verified
 
 - The crash point is walked across **every step** of a run, not sampled.
 - The contract is checked across **thousands of seeds** with an unreliable but

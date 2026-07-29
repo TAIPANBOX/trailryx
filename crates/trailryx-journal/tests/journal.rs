@@ -186,8 +186,9 @@ fn records_are_written_and_read_back_in_order() {
     j.sync(&mut io).unwrap();
 
     let back = j.read_all(&mut io).unwrap();
-    assert_eq!(back.len(), 20);
-    for (i, rec) in back.iter().enumerate() {
+    assert_eq!(back.records.len(), 20);
+    assert_eq!(back.stopped_because, StoppedBecause::EndOfFile);
+    for (i, rec) in back.records.iter().enumerate() {
         assert_eq!(rec.seq, i as u64 + 1);
         assert_eq!(rec.id, RecordId(i as u128 + 1));
         assert_eq!(rec.segment_id, SegmentId(1));
@@ -207,8 +208,10 @@ fn the_journal_owns_seq_and_prev_hash() {
     j.append(&r, &mut io).unwrap();
 
     let back = j.read_all(&mut io).unwrap();
-    assert_eq!(back[0].seq, 1);
-    assert_eq!(back[0].prev_hash, Hash::ZERO);
+    assert_eq!(back.records[0].seq, 1);
+    // The chain starts at the header, not at zero, so a file cannot be adopted
+    // as a journal for a different shard or segment.
+    assert_ne!(back.records[0].prev_hash, Hash::ZERO);
 }
 
 #[test]
@@ -225,7 +228,7 @@ fn a_repeated_record_id_is_absorbed_once() {
         Appended::Duplicate { .. }
     ));
     assert_eq!(j.written(), 1);
-    assert_eq!(j.read_all(&mut io).unwrap().len(), 1);
+    assert_eq!(j.read_all(&mut io).unwrap().records.len(), 1);
 }
 
 #[test]
@@ -314,8 +317,11 @@ fn an_empty_journal_recovers_to_nothing() {
     let rep = j.recover(&mut io).unwrap();
     assert_eq!(rep.records, 0);
     assert_eq!(rep.max_seq, 0);
-    assert!(rep.head.is_zero());
+    // An empty journal's head is its header, not zero: the file is already
+    // bound to one shard and one segment before a single record exists.
+    assert!(!rep.head.is_zero());
     assert_eq!(rep.stopped_because, StoppedBecause::EndOfFile);
+    assert_eq!(rep.durability_violation, None);
 }
 
 #[test]
@@ -332,11 +338,13 @@ fn recovery_restores_the_chain_so_appends_continue_it() {
     assert_eq!(rep.head, head_before);
 
     j.append(&minimal(4), &mut io).unwrap();
-    let all = j.read_all(&mut io).unwrap();
+    let walked = j.read_all(&mut io).unwrap();
+    let all = walked.records;
     assert_eq!(all.len(), 4);
 
-    // Independent replay of the chain over what is on disk.
-    let mut chain = ChainState::genesis();
+    // Independent replay over what is on disk, starting where the journal
+    // starts: at the header.
+    let mut chain = ChainState::resume(all[0].prev_hash, 0);
     for r in &all {
         chain.append(&encode_record(r));
     }
@@ -557,4 +565,66 @@ fn a_torn_header_is_still_ours_to_restart() {
         j.append(&minimal(1), &mut io).unwrap(),
         Appended::Written { seq: 1, .. }
     ));
+}
+
+#[test]
+fn a_file_cannot_be_adopted_as_another_shards_journal() {
+    // Before, a journal file carried no segment id, recovery never compared a
+    // record's shard against the header's, and the chain began at zero. Opening
+    // shard 0's file as shard 7 produced one file, one intact chain, and two
+    // shards claiming it.
+    let mut io = SimIo::new(30, IoFaults::NONE);
+    let clock = SimClock::new(1_800_000_000_000_000_000);
+
+    let (mut j, _) =
+        Journal::open(ShardIx(0), SegmentId(1), "s0.journal", 4, &mut io, &clock).unwrap();
+    for n in 1..=5u128 {
+        j.append(&minimal(n), &mut io).unwrap();
+    }
+    j.sync(&mut io).unwrap();
+
+    // The same bytes, opened under a different identity. Refused outright:
+    // checking each record against the file's own header would have accepted
+    // everything, because the file is perfectly consistent with itself.
+    let result = Journal::open(ShardIx(7), SegmentId(99), "s0.journal", 4, &mut io, &clock);
+    assert!(
+        matches!(
+            result,
+            Err(trailryx_journal::JournalError::WrongOwner { .. })
+        ),
+        "a journal must not be adopted by another shard"
+    );
+
+    // And the records are still there for their rightful owner.
+    let (_, rep) =
+        Journal::open(ShardIx(0), SegmentId(1), "s0.journal", 4, &mut io, &clock).unwrap();
+    assert_eq!(rep.records, 5);
+}
+
+#[test]
+fn losing_acked_data_is_reported_rather_than_absorbed() {
+    // A disk that lies about flushing breaks the contract and nothing in
+    // software prevents it. What must never happen is the watermark quietly
+    // sliding down to match whatever came back.
+    let faults = IoFaults {
+        lying_fsync_ppm: 1_000_000,
+        ..IoFaults::NONE
+    };
+    let mut io = SimIo::new(31, faults);
+    let mut j = open(&mut io);
+    for n in 1..=6u128 {
+        j.append(&minimal(n), &mut io).unwrap();
+    }
+    j.sync(&mut io).unwrap(); // reports success, flushes nothing
+    assert_eq!(j.acked(), 6);
+
+    io.crash();
+    let rep = j.recover(&mut io).unwrap();
+    // How much survives is up to the crash model, which keeps a random prefix
+    // of unsynced bytes. What matters is that the loss is named rather than
+    // absorbed by quietly lowering the watermark.
+    let v = rep.durability_violation.expect("the loss must be reported");
+    assert_eq!(v.promised, 6);
+    assert!(v.recovered < 6, "{v:?}");
+    assert!(rep.is_suspicious());
 }

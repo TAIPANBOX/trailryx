@@ -593,11 +593,12 @@ pub fn decode_frame(buf: &[u8]) -> WireResult<Frame<'_>> {
 
 /// The header every segment file starts with. Carries its own format version,
 /// so a file found on its own can still say what it is.
-pub fn encode_segment_header(shard: ShardIx, created_at: Timestamp) -> Vec<u8> {
+pub fn encode_segment_header(shard: ShardIx, segment: SegmentId, created_at: Timestamp) -> Vec<u8> {
     let mut w = Writer::new();
     let mut out = SEGMENT_MAGIC.to_vec();
     w.varint(u64::from(FORMAT_VERSION));
     w.varint(u64::from(shard.0));
+    w.varint(segment.0);
     w.varint(created_at.as_nanos());
     out.extend_from_slice(&w.into_bytes());
     let crc = crc32(&out);
@@ -609,6 +610,7 @@ pub fn encode_segment_header(shard: ShardIx, created_at: Timestamp) -> Vec<u8> {
 pub struct SegmentHeader {
     pub format_version: u16,
     pub shard: ShardIx,
+    pub segment: SegmentId,
     pub created_at: Timestamp,
     pub len: usize,
 }
@@ -630,6 +632,7 @@ pub fn decode_segment_header(buf: &[u8]) -> WireResult<SegmentHeader> {
         ));
     }
     let shard = ShardIx(u16::try_from(r.varint()?).map_err(|_| WireError::Truncated)?);
+    let segment = SegmentId(r.varint()?);
     let created_at = Timestamp(r.varint()?);
     let consumed = 4 + (buf.len() - 4 - r.remaining());
     let crc_end = consumed + 4;
@@ -648,6 +651,7 @@ pub fn decode_segment_header(buf: &[u8]) -> WireResult<SegmentHeader> {
     Ok(SegmentHeader {
         format_version,
         shard,
+        segment,
         created_at,
         len: crc_end,
     })
