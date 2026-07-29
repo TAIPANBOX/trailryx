@@ -1,0 +1,117 @@
+#!/usr/bin/env bash
+#
+# Local gate before anything leaves this machine.
+#
+# There is no CI on purpose: the repository is private, Actions minutes are
+# metered there, and for a project this size a local gate does the same job for
+# nothing. When the repository goes public, Actions become free and this script
+# becomes the CI workflow unchanged.
+#
+# Install (once):  git config core.hooksPath .githooks
+# Skip (rarely):   git push --no-verify
+
+set -uo pipefail
+
+cd "$(git rev-parse --show-toplevel)" || exit 1
+
+pass=0
+fail=0
+
+step() {
+  local name="$1"
+  shift
+  printf '  %-34s' "$name"
+  if out=$("$@" 2>&1); then
+    printf 'ok\n'
+    pass=$((pass + 1))
+  else
+    printf 'FAIL\n'
+    fail=$((fail + 1))
+    printf '%s\n' "$out" | sed 's/^/      /' | tail -25
+  fi
+}
+
+echo "pre-push gate"
+
+# Formatting and lints. Warnings are failures: a warning nobody fixes is a
+# warning everybody stops reading.
+step "cargo fmt --check" cargo fmt --all --check
+step "cargo clippy -D warnings" cargo clippy --all-targets --quiet -- -D warnings
+step "cargo test" cargo test --workspace --quiet
+
+# The substrate must stand on its own. Today that is trivially true; from stage
+# 10 it stops being trivial, because DataFusion and pgwire arrive as a facade
+# and must never become load-bearing. Checking it from the start means the day
+# it would break, it breaks here.
+step "sim crate builds standalone" cargo test -p trailryx-sim --quiet
+
+# Zero third-party dependencies. Not an aesthetic: the offline verifier has to
+# be small enough for an auditor to read, and every crate pulled in is a crate
+# somebody has to trust. If this ever needs to change, it changes deliberately,
+# not by accident in a lockfile.
+printf '  %-34s' "zero third-party deps"
+deps=$(cargo tree --workspace --prefix none --no-dedupe 2>/dev/null \
+       | grep -v '^trailryx' | grep -c . || true)
+if [ "$deps" -eq 0 ]; then
+  printf 'ok\n'
+  pass=$((pass + 1))
+else
+  printf 'FAIL (%s found)\n' "$deps"
+  cargo tree --workspace --prefix none 2>/dev/null | grep -v '^trailryx' | sed 's/^/      /' | head -10
+  fail=$((fail + 1))
+fi
+
+# No unsafe. The workspace lint forbids it, so this is a second pair of eyes on
+# the lint itself rather than on the code.
+printf '  %-34s' "no unsafe"
+if grep -rIn --include='*.rs' -E '^\s*unsafe\b|[^a-z_]unsafe\s*\{' crates >/dev/null 2>&1; then
+  printf 'FAIL\n'
+  grep -rIn --include='*.rs' -E '^\s*unsafe\b|[^a-z_]unsafe\s*\{' crates | sed 's/^/      /' | head
+  fail=$((fail + 1))
+else
+  printf 'ok\n'
+  pass=$((pass + 1))
+fi
+
+# The exit criterion of stage 0, checked on every push rather than once.
+# A seed must reproduce a run exactly; if that stops holding, every other
+# guarantee built on the simulator stops meaning anything.
+printf '  %-34s' "determinism (same seed, twice)"
+run_once() {
+  cargo run --quiet --bin trailryx-sim-run -- \
+    --seed 20260729 --steps 800 --shards 3 --sync-every 4 \
+    --crash-ppm 12000 --hostile --honest-disk 2>/dev/null
+}
+a=$(run_once)
+b=$(run_once)
+if [ -n "$a" ] && [ "$a" = "$b" ]; then
+  printf 'ok  %s\n' "$(printf '%s' "$a" | tr ' ' '\n' | grep '^digest=')"
+  pass=$((pass + 1))
+else
+  printf 'FAIL\n'
+  printf '      run 1: %s\n      run 2: %s\n' "$a" "$b"
+  fail=$((fail + 1))
+fi
+
+# A short hunt for a durability violation. Not the long run, which belongs in a
+# nightly sweep: enough to catch a write-path regression before it is pushed.
+printf '  %-34s' "durability sweep (200 seeds)"
+if sweep=$(cargo run --quiet --release --bin trailryx-sim-run -- \
+             --seed 1 --sweep 200 --steps 300 --shards 3 --sync-every 4 \
+             --crash-ppm 15000 --hostile --honest-disk 2>/dev/null); then
+  printf 'ok  %s\n' "$sweep"
+  pass=$((pass + 1))
+else
+  printf 'FAIL\n'
+  printf '%s\n' "$sweep" | sed 's/^/      /' | head -10
+  fail=$((fail + 1))
+fi
+
+echo
+if [ "$fail" -gt 0 ]; then
+  echo "pre-push: $fail failed, $pass passed. Push refused."
+  echo "Override with --no-verify only if you know why."
+  exit 1
+fi
+echo "pre-push: all $pass checks passed."
+exit 0

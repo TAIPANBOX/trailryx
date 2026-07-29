@@ -114,6 +114,20 @@ durability tests deliberately switch it off. Nothing can defend against a disk
 that reports a flush it did not perform, but the harness must **notice**, so a
 separate test fails if the crash model ever goes blind to it.
 
+## Working on it
+
+```bash
+git config core.hooksPath .githooks   # once
+```
+
+There is no CI yet, deliberately. The repository is private while the first
+milestone is built, Actions minutes are metered on private repositories, and a
+local gate does the same work for nothing. `.githooks/pre-push` runs formatting,
+clippy with warnings as errors, the test suite, a standalone build of the
+substrate crate, a zero-dependency check, an `unsafe` check, the determinism
+criterion, and a 200-seed durability sweep. When the repository goes public,
+Actions become free and that script becomes the workflow unchanged.
+
 ## Design
 
 | Decision | Choice |
