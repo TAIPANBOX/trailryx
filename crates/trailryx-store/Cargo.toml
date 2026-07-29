@@ -1,0 +1,18 @@
+[package]
+name = "trailryx-store"
+description = "The seam between the journal and the authenticated index"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+trailryx-crypto = { path = "../trailryx-crypto" }
+trailryx-index = { path = "../trailryx-index" }
+trailryx-journal = { path = "../trailryx-journal" }
+trailryx-record = { path = "../trailryx-record" }
+trailryx-sim = { path = "../trailryx-sim" }
+
+[lints]
+workspace = true

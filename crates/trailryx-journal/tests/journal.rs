@@ -188,7 +188,7 @@ fn records_are_written_and_read_back_in_order() {
     let back = j.read_all(&mut io).unwrap();
     assert_eq!(back.records.len(), 20);
     assert_eq!(back.stopped_because, StoppedBecause::EndOfFile);
-    for (i, rec) in back.records.iter().enumerate() {
+    for (i, (rec, _link)) in back.records.iter().enumerate() {
         assert_eq!(rec.seq, i as u64 + 1);
         assert_eq!(rec.id, RecordId(i as u128 + 1));
         assert_eq!(rec.segment_id, SegmentId(1));
@@ -208,10 +208,10 @@ fn the_journal_owns_seq_and_prev_hash() {
     j.append(&r, &mut io).unwrap();
 
     let back = j.read_all(&mut io).unwrap();
-    assert_eq!(back.records[0].seq, 1);
+    assert_eq!(back.records[0].0.seq, 1);
     // The chain starts at the header, not at zero, so a file cannot be adopted
     // as a journal for a different shard or segment.
-    assert_ne!(back.records[0].prev_hash, Hash::ZERO);
+    assert_ne!(back.records[0].0.prev_hash, Hash::ZERO);
 }
 
 #[test]
@@ -339,7 +339,7 @@ fn recovery_restores_the_chain_so_appends_continue_it() {
 
     j.append(&minimal(4), &mut io).unwrap();
     let walked = j.read_all(&mut io).unwrap();
-    let all = walked.records;
+    let all: Vec<_> = walked.records.into_iter().map(|(r, _)| r).collect();
     assert_eq!(all.len(), 4);
 
     // Independent replay over what is on disk, starting where the journal

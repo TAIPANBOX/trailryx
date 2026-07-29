@@ -109,7 +109,14 @@ pub struct DurabilityViolation {
 /// previous head, and returned a silent prefix when it stopped.
 #[derive(Debug)]
 pub struct Walked {
-    pub records: Vec<Record>,
+    /// Each record with the chain link that covers it.
+    ///
+    /// The pair, not the record alone: this is exactly what sealing a segment
+    /// consumes, and the link is what a segment's history commits to. Handing
+    /// back bare records would put the caller in the position of inventing a
+    /// leaf, which is how the first version of sealing ended up committing to
+    /// sequence numbers.
+    pub records: Vec<(Record, Hash)>,
     pub chain: ChainState,
     pub good_bytes: u64,
     pub stopped_because: StoppedBecause,
@@ -350,7 +357,7 @@ impl Journal {
             }
 
             chain.append(frame.body);
-            records.push(rec);
+            records.push((rec, frame.chain_link));
             off += frame.total_len;
         }
 
@@ -393,7 +400,7 @@ impl Journal {
             io.truncate(self.file, walked.good_bytes)?;
         }
 
-        for rec in &walked.records {
+        for (rec, _) in &walked.records {
             self.dedup.remember(rec.id, rec.seq);
         }
 
