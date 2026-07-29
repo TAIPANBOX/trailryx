@@ -4,8 +4,10 @@
 
 **The tamper-evident record database for AI agents.**
 
-![Stage](https://img.shields.io/badge/stage-0%20of%2013-blue.svg)
+![Stage](https://img.shields.io/badge/stage-5%20of%2013-blue.svg)
+![Core](https://img.shields.io/badge/core-frozen-success.svg)
 ![Rust](https://img.shields.io/badge/rust-1.85%2B-orange.svg)
+![Tests](https://img.shields.io/badge/tests-196-success.svg)
 ![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)
 ![Dependencies](https://img.shields.io/badge/dependencies-0-success.svg)
 ![Unsafe](https://img.shields.io/badge/unsafe-forbidden-success.svg)
@@ -13,55 +15,55 @@
 </div>
 
 Trailryx stores what AI agents did, and can **prove** it: show the full chain
-behind a decision, confirm no record was altered, prove that what you are looking
-at is **all** of it, and still erase one person on request.
+behind a decision, confirm no record was altered, prove that what you are
+looking at is **all** of it, and still erase one person on request.
+
+Two sentences carry the whole design.
 
 > Every sequence number reported as acked survives any crash.
 
-That sentence is the durability contract. A deterministic simulator exists to
-break it, and it is wired in before the first line of the journal.
+> A verifier must never learn the shape of an answer from the answer.
 
 ---
 
-## Why this is not another observability store
+## The question nobody else answers
 
-Agent telemetry usually lands in a span store. That works until someone asks a
-question an auditor asks:
+Agent telemetry usually lands in a span store. That works until an auditor asks
+something an auditor asks.
 
 | Question | Span store | Trailryx |
 |---|---|---|
 | Was this record altered? | no answer | hash chain, Merkle segments |
-| Is this **all** the matching records? | no answer | proof of completeness |
+| Is this **all** the matching records? | no answer | **proof of completeness** |
 | What did the system *know* when it decided? | not captured | `basis`: policy version, budget state, memory reference, tool manifest |
-| What did we believe in March, before we knew better? | no answer | bitemporal, `AS OF` |
-| Delete this person, keep the audit valid | mutually exclusive | crypto-erasure, the erasure is itself a record |
+| What led to this decision? | one parent | causal DAG, provable hop by hop |
+| What did we know in March, before we knew better? | no answer | `as_of` on the time dimension |
+| Delete this person, keep the audit valid | mutually exclusive | crypto-erasure; the erasure is itself a record |
 
 Obligations under EU AI Act Article 12 apply from 2 August 2026. The harmonised
 standards that would say *how* are not cited in the Official Journal yet.
 
-## Status: stage 0 of 13
+## What exists
 
-What exists is the **determinism and sharding substrate**. Not a database yet:
-the seam without which a provable one cannot be built.
+Stages 0 to 5. The core is **frozen**: the journal format, the index structures
+and the proof shapes do not change without a version and a migration.
 
-| Component | What it does |
-|---|---|
-| `Clock` | monotonic and wall time kept separate; wall can jump, as an NTP correction does |
-| `Rng` | splitmix64; a seed fully determines a run |
-| `Io` | append-only storage with a **crash model**: durable vs dirty, and a random prefix of dirty survives a power cut |
-| `Bus` | shard-to-shard messaging with deterministic delivery order |
-| `Trace` | deterministic event log; byte equality of two runs **is** the determinism test |
-| `invariant!` | invariants that stay on in release builds |
-
-The simulator injects: power cuts, short writes, **lying `fsync`**, sync errors,
-out of space, message loss, duplication and delay, clock jumps.
+| Crate | What it is | Tests |
+|---|---|---|
+| `trailryx-sim` | injectable clock, rng, io and bus; a crash model and fault injection | 18 |
+| `trailryx-record` | the canonical record, its schema, and the plane boundary | 26 |
+| `trailryx-crypto` | SHA-384 and the hash chain | 14 |
+| `trailryx-contracts` | eight adapter traits and a conformance suite | 19 |
+| `trailryx-journal` | wire format, append-only write path, recovery | 24 |
+| `trailryx-index` | Merkle history tree, completeness proofs, segment composition | 53 |
+| `trailryx-store` | sealing, the read surface, causal reconstruction | 27 |
 
 **Zero dependencies.** `unsafe` forbidden at the workspace level.
 
 ## Try it
 
 ```bash
-cargo test                                    # 33 tests
+cargo test                                    # 196 tests
 cargo run --bin trailryx-sim-run -- --help
 ```
 
@@ -76,73 +78,78 @@ cargo run --release --bin trailryx-sim-run -- \
 seed=777 steps=20000 digest=42c29db84fa0d604 lines=37394 crashes=95 violations=0
 ```
 
-Hunt for a contract violation across thousands of seeds:
+## What a proof actually does
 
-```bash
-cargo run --release --bin trailryx-sim-run -- \
-  --sweep 5000 --steps 500 --shards 4 --crash-ppm 20000 --hostile --honest-disk
-```
+A range answer carries the matching entries with an inclusion proof each,
+evidence that their positions are **contiguous** from a stated start, and the
+entries immediately before and after the range, whose keys must fall outside it.
+In a sorted list that leaves nowhere for an omitted record to hide: every index
+between the two boundaries is accounted for.
 
-```
-sweep of 5000 seeds from 100000: 0 failing
-```
+The tests are written from the attacker's side. Each of these is refused:
 
-## What the simulator found on day one
+- hiding a record in the middle of a range, or at either end;
+- hiding one and moving the boundary onto it, which is the version that actually
+  tests the property, because the boundary is then a genuine entry with a
+  genuine inclusion proof;
+- inventing an entry, reordering the answer, reusing a proof for a wider range
+  or a different dimension or another segment's root;
+- forgetting a segment, forgetting **every** segment of a shard, or forgetting a
+  shard;
+- skipping a segment that does overlap, or skipping one on a dimension whose
+  extent nothing commits to;
+- declaring `size: 0` so there is nothing to check.
 
-The first hostile run reported `promised=13 recovered=3`.
+Completeness is provable only for predicates on a sorted dimension. There are
+five. Everything else is answered honestly as a filter **without** a proof, and
+every answer carries a status saying which it is. An answer that quietly mixes
+proved rows with filtered ones is worse than an openly unproved one, because it
+looks like the first kind.
 
-A refused write **in the middle of a record** left orphaned bytes in the stream,
-and the next tick started a **new** record right after them. Recovery stops at
-the first thing that does not verify, so everything written afterwards became
-unreachable while the acked watermark kept climbing. Thirteen promised, three
-real.
+## What a review found
 
-Two fixes, both ordinary journal engineering:
+An adversarial architecture review, run after stage 3, found the proof system
+accepting answers it should have refused. Six critical, each reproduced with a
+runnable test before being fixed:
 
-1. an unfinished record is **continued on the next tick**, never abandoned for a
-   new one;
-2. a torn tail is **truncated during recovery**, otherwise every later recovery
-   would stop at the same offset and the store would quietly freeze while
-   pretending to accept writes.
+- a proof declaring `size: 0` verified against **any** root, so a store-wide
+  answer of zero records verified for any query;
+- a shard could contribute an empty segment list, because the loop simply never
+  ran;
+- the history leaf hashed the sequence number, so two segments differing in
+  verdict, cost, tenant and payload reference produced **identical roots**;
+- a segment could be skipped on time bounds the sealer wrote itself, and the
+  sealer is the party being audited;
+- inclusion and consistency proofs took their own sizes, so a signed head for a
+  five-leaf log could be paired with a proof claiming sizes 8 and 16;
+- the journal ignored its argument when a record was already going to disk and
+  returned "written" for the previous one.
 
-Both are covered by regression tests. This is the entire argument for putting
-deterministic simulation first: a class of bug that surfaces in production after
-years surfaced here in minutes.
+They shared one root cause, which is now the rule at the top of this file. Four
+of the six were counts a proof was allowed to state about itself; the fifth
+version of that mistake is the one I got right, which is why the other four went
+unnoticed.
 
-A note on the fault model: `IoFaults::HOSTILE` includes a lying `fsync`, and the
-durability tests deliberately switch it off. Nothing can defend against a disk
-that reports a flush it did not perform, but the harness must **notice**, so a
-separate test fails if the crash model ever goes blind to it.
-
-## Working on it
-
-```bash
-git config core.hooksPath .githooks   # once
-```
-
-There is no CI yet, deliberately. The repository is private while the first
-milestone is built, Actions minutes are metered on private repositories, and a
-local gate does the same work for nothing. `.githooks/pre-push` runs formatting,
-clippy with warnings as errors, the test suite, a standalone build of the
-substrate crate, a zero-dependency check, an `unsafe` check, the determinism
-criterion, and a 200-seed durability sweep. When the repository goes public,
-Actions become free and that script becomes the workflow unchanged.
+The review also confirmed the parts that were least certain: SHA-384 matches
+FIPS 180-4, the Merkle algorithms match RFC 6962 rather than merely matching
+each other, and the plane boundary holds end to end.
 
 ## Design
 
 | Decision | Choice |
 |---|---|
-| Language | Rust: the DST ecosystem exists here, and an off-the-shelf query engine can be embedded |
+| Language | Rust: the deterministic-simulation ecosystem exists here, and an off-the-shelf query engine can be embedded |
+| Correctness | DST first, before the first line of the journal; injectable interfaces cannot be retrofitted |
 | Concurrency | shared-nothing thread-per-core; each shard single-threaded and deterministic, no locks in the core |
 | Truth | the journal; columnar projections are derived and rebuildable |
-| Proofs | Merkle history tree (RFC 6962 model) plus a sorted Merkle index per segment |
-| Crypto | hybrid X25519 + ML-KEM-768 key wrapping from day one, because crypto-erasure only lasts as long as its KEM |
-| SQL | DataFusion above the engine, never under it; predicates push into the authenticated index so a query can return a proof |
+| Proofs | Merkle history tree (RFC 6962) plus a sorted Merkle index per segment per dimension |
+| Composition | one recursion for record → segment → shard → store → federation |
+| Crypto | hybrid X25519 + ML-KEM-768 key wrapping from day one, because crypto-erasure lasts only as long as its KEM |
 | Licence | Apache-2.0 |
 
-Full documents in [`docs/planning/`](docs/planning/): the plan (what and why),
-the architecture (how), and the roadmap (order of work). They are working
-documents, written in Ukrainian.
+Full documents in [`docs/planning/`](docs/planning/), written in Ukrainian. The
+durability contract is [`docs/durability.md`](docs/durability.md); what erasure
+cannot reach is [`docs/identifiers.md`](docs/identifiers.md).
 
 ## What is ours and what is borrowed
 
@@ -150,22 +157,38 @@ Ours: journal, authenticated index, proofs, sharding, bitemporal resolution,
 causality traversal, crypto-erasure mechanics, the simulator, the offline
 verifier.
 
-Borrowed on purpose: cryptographic primitives (a FIPS-validated module beats
-anything hand-rolled, and that validation is part of what is being sold),
-the SQL engine, and the interchange formats.
+Borrowed on purpose, from stage 7 onwards: cryptographic primitives (a
+FIPS-validated module beats anything hand-rolled, and that validation is part of
+what is being sold), the SQL engine, and the interchange formats.
 
 Turn off SQL, Parquet and the external KMS, and the database still writes,
 proves and erases. That is the test of whose engine it is.
 
-## Roadmap
+## Working on it
 
-Stage 0 done. Next: the canonical record model, the L1 contracts, the conformance
-suite, and the plane boundary rule (typed fields only in metadata, any free text
-lives solely in the encrypted payload plane).
+```bash
+git config core.hooksPath .githooks   # once
+```
 
-Milestones: **A "Proof"** (single node, evidence pack, offline verifier),
-**B "Compatibility"** (OTLP, Parquet, SQL with `WITH PROOF`), **C "Scale"**
-(object storage, federation, multi-cloud).
+No CI while the repository is private, because Actions minutes are metered
+there and a local gate does the same work for nothing. `.githooks/pre-push` runs
+formatting, clippy with warnings as errors, the tests, a standalone build of the
+substrate crate, a zero-dependency check, an `unsafe` check, the determinism
+criterion and a 200-seed durability sweep. When the repository goes public,
+Actions become free and that script becomes the workflow unchanged.
+
+## Next
+
+Stage 6 onward: OTLP ingest and the semantic-convention mapper, crypto-erasure
+against a real KMS, the evidence pack and its offline verifier, Parquet
+projections, the SQL facade, object storage, federation.
+
+Two known costs, both deferred deliberately. A range answer currently carries an
+inclusion proof per entry, so a full range is O(n²) hashing; the fix is a
+multiproof over the contiguous range, and it waits for a benchmark to measure it
+against. And index sortedness is assumed rather than proved; the offline
+verifier discharges it once per segment, and segments are immutable, so one
+audit lasts forever.
 
 ## Licence
 
