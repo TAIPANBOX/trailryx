@@ -4,10 +4,10 @@
 
 **The tamper-evident record database for AI agents.**
 
-![Stage](https://img.shields.io/badge/stage-7%20of%2013-blue.svg)
+![Stage](https://img.shields.io/badge/stage-8%20of%2013-blue.svg)
 ![Core](https://img.shields.io/badge/core-frozen-success.svg)
 ![Rust](https://img.shields.io/badge/rust-1.85%2B-orange.svg)
-![Tests](https://img.shields.io/badge/tests-276-success.svg)
+![Tests](https://img.shields.io/badge/tests-297-success.svg)
 ![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)
 ![Dependencies](https://img.shields.io/badge/dependencies-0-success.svg)
 ![Unsafe](https://img.shields.io/badge/unsafe-forbidden-success.svg)
@@ -45,7 +45,7 @@ standards that would say *how* are not cited in the Official Journal yet.
 
 ## What exists
 
-Stages 0 to 7. The core is **frozen**: the journal format, the index structures
+Stages 0 to 8. The core is **frozen**: the journal format, the index structures
 and the proof shapes do not change without a version and a migration.
 
 | Crate | What it is | Tests |
@@ -59,13 +59,14 @@ and the proof shapes do not change without a version and a migration.
 | `trailryx-store` | sealing, the read surface, causal reconstruction | 27 |
 | `trailryx-otlp` | protobuf reader, OTLP decode, the GenAI semconv mapper | 46 |
 | `trailryx-erasure` | payload envelopes, the key hierarchy, erasure | 32 |
+| `trailryx-verify` | the offline verifier. Depends on nothing, including us | 9 |
 
 **Zero dependencies.** `unsafe` forbidden at the workspace level.
 
 ## Try it
 
 ```bash
-cargo test                                    # 276 tests
+cargo test                                    # 297 tests
 cargo run --bin trailryx-sim-run -- --help
 ```
 
@@ -182,6 +183,60 @@ The cipher and the key generator are the two things this crate does not
 implement. They sit behind a trait for a validated module to fill, the
 stand-ins answer `false` to `is_validated()`, and the constructor refuses them.
 
+## Handing an auditor something they can check without us
+
+`trailryx-verify` is a separate crate with **no dependencies at all**, not even
+on the rest of Trailryx, about 1,500 lines including its tests. It reads an
+evidence pack and says whether it holds. It exists because the question an
+auditor actually asks is not "is your code good" but "who checked it", and the
+answer has to be something they can run.
+
+It has its own SHA-384. Sharing ours would mean a bug in the hash produces a
+wrong root and a verifier that cheerfully agrees. Two implementations by one
+author are not an independent audit and the crate says so: they mean the same
+mistake has to be made twice and still match the published NIST vectors. The
+format notes are written down so a third implementation by somebody else is a
+day's work.
+
+The pack carries the record bytes as the journal wrote them, and the segment
+manifests. Nothing else. No chain links, no index keys, no extracted fields:
+a value the pack states is a value the pack can lie about, so every one of them
+is derived instead. The verifier recomputes the chain from each record's own
+bytes, the history tree from those links, **each index by sorting the records
+itself**, the segment manifest roots, the shard roots and the store root.
+
+That index rebuild discharges something the store had been assuming about
+itself. Inside the store an index is sorted because the code that built it
+sorted it, and no completeness proof means anything over an index that is not.
+Now other code, sharing nothing, sorts the same records and has to arrive at the
+same root.
+
+```
+$ trailryx-verify sample.trxevid
+[weak] root-signature: the store root carries no signature, so this pack proves
+       it is self-consistent and not who published it
+7 records in 3 segments
+VERIFIED
+```
+
+One letter changed in one agent id, in one record, out of 2,790 bytes:
+
+```
+[BROKEN] chain-within-segment: segment 1 ends at cf535f9ad9e774a3 and its records give 390f2d0d24342a46
+[BROKEN] history-root: segment 1 declares 65bc99ffc09ea388 and its records give df37aa1511d5219c
+[BROKEN] index-root: segment 1 declares 62e86d4c9de176fc for agent_id and its records give 1088ab314e6fa3b3
+... five more
+NOT VERIFIED
+```
+
+Two things it refuses to do. It never drops support for an algorithm, only
+marks it weak: the day SHA-384 is retired, every pack issued before that day
+must still verify, because evidence with an expiry date is not evidence. And it
+never reports a clean bill on an unsigned pack. A pack proves it is internally
+consistent; whether it is the *real* history is what a signature and an external
+anchor establish, and saying so is the difference between an audit and a
+formality.
+
 ## What a review found
 
 An adversarial architecture review, run after stage 3, found the proof system
@@ -255,15 +310,16 @@ Actions become free and that script becomes the workflow unchanged.
 
 ## Next
 
-Stage 8 onward: the evidence pack and its offline verifier, Parquet projections,
-the SQL facade, object storage, federation.
+Stage 9 onward: Parquet projections, the SQL facade, object storage, federation.
 
-Three things are deliberately unfinished behind us. Stage 6 has no HTTP or gRPC
+Four things are deliberately unfinished behind us. Stage 6 has no HTTP or gRPC
 transport, so the receiver takes bytes rather than listening on a socket, and no
 NDJSON source for live demo data. Stage 7 has no validated cipher behind its
-seam and no KMS-backed key provider. And the hostile erasure suite tries every
-recovery path that exists; caches, projections, exports and backups each arrive
-with their own attempt, or they arrive unchecked.
+seam and no KMS-backed key provider, and its hostile erasure suite tries every
+recovery path that exists: caches, projections, exports and backups each arrive
+with their own attempt, or they arrive unchecked. Stage 8 signs nothing yet, so
+the verifier reports every pack as unsigned, and its compliance mapping and
+RFC 3161 anchor are still to come.
 
 Two known costs, both deferred deliberately. A range answer currently carries an
 inclusion proof per entry, so a full range is O(n²) hashing; the fix is a

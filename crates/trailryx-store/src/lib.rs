@@ -11,9 +11,11 @@
 //! links it produced.** Nothing here invents a leaf.
 
 pub mod causal;
+pub mod evidence;
 pub mod query;
 pub mod seal;
 
 pub use causal::{Bounds, Hop, Reconstruction, Stopped, reconstruct};
+pub use evidence::PackBuilder;
 pub use query::{Answer, Filter, ProofStatus, Query, query_segment};
 pub use seal::{SealOutcome, SealedSegment, StoreError, seal_segment};

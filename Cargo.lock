@@ -77,4 +77,9 @@ dependencies = [
  "trailryx-journal",
  "trailryx-record",
  "trailryx-sim",
+ "trailryx-verify",
 ]
+
+[[package]]
+name = "trailryx-verify"
+version = "0.0.1"

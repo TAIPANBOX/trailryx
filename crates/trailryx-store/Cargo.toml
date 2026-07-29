@@ -14,5 +14,8 @@ trailryx-journal = { path = "../trailryx-journal" }
 trailryx-record = { path = "../trailryx-record" }
 trailryx-sim = { path = "../trailryx-sim" }
 
+[dev-dependencies]
+trailryx-verify = { path = "../trailryx-verify" }
+
 [lints]
 workspace = true

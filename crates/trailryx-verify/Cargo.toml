@@ -1,0 +1,17 @@
+[package]
+name = "trailryx-verify"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+description = "Offline verifier for a Trailryx evidence pack. Depends on nothing."
+
+[dependencies]
+
+[lints]
+workspace = true
+
+[[bin]]
+name = "trailryx-verify"
+path = "src/main.rs"
