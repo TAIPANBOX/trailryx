@@ -50,6 +50,10 @@ use trailryx_record::{EventType, Record};
 /// sealed.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum Dimension {
+    /// The record's own id. Sorted by it, a segment answers "here is record X"
+    /// with a proof, which is what an evidence pack and a causal traversal both
+    /// need.
+    RecordId,
     RecordedAt,
     AgentId,
     RunId,
@@ -58,6 +62,7 @@ pub enum Dimension {
 
 impl Dimension {
     pub const ALL: &'static [Self] = &[
+        Self::RecordId,
         Self::RecordedAt,
         Self::AgentId,
         Self::RunId,
@@ -66,6 +71,7 @@ impl Dimension {
 
     pub fn as_str(self) -> &'static str {
         match self {
+            Self::RecordId => "id",
             Self::RecordedAt => "recorded_at",
             Self::AgentId => "agent_id",
             Self::RunId => "run_id",
@@ -82,6 +88,9 @@ impl Dimension {
     /// ordering.
     pub fn key_of(self, r: &Record) -> Vec<u8> {
         match self {
+            // Big-endian, so byte order is id order. A ULID sorts by time,
+            // which makes this index useful beyond point lookup.
+            Self::RecordId => r.id.0.to_be_bytes().to_vec(),
             Self::RecordedAt => r.recorded_at.as_nanos().to_be_bytes().to_vec(),
             Self::AgentId => r.agent_id.as_str().as_bytes().to_vec(),
             Self::RunId => r.run_id.as_str().as_bytes().to_vec(),
@@ -92,6 +101,10 @@ impl Dimension {
     /// Key for a timestamp bound, for building a range query.
     pub fn time_key(nanos: u64) -> Vec<u8> {
         nanos.to_be_bytes().to_vec()
+    }
+
+    pub fn id_key(id: trailryx_record::RecordId) -> Vec<u8> {
+        id.0.to_be_bytes().to_vec()
     }
 
     pub fn event_key(e: EventType) -> Vec<u8> {

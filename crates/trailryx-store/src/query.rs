@@ -162,6 +162,15 @@ impl ProofStatus {
         matches!(self, Self::Full)
     }
 
+    /// Record that some part of an answer is not covered by a proof.
+    ///
+    /// Public because a traversal built from many answers has to fold their
+    /// statuses together, and a status that could only be lowered from inside
+    /// this module would leave that fold to reimplement the rule.
+    pub fn downgrade_public(&mut self, reason: &'static str) {
+        self.downgrade(reason);
+    }
+
     fn downgrade(&mut self, reason: &'static str) {
         match self {
             Self::Full => {

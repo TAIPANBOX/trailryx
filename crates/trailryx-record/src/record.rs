@@ -394,7 +394,12 @@ pub struct Record {
 /// Fixed here, once, because they decide how segments are sorted. Everything
 /// else is a filter without a proof, and the API says so rather than implying
 /// otherwise.
-pub const PROVABLE_DIMENSIONS: &[&str] = &["recorded_at", "agent_id", "run_id", "event_type"];
+/// Five, and the fifth was added deliberately when causal reconstruction
+/// arrived: `caused_by` names records by id, so a closure that cannot follow
+/// its own edges provably is half a feature. It also gives an evidence pack the
+/// most basic operation it needs, "here is record X with its inclusion proof",
+/// and a ULID sorts by time anyway, so the index is useful on its own.
+pub const PROVABLE_DIMENSIONS: &[&str] = &["id", "recorded_at", "agent_id", "run_id", "event_type"];
 
 #[cfg(test)]
 mod tests {
@@ -420,10 +425,13 @@ mod tests {
     }
 
     #[test]
-    fn provable_dimensions_are_exactly_the_agreed_four() {
+    fn provable_dimensions_are_exactly_these_five() {
+        // Each one costs a sorted index in every segment and is a promise that
+        // holds forever, because segments are immutable once sealed. Adding a
+        // sixth should be a decision somebody argues for.
         assert_eq!(
             PROVABLE_DIMENSIONS,
-            &["recorded_at", "agent_id", "run_id", "event_type"]
+            &["id", "recorded_at", "agent_id", "run_id", "event_type"]
         );
     }
 

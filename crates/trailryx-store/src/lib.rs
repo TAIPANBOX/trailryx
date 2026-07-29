@@ -10,8 +10,10 @@
 //! journal actually accepted, in the order it accepted them, with the chain
 //! links it produced.** Nothing here invents a leaf.
 
+pub mod causal;
 pub mod query;
 pub mod seal;
 
+pub use causal::{Bounds, Hop, Reconstruction, Stopped, reconstruct};
 pub use query::{Answer, Filter, ProofStatus, Query, query_segment};
 pub use seal::{SealOutcome, SealedSegment, StoreError, seal_segment};
