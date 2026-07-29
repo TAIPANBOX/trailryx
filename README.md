@@ -4,10 +4,10 @@
 
 **The tamper-evident record database for AI agents.**
 
-![Stage](https://img.shields.io/badge/stage-6%20of%2013-blue.svg)
+![Stage](https://img.shields.io/badge/stage-7%20of%2013-blue.svg)
 ![Core](https://img.shields.io/badge/core-frozen-success.svg)
 ![Rust](https://img.shields.io/badge/rust-1.85%2B-orange.svg)
-![Tests](https://img.shields.io/badge/tests-244-success.svg)
+![Tests](https://img.shields.io/badge/tests-276-success.svg)
 ![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)
 ![Dependencies](https://img.shields.io/badge/dependencies-0-success.svg)
 ![Unsafe](https://img.shields.io/badge/unsafe-forbidden-success.svg)
@@ -45,7 +45,7 @@ standards that would say *how* are not cited in the Official Journal yet.
 
 ## What exists
 
-Stages 0 to 6. The core is **frozen**: the journal format, the index structures
+Stages 0 to 7. The core is **frozen**: the journal format, the index structures
 and the proof shapes do not change without a version and a migration.
 
 | Crate | What it is | Tests |
@@ -58,13 +58,14 @@ and the proof shapes do not change without a version and a migration.
 | `trailryx-index` | Merkle history tree, completeness proofs, segment composition | 53 |
 | `trailryx-store` | sealing, the read surface, causal reconstruction | 27 |
 | `trailryx-otlp` | protobuf reader, OTLP decode, the GenAI semconv mapper | 46 |
+| `trailryx-erasure` | payload envelopes, the key hierarchy, erasure | 32 |
 
 **Zero dependencies.** `unsafe` forbidden at the workspace level.
 
 ## Try it
 
 ```bash
-cargo test                                    # 244 tests
+cargo test                                    # 276 tests
 cargo run --bin trailryx-sim-run -- --help
 ```
 
@@ -140,6 +141,47 @@ something adjacent, because a wrong event type is worse than a missing record).
 Everything dropped is counted, and the counts become a record: a gap nobody
 wrote down is worse than a gap, because the trail looks complete.
 
+## Erasing one person without breaking the audit trail
+
+These two usually pull against each other. An audit trail defends itself by
+being unchangeable; erasure means changing it. `trailryx-erasure` is where they
+stop pulling.
+
+A record commits to its payload by hash, size, class and key id, and does not
+contain it. Payloads are encrypted, and erasure destroys the key. None of the
+four committed fields change, so **every chain, root and proof issued before an
+erasure still verifies after it**, unchanged. That is a test, not a claim: seal,
+prove, erase, prove again.
+
+Nothing is deleted. The object-store contract has no delete method and that is
+deliberate: the payload surface is the large, replicated, backed-up, often
+write-once one, and a design that needs to delete from it fails quietly the
+first time a backup is restored. After an erasure the ciphertext is still in
+every replica and still unreadable in all of them.
+
+That constraint killed the mechanic the roadmap had planned. It said a payload
+whose subject is unknown should be wrapped under a tenant key and re-wrapped
+under the subject's key once identified, destroying the old wrapping. But
+"destroy the old wrapping" means delete an object, which is exactly what
+crypto-erasure exists to avoid needing. Leave it and the tenant key still opens
+it. So attribution here re-wraps nothing: an unattributed payload gets a key of
+its own belonging to nobody, and attribution adds that key to the subject's set.
+The cost is more keys. The benefit is an erasure that survives a restored
+backup.
+
+An erasure is itself a record, and it does not name the person. It carries the
+subject's key id, which is a hash of an operator-supplied pseudonym: whoever
+holds the handle can confirm their erasure happened, and whoever does not learns
+nothing. The manifest works the same way, and for a sharper reason. Listing the
+destroyed key ids would let anyone with metadata access intersect the manifest
+with the records and learn precisely which records belonged to the person who
+asked to be forgotten. Each entry is hashed together with the subject's key id
+instead.
+
+The cipher and the key generator are the two things this crate does not
+implement. They sit behind a trait for a validated module to fill, the
+stand-ins answer `false` to `is_validated()`, and the constructor refuses them.
+
 ## What a review found
 
 An adversarial architecture review, run after stage 3, found the proof system
@@ -213,13 +255,15 @@ Actions become free and that script becomes the workflow unchanged.
 
 ## Next
 
-Stage 7 onward: crypto-erasure against a real KMS, the evidence pack and its
-offline verifier, Parquet projections, the SQL facade, object storage,
-federation.
+Stage 8 onward: the evidence pack and its offline verifier, Parquet projections,
+the SQL facade, object storage, federation.
 
-Stage 6 is done for OTLP traces and their mapping. Two pieces of it are not:
-the HTTP and gRPC transport, so the receiver takes bytes rather than listening
-on a socket, and the NDJSON source that gives the demo live data.
+Three things are deliberately unfinished behind us. Stage 6 has no HTTP or gRPC
+transport, so the receiver takes bytes rather than listening on a socket, and no
+NDJSON source for live demo data. Stage 7 has no validated cipher behind its
+seam and no KMS-backed key provider. And the hostile erasure suite tries every
+recovery path that exists; caches, projections, exports and backups each arrive
+with their own attempt, or they arrive unchecked.
 
 Two known costs, both deferred deliberately. A range answer currently carries an
 inclusion proof per entry, so a full range is O(n²) hashing; the fix is a

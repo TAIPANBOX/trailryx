@@ -24,6 +24,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "trailryx-erasure"
+version = "0.0.1"
+dependencies = [
+ "trailryx-contracts",
+ "trailryx-crypto",
+ "trailryx-index",
+ "trailryx-record",
+ "trailryx-store",
+]
+
+[[package]]
 name = "trailryx-index"
 version = "0.0.1"
 dependencies = [

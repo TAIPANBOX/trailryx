@@ -1,0 +1,20 @@
+[package]
+name = "trailryx-erasure"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+description = "Payload envelopes, the key hierarchy, and erasure that leaves the chain verifiable"
+
+[dependencies]
+trailryx-record = { path = "../trailryx-record" }
+trailryx-crypto = { path = "../trailryx-crypto" }
+trailryx-contracts = { path = "../trailryx-contracts" }
+
+[dev-dependencies]
+trailryx-index = { path = "../trailryx-index" }
+trailryx-store = { path = "../trailryx-store" }
+
+[lints]
+workspace = true
