@@ -3,6 +3,13 @@
 version = 4
 
 [[package]]
+name = "trailryx-contracts"
+version = "0.0.1"
+dependencies = [
+ "trailryx-record",
+]
+
+[[package]]
 name = "trailryx-core"
 version = "0.0.1"
 dependencies = [
