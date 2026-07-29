@@ -96,6 +96,7 @@ fn algorithm_code(a: Algorithms) -> [u8; 3] {
             SigAlg::Es256 => 1,
             SigAlg::MlDsa65 => 2,
             SigAlg::SlhDsa => 3,
+            SigAlg::Es384 => 4,
         },
         match a.kem {
             KemAlg::X25519MlKem768 => 1,

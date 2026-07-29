@@ -10,8 +10,9 @@ use trailryx_index::segment::{Segment, ShardTree, StoreTree};
 use trailryx_journal::wire::encode_record;
 use trailryx_record::{
     AgentId, Algorithms, Basis, EventType, Hash, MapperVersion, Outcome, Record, RecordId, RunId,
-    SegmentId, Severity, ShardIx, TenantId, Timestamp, Untrusted,
+    SegmentId, Severity, ShardIx, SigAlg, TenantId, Timestamp, Untrusted,
 };
+use trailryx_sign::RootSignature;
 use trailryx_store::evidence::PackBuilder;
 use trailryx_verify::{Level, verify};
 
@@ -162,9 +163,10 @@ fn an_unsigned_pack_says_so_rather_than_reporting_a_clean_bill() {
 }
 
 #[test]
-fn a_signed_pack_reports_the_signature_it_did_not_check() {
-    // Claiming to have checked a signature this version cannot check would be
-    // worse than saying nothing.
+fn a_pack_with_an_algorithm_this_build_cannot_check_says_so() {
+    // A pack sealed under something newer must never come back "broken". The
+    // verifier says it could not look, which is a different sentence and the
+    // only honest one.
     let s = store();
     let mut t0 = ShardTree::new(ShardIx(0));
     for segment in &s.shard0 {
@@ -172,7 +174,11 @@ fn a_signed_pack_reports_the_signature_it_did_not_check() {
     }
     let tree = StoreTree::from_shards(&[t0.clone()]);
     let bytes = PackBuilder::new(TenantId::parse("acme").unwrap(), Timestamp(1))
-        .signed_with(vec![7u8; 64])
+        .signed_with(RootSignature {
+            algorithm: SigAlg::MlDsa65,
+            public_key: vec![1u8; 64],
+            signature: vec![7u8; 3309],
+        })
         .shard(&t0, &s.shard0.iter().collect::<Vec<_>>())
         .build(&tree);
 
@@ -183,7 +189,8 @@ fn a_signed_pack_reports_the_signature_it_did_not_check() {
         .iter()
         .find(|f| f.check == "root-signature")
         .unwrap();
-    assert!(finding.detail.contains("not checked"), "{finding}");
+    assert_eq!(finding.level, Level::Weak);
+    assert!(finding.detail.contains("cannot check"), "{finding}");
 }
 
 #[test]

@@ -36,6 +36,7 @@
 //! so plainly when it has neither, rather than reporting a clean bill.
 
 pub mod merkle;
+pub mod p384;
 pub mod pack;
 pub mod record;
 pub mod sha384;

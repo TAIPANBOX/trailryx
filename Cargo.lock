@@ -75,6 +75,14 @@ name = "trailryx-record"
 version = "0.0.1"
 
 [[package]]
+name = "trailryx-sign"
+version = "0.0.1"
+dependencies = [
+ "trailryx-crypto",
+ "trailryx-record",
+]
+
+[[package]]
 name = "trailryx-sim"
 version = "0.0.1"
 
@@ -86,6 +94,7 @@ dependencies = [
  "trailryx-index",
  "trailryx-journal",
  "trailryx-record",
+ "trailryx-sign",
  "trailryx-sim",
  "trailryx-verify",
 ]

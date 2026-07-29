@@ -23,22 +23,28 @@
 use trailryx_index::segment::{Segment, SegmentManifest, ShardTree, StoreTree};
 use trailryx_journal::wire::encode_record;
 use trailryx_record::{Hash, TenantId, Timestamp};
+use trailryx_sign::{RootSignature, WitnessAttestation};
 
 pub const MAGIC: &[u8; 7] = b"TRXEVID";
-pub const VERSION: u8 = 1;
+/// Two, because the signature moved out of the header into sections of its own
+/// once there could be more than one of them.
+pub const VERSION: u8 = 2;
 
 const SECTION_END: u8 = 0;
 const SECTION_HEADER: u8 = 1;
 const SECTION_SHARD: u8 = 2;
 const SECTION_SEGMENT: u8 = 3;
 const SECTION_RECORDS: u8 = 4;
+const SECTION_SIGNATURE: u8 = 5;
+const SECTION_WITNESS: u8 = 6;
 
 /// A pack under construction.
 #[derive(Debug)]
 pub struct PackBuilder {
     tenant: TenantId,
     generated_at: Timestamp,
-    signature: Vec<u8>,
+    signature: Option<RootSignature>,
+    witnesses: Vec<WitnessAttestation>,
     shards: Vec<ShardPart>,
 }
 
@@ -54,17 +60,29 @@ impl PackBuilder {
         Self {
             tenant,
             generated_at,
-            signature: Vec::new(),
+            signature: None,
+            witnesses: Vec::new(),
             shards: Vec::new(),
         }
     }
 
-    /// Attach a signature over the store root.
+    /// Attach the publisher's signature over the store root.
     ///
     /// Without one a pack proves it is self-consistent and not who published
     /// it, and the verifier reports exactly that rather than a clean bill.
-    pub fn signed_with(mut self, signature: Vec<u8>) -> Self {
-        self.signature = signature;
+    pub fn signed_with(mut self, signature: RootSignature) -> Self {
+        self.signature = Some(signature);
+        self
+    }
+
+    /// Attach an independent attestation that the root existed at a time.
+    ///
+    /// This is the part a signature cannot supply. The publisher chooses the
+    /// timestamp they sign, so nothing in their own signature rules out a
+    /// history written today and dated last year. Somebody else saying they saw
+    /// the root does.
+    pub fn witnessed_by(mut self, attestation: WitnessAttestation) -> Self {
+        self.witnesses.push(attestation);
         self
     }
 
@@ -109,8 +127,25 @@ impl PackBuilder {
         header.extend_from_slice(store.root().as_bytes());
         header.extend_from_slice(&(self.shards.len() as u32).to_be_bytes());
         header.extend_from_slice(&algorithms);
-        put_bytes(&mut header, &self.signature);
         section(&mut out, SECTION_HEADER, &header);
+
+        if let Some(signature) = &self.signature {
+            let mut body = Vec::new();
+            put_str(&mut body, signature.algorithm.as_str());
+            put_bytes(&mut body, &signature.public_key);
+            put_bytes(&mut body, &signature.signature);
+            section(&mut out, SECTION_SIGNATURE, &body);
+        }
+
+        for attestation in &self.witnesses {
+            let mut body = Vec::new();
+            put_str(&mut body, &attestation.witness);
+            body.extend_from_slice(&attestation.seen_at.as_nanos().to_be_bytes());
+            put_str(&mut body, attestation.algorithm.as_str());
+            put_bytes(&mut body, &attestation.public_key);
+            put_bytes(&mut body, &attestation.signature);
+            section(&mut out, SECTION_WITNESS, &body);
+        }
 
         for shard in &self.shards {
             let mut body = Vec::new();
@@ -190,6 +225,7 @@ fn algorithm_code(m: &SegmentManifest) -> [u8; 3] {
             SigAlg::Es256 => 1,
             SigAlg::MlDsa65 => 2,
             SigAlg::SlhDsa => 3,
+            SigAlg::Es384 => 4,
         },
         match m.algorithms.kem {
             KemAlg::X25519MlKem768 => 1,

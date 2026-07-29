@@ -483,21 +483,220 @@ fn check_algorithms(pack: &Pack, report: &mut Report) {
     }
 }
 
+/// Who published this root, and when did anybody else see it.
+///
+/// Two separate questions with two separate answers, and neither substitutes
+/// for the other. A signature says whose history this is. It says nothing about
+/// when the history was written, because the publisher chooses the timestamp
+/// they sign: a store can be reconstructed today, signed today and dated last
+/// year, and the signature will verify perfectly.
+///
+/// Only somebody independent saying they saw the root rules that out.
 fn check_signature(pack: &Pack, report: &mut Report) {
-    if pack.header.signature.is_empty() {
+    let Some(signature) = &pack.signature else {
         report.weak(
             "root-signature",
-            "the store root carries no signature, so this pack proves it is self-consistent and not who published it",
+            "no signature, so this pack proves it is self-consistent and not who published it",
         );
-    } else {
-        report.note(
+        check_witnesses(pack, report);
+        return;
+    };
+
+    let statement = root_statement(
+        &pack.header.tenant,
+        &pack.header.store_root,
+        pack.header.shard_count,
+        pack.header.generated_at,
+        &signature.algorithm,
+        &signature.public_key,
+    );
+
+    match check_one(&signature.algorithm, &signature.public_key, &statement, &signature.signature) {
+        Checked::Good => report.note(
             "root-signature",
             format!(
-                "{} bytes present, not checked by this version",
-                pack.header.signature.len()
+                "{} by key {}",
+                signature.algorithm,
+                hex(&key_id(&signature.public_key))
             ),
-        );
+        ),
+        Checked::Bad(why) => report.broken(
+            "root-signature",
+            format!("the signature over this root does not verify: {why}"),
+        ),
+        Checked::Unknown => report.weak(
+            "root-signature",
+            format!(
+                "signed with {}, which this verifier cannot check, so the root is unattributed here",
+                signature.algorithm
+            ),
+        ),
     }
+
+    check_witnesses(pack, report);
+}
+
+fn check_witnesses(pack: &Pack, report: &mut Report) {
+    if pack.witnesses.is_empty() {
+        report.weak(
+            "witnesses",
+            "nothing independent says when this root existed, so nothing here rules out a history \
+             written later and dated earlier",
+        );
+        return;
+    }
+
+    let mut seen_keys: Vec<Hash> = Vec::new();
+    for witness in &pack.witnesses {
+        let id = key_id(&witness.public_key);
+        let statement = witness_statement(
+            &witness.witness,
+            &pack.header.store_root,
+            witness.seen_at,
+            &witness.algorithm,
+            &witness.public_key,
+        );
+
+        match check_one(
+            &witness.algorithm,
+            &witness.public_key,
+            &statement,
+            &witness.signature,
+        ) {
+            Checked::Good => report.note(
+                "witness",
+                format!(
+                    "{} saw this root at {}, key {}",
+                    witness.witness,
+                    witness.seen_at,
+                    hex(&id)
+                ),
+            ),
+            Checked::Bad(why) => report.broken(
+                "witness",
+                format!(
+                    "{} attests to this root and the attestation does not verify: {why}",
+                    witness.witness
+                ),
+            ),
+            Checked::Unknown => report.weak(
+                "witness",
+                format!(
+                    "{} attests with {}, which this verifier cannot check",
+                    witness.witness, witness.algorithm
+                ),
+            ),
+        }
+
+        if witness.seen_at < pack.header.generated_at {
+            // Not a failure. Independent parties have independent clocks and
+            // turning skew into a verification error would be wrong. But a
+            // witness cannot see a root before it exists, so one of the two
+            // clocks is wrong and somebody should know which.
+            report.weak(
+                "witness-clock",
+                format!(
+                    "{} claims to have seen this root before it was generated, so a clock disagrees",
+                    witness.witness
+                ),
+            );
+        }
+
+        if seen_keys.contains(&id) {
+            report.weak(
+                "witness-independence",
+                format!(
+                    "two attestations under key {}, which is one witness signing twice",
+                    hex(&id)
+                ),
+            );
+        }
+        seen_keys.push(id);
+    }
+}
+
+enum Checked {
+    Good,
+    Bad(&'static str),
+    /// An algorithm this build cannot check. Never a failure: a pack sealed
+    /// under something newer must not be reported as broken by an older
+    /// verifier, only as unchecked.
+    Unknown,
+}
+
+fn check_one(algorithm: &str, public_key: &[u8], statement: &[u8], signature: &[u8]) -> Checked {
+    match algorithm {
+        "es384" => match crate::p384::verify(public_key, statement, signature) {
+            Ok(()) => Checked::Good,
+            Err(e) => Checked::Bad(match e {
+                crate::p384::SigError::BadKeyEncoding => {
+                    "the key is not an uncompressed P-384 point"
+                }
+                crate::p384::SigError::KeyNotOnCurve => "the key is not on the curve",
+                crate::p384::SigError::BadSignatureEncoding => "the signature is the wrong size",
+                crate::p384::SigError::ComponentOutOfRange => "r or s is out of range",
+                crate::p384::SigError::DoesNotVerify => "the arithmetic does not come out",
+            }),
+        },
+        _ => Checked::Unknown,
+    }
+}
+
+/// A key's identity, derived from the key itself.
+///
+/// Recomputed rather than read from the pack, so a key cannot be presented
+/// under a name an auditor recognises while being somebody else's key.
+fn key_id(public_key: &[u8]) -> Hash {
+    let mut h = Sha384::new();
+    h.update(b"trailryx/key-id/v1\0");
+    h.update(public_key);
+    h.finish()
+}
+
+fn field(out: &mut Vec<u8>, bytes: &[u8]) {
+    out.extend_from_slice(&(bytes.len() as u64).to_be_bytes());
+    out.extend_from_slice(bytes);
+}
+
+/// The bytes a publisher signs, rebuilt here from the pack.
+///
+/// Written out again rather than shared with the store, for the reason the
+/// whole crate exists: the format is what the two sides have in common, not the
+/// code. A shared function would make a mistake in it invisible.
+fn root_statement(
+    tenant: &str,
+    store_root: &Hash,
+    shards: u32,
+    generated_at: u64,
+    algorithm: &str,
+    public_key: &[u8],
+) -> Vec<u8> {
+    let mut out = Vec::with_capacity(256);
+    out.extend_from_slice(b"trailryx/signed-root/v1\0");
+    field(&mut out, tenant.as_bytes());
+    field(&mut out, store_root);
+    out.extend_from_slice(&shards.to_be_bytes());
+    out.extend_from_slice(&generated_at.to_be_bytes());
+    field(&mut out, algorithm.as_bytes());
+    field(&mut out, public_key);
+    out
+}
+
+fn witness_statement(
+    witness: &str,
+    store_root: &Hash,
+    seen_at: u64,
+    algorithm: &str,
+    public_key: &[u8],
+) -> Vec<u8> {
+    let mut out = Vec::with_capacity(256);
+    out.extend_from_slice(b"trailryx/witness/v1\0");
+    field(&mut out, witness.as_bytes());
+    field(&mut out, store_root);
+    out.extend_from_slice(&seen_at.to_be_bytes());
+    field(&mut out, algorithm.as_bytes());
+    field(&mut out, public_key);
+    out
 }
 
 #[cfg(test)]

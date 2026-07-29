@@ -289,6 +289,12 @@ pub enum HashAlg {
 pub enum SigAlg {
     /// Classical, present.
     Es256,
+    /// ECDSA on P-384 with SHA-384: what the store actually signs with.
+    ///
+    /// Added rather than replacing `Es256`, which is what the algorithm fields
+    /// are for. One hash across the whole system instead of two, security
+    /// levels that match, and a curve every cloud key store supports.
+    Es384,
     /// Post-quantum, hybrid with the above.
     MlDsa65,
     /// Hash-based, for epoch anchors. Not in v1: no audited Rust implementation
@@ -313,10 +319,11 @@ impl HashAlg {
 }
 
 impl SigAlg {
-    pub const ALL: &'static [Self] = &[Self::Es256, Self::MlDsa65, Self::SlhDsa];
+    pub const ALL: &'static [Self] = &[Self::Es256, Self::Es384, Self::MlDsa65, Self::SlhDsa];
     pub fn as_str(self) -> &'static str {
         match self {
             Self::Es256 => "es256",
+            Self::Es384 => "es384",
             Self::MlDsa65 => "ml-dsa-65",
             Self::SlhDsa => "slh-dsa",
         }

@@ -20,13 +20,15 @@
 use crate::sha384::{HASH_BYTES, Hash};
 
 pub const MAGIC: &[u8; 7] = b"TRXEVID";
-pub const VERSION: u8 = 1;
+pub const VERSION: u8 = 2;
 
 pub const SECTION_END: u8 = 0;
 pub const SECTION_HEADER: u8 = 1;
 pub const SECTION_SHARD: u8 = 2;
 pub const SECTION_SEGMENT: u8 = 3;
 pub const SECTION_RECORDS: u8 = 4;
+pub const SECTION_SIGNATURE: u8 = 5;
+pub const SECTION_WITNESS: u8 = 6;
 
 /// A ceiling on anything the pack asks us to allocate.
 ///
@@ -150,9 +152,27 @@ pub struct Header {
     pub shard_count: u32,
     /// One byte per algorithm slot, as the store writes them.
     pub algorithms: [u8; 3],
-    /// Empty when the root carries no signature. Reported as a weakness rather
-    /// than a failure: an unsigned pack still proves internal consistency, it
-    /// just cannot prove who published it.
+}
+
+/// The publisher's commitment to a root.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Signature {
+    pub algorithm: String,
+    pub public_key: Vec<u8>,
+    pub signature: Vec<u8>,
+}
+
+/// Somebody else's assertion that the root existed at a time.
+///
+/// The part a signature cannot give. A publisher chooses the timestamp they
+/// sign, so their own signature rules out nothing about when the history was
+/// written.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Witness {
+    pub witness: String,
+    pub seen_at: u64,
+    pub algorithm: String,
+    pub public_key: Vec<u8>,
     pub signature: Vec<u8>,
 }
 
@@ -196,6 +216,8 @@ pub struct RecordSet {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Pack {
     pub header: Header,
+    pub signature: Option<Signature>,
+    pub witnesses: Vec<Witness>,
     pub shards: Vec<Shard>,
     pub segments: Vec<Segment>,
     pub record_sets: Vec<RecordSet>,
@@ -213,6 +235,8 @@ impl Pack {
         }
 
         let mut header = None;
+        let mut signature = None;
+        let mut witnesses = Vec::new();
         let mut shards = Vec::new();
         let mut segments = Vec::new();
         let mut record_sets = Vec::new();
@@ -231,6 +255,8 @@ impl Pack {
                 SECTION_SHARD => shards.push(parse_shard(&mut s)?),
                 SECTION_SEGMENT => segments.push(parse_segment(&mut s)?),
                 SECTION_RECORDS => record_sets.push(parse_records(&mut s)?),
+                SECTION_SIGNATURE => signature = Some(parse_signature(&mut s)?),
+                SECTION_WITNESS => witnesses.push(parse_witness(&mut s)?),
                 // Not skipped. A verifier that ignored a section it did not
                 // understand would report success on a pack whose meaning it
                 // only partly read.
@@ -243,6 +269,8 @@ impl Pack {
 
         Ok(Self {
             header: header.ok_or(PackError::Missing("header"))?,
+            signature,
+            witnesses,
             shards,
             segments,
             record_sets,
@@ -267,7 +295,24 @@ fn parse_header(r: &mut Reader<'_>) -> Result<Header, PackError> {
             r.u8("the signature algorithm")?,
             r.u8("the KEM algorithm")?,
         ],
-        signature: r.bytes("the signature")?.to_vec(),
+    })
+}
+
+fn parse_signature(r: &mut Reader<'_>) -> Result<Signature, PackError> {
+    Ok(Signature {
+        algorithm: r.string("a signature algorithm")?,
+        public_key: r.bytes("a public key")?.to_vec(),
+        signature: r.bytes("a signature")?.to_vec(),
+    })
+}
+
+fn parse_witness(r: &mut Reader<'_>) -> Result<Witness, PackError> {
+    Ok(Witness {
+        witness: r.string("a witness name")?,
+        seen_at: r.u64("a witness timestamp")?,
+        algorithm: r.string("a signature algorithm")?,
+        public_key: r.bytes("a public key")?.to_vec(),
+        signature: r.bytes("a signature")?.to_vec(),
     })
 }
 

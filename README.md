@@ -7,7 +7,7 @@
 ![Stage](https://img.shields.io/badge/stage-9%20of%2013-blue.svg)
 ![Core](https://img.shields.io/badge/core-frozen-success.svg)
 ![Rust](https://img.shields.io/badge/rust-1.85%2B-orange.svg)
-![Tests](https://img.shields.io/badge/tests-315-success.svg)
+![Tests](https://img.shields.io/badge/tests-339-success.svg)
 ![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)
 ![Dependencies](https://img.shields.io/badge/dependencies-0-success.svg)
 ![Unsafe](https://img.shields.io/badge/unsafe-forbidden-success.svg)
@@ -59,15 +59,16 @@ and the proof shapes do not change without a version and a migration.
 | `trailryx-store` | sealing, the read surface, causal reconstruction | 27 |
 | `trailryx-otlp` | protobuf reader, OTLP decode, the GenAI semconv mapper | 46 |
 | `trailryx-erasure` | payload envelopes, the key hierarchy, erasure | 32 |
-| `trailryx-verify` | the offline verifier. Depends on nothing, including us | 9 |
+| `trailryx-verify` | the offline verifier, including its own ECDSA. Depends on nothing | 20 |
 | `trailryx-projection` | Thrift, a Parquet writer, and columnar projections | 18 |
+| `trailryx-sign` | what gets signed, and what a witness attests to | 4 |
 
 **Zero dependencies.** `unsafe` forbidden at the workspace level.
 
 ## Try it
 
 ```bash
-cargo test                                    # 315 tests
+cargo test                                    # 339 tests
 cargo run --bin trailryx-sim-run -- --help
 ```
 
@@ -233,10 +234,66 @@ NOT VERIFIED
 Two things it refuses to do. It never drops support for an algorithm, only
 marks it weak: the day SHA-384 is retired, every pack issued before that day
 must still verify, because evidence with an expiry date is not evidence. And it
-never reports a clean bill on an unsigned pack. A pack proves it is internally
-consistent; whether it is the *real* history is what a signature and an external
-anchor establish, and saying so is the difference between an audit and a
-formality.
+never reports a clean bill on a pack that is unsigned or unwitnessed.
+
+## Whose history, and when
+
+Those are two questions, and a signature only answers the first.
+
+**A signature says whose.** The store root is signed with ECDSA P-384 over
+SHA-384, one hash across the whole system. The private key never touches this
+code: `trailryx-sign` is a seam for a cloud key store or an HSM, and there is
+deliberately no implementation of it in the repository. The tests drive OpenSSL
+instead, so every signature the verifier accepts was produced by somebody else's
+code.
+
+**Verification is ours, and it has to be.** The verifier carries its own P-384:
+about 500 lines of modular arithmetic, reduction by binary long division because
+that is the version a person can check by eye. Signing handles a private key and
+a nonce and belongs behind a validated module; verification handles only public
+values, so nothing it does can leak a secret. Without it the one binary an
+auditor runs would say "there is a signature, I did not look at it", which
+answers a different question from the one they asked.
+
+It is checked against signatures with no shared ancestry: OpenSSL signs twelve
+keys, we agree on all twelve and on all thirty-six rejections, and every one of
+the 768 bits of a real signature is flipped in turn and must be refused.
+
+**A witness says when.** The publisher chooses the timestamp they sign, so a
+history can be reconstructed today, signed today and dated last year, and the
+signature will verify perfectly. Only somebody independent saying they saw the
+root rules that out. A witness attestation is the same kind of signature over a
+different statement, so the verifier learns nothing new to check one, and
+several independent witnesses beat one authority. RFC 3161 arrives later as one
+more kind of receipt; it needs ASN.1, CMS and a certificate chain, and none of
+that belongs in a crate whose value is that it can be read in a sitting.
+
+A pack with a valid signature and no witness still gets a finding, and it is the
+one that reads as pedantry until somebody tries it.
+
+```
+$ trailryx-verify signed.trxevid
+[note] root-signature: es384 by key 9fdfd31ec3a829ef
+[note] witness: auditor.example saw this root at 1700000060000000000, key a996cda2b03d5d76
+3 records in 1 segments
+VERIFIED
+```
+
+Change one letter of one agent id and the signature still verifies, because the
+publisher did sign that root. What fails is everything underneath it:
+
+```
+[BROKEN] chain-within-segment: segment 1 ends at 8abbf52e47c5b4de and its records give c75ec1d1585eed4d
+[BROKEN] history-root: ...
+[BROKEN] index-root: ... for agent_id ...
+```
+
+Change the root instead, so the arithmetic is "fixed up" the way a forger would:
+
+```
+[BROKEN] root-signature: the signature over this root does not verify: the arithmetic does not come out
+[BROKEN] store-root: the pack declares 1df3f17b71b14e99 and its shards give 1cf3f17b71b14e99
+```
 
 ## Columns for the tools everyone already has
 
@@ -347,16 +404,15 @@ Actions become free and that script becomes the workflow unchanged.
 
 Stage 10 onward: the SQL facade, object storage, federation.
 
-Five things are deliberately unfinished behind us. Stage 6 has no HTTP or gRPC
+Four things are deliberately unfinished behind us. Stage 6 has no HTTP or gRPC
 transport, so the receiver takes bytes rather than listening on a socket, and no
 NDJSON source for live demo data. Stage 7 has no validated cipher behind its
 seam and no KMS-backed key provider, and its hostile erasure suite tries every
 recovery path that exists: caches, projections, exports and backups each arrive
 with their own attempt, or they arrive unchecked. Stage 8 signs nothing yet, so
-the verifier reports every pack as unsigned, and its compliance mapping and
-RFC 3161 anchor are still to come. Stage 9 has no repeated columns, so lists are
-comma-joined (safe, because no identifier's character set contains a comma), and
-no storage tiering.
+its compliance mapping and RFC 3161 anchor are still to come. Stage 9 has no
+repeated columns, so lists are comma-joined (safe, because no identifier's
+character set contains a comma), and no storage tiering.
 
 Two known costs, both deferred deliberately. A range answer currently carries an
 inclusion proof per entry, so a full range is O(n²) hashing; the fix is a

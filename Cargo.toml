@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["crates/trailryx-sim", "crates/trailryx-record", "crates/trailryx-crypto", "crates/trailryx-contracts", "crates/trailryx-journal", "crates/trailryx-index", "crates/trailryx-store", "crates/trailryx-otlp", "crates/trailryx-erasure", "crates/trailryx-verify", "crates/trailryx-projection", "crates/trailryx-core"]
+members = ["crates/trailryx-sim", "crates/trailryx-record", "crates/trailryx-crypto", "crates/trailryx-contracts", "crates/trailryx-journal", "crates/trailryx-index", "crates/trailryx-store", "crates/trailryx-otlp", "crates/trailryx-erasure", "crates/trailryx-verify", "crates/trailryx-projection", "crates/trailryx-sign", "crates/trailryx-core"]
 
 [workspace.package]
 version = "0.0.1"
@@ -8,6 +8,15 @@ edition = "2024"
 license = "Apache-2.0"
 repository = "https://github.com/TAIPANBOX/trailryx"
 rust-version = "1.85"
+
+# Tests run optimised. The P-384 verifier is real modular arithmetic and an
+# exhaustive bit sweep over a signature is seven minutes unoptimised and half a
+# minute optimised. The checks that catch bugs are kept on explicitly, so this
+# buys speed and gives up nothing: overflow still panics, assertions still fire.
+[profile.test]
+opt-level = 2
+debug-assertions = true
+overflow-checks = true
 
 [workspace.lints.rust]
 unsafe_code = "forbid"

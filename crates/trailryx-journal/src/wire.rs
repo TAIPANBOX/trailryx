@@ -353,7 +353,7 @@ disc!(payload_class, PayloadClass, "payload.class",
 disc!(hash_alg, HashAlg, "algorithms.hash", HashAlg::Sha384 => 1);
 
 disc!(sig_alg, SigAlg, "algorithms.signature",
-    SigAlg::Es256 => 1, SigAlg::MlDsa65 => 2, SigAlg::SlhDsa => 3,
+    SigAlg::Es256 => 1, SigAlg::MlDsa65 => 2, SigAlg::SlhDsa => 3, SigAlg::Es384 => 4,
 );
 
 disc!(kem_alg, KemAlg, "algorithms.kem", KemAlg::X25519MlKem768 => 1);

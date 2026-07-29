@@ -12,6 +12,7 @@ trailryx-crypto = { path = "../trailryx-crypto" }
 trailryx-index = { path = "../trailryx-index" }
 trailryx-journal = { path = "../trailryx-journal" }
 trailryx-record = { path = "../trailryx-record" }
+trailryx-sign = { path = "../trailryx-sign" }
 trailryx-sim = { path = "../trailryx-sim" }
 
 [dev-dependencies]
