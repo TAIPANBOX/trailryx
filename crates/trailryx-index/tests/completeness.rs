@@ -258,7 +258,7 @@ fn inventing_a_record_breaks_the_proof() {
     let hi = Dimension::time_key(1_080);
 
     let mut proof = idx.range(&lo, &hi);
-    proof.entries[1].record_leaf = Sha384::digest(b"a record that never existed");
+    proof.entries[1].record_link = Sha384::digest(b"a record that never existed");
 
     let err = proof
         .verify(Dimension::RecordedAt, &lo, &hi, root, idx.len())

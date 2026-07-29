@@ -22,6 +22,7 @@
 
 use crate::completeness::{CompletenessProof, Dimension, Entry, ProofFailure, SortedIndex};
 use crate::merkle::{InclusionProof, MerkleTree, empty_root, leaf_hash};
+use std::collections::BTreeMap;
 use trailryx_crypto::{Digest, Hash, Sha384, digests_equal};
 use trailryx_record::{Algorithms, Record, SegmentId, ShardIx, Timestamp};
 
@@ -119,6 +120,11 @@ pub struct Segment {
     manifest: SegmentManifest,
     indexes: Vec<SortedIndex>,
     history: MerkleTree,
+    records: Vec<Record>,
+    /// Chain link to position. `BTreeMap` rather than a hash map, because
+    /// iteration order leaking into anything committed is exactly the class of
+    /// non-determinism this project spends its effort avoiding.
+    by_link: BTreeMap<Hash, usize>,
 }
 
 impl Segment {
@@ -197,6 +203,12 @@ impl Segment {
             manifest,
             indexes,
             history,
+            records: records.iter().map(|(r, _)| r.clone()).collect(),
+            by_link: records
+                .iter()
+                .enumerate()
+                .map(|(i, (_, link))| (*link, i))
+                .collect(),
         })
     }
 
@@ -210,6 +222,19 @@ impl Segment {
 
     pub fn history(&self) -> &MerkleTree {
         &self.history
+    }
+
+    /// The record a chain link belongs to.
+    ///
+    /// A proof says which entries match; this is how the matching records are
+    /// produced, keyed by the very thing the proof commits to rather than by a
+    /// position a caller could get wrong.
+    pub fn record_by_link(&self, link: Hash) -> Option<&Record> {
+        self.by_link.get(&link).and_then(|i| self.records.get(*i))
+    }
+
+    pub fn records(&self) -> &[Record] {
+        &self.records
     }
 
     pub fn index(&self, d: Dimension) -> Option<&SortedIndex> {

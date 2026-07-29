@@ -121,9 +121,14 @@ pub struct Entry {
     /// Tiebreaker, so equal keys still have a total order and the sort is
     /// deterministic across rebuilds.
     pub seq: u64,
-    /// The record's leaf in the journal's history tree, binding this index
-    /// entry to an actual record rather than to a key somebody invented.
-    pub record_leaf: Hash,
+    /// The chain link covering the record this entry points at.
+    ///
+    /// The link, not a leaf and not a sequence number: it is what the journal
+    /// produced over the record's actual bytes, so an index entry is bound to a
+    /// record rather than to a key somebody invented. Naming it `record_leaf`
+    /// while it held a link was a small lie that would have cost somebody an
+    /// afternoon.
+    pub record_link: Hash,
 }
 
 impl Entry {
@@ -133,7 +138,7 @@ impl Entry {
         h.update(&(self.key.len() as u64).to_be_bytes());
         h.update(&self.key);
         h.update(&self.seq.to_be_bytes());
-        h.update(self.record_leaf.as_bytes());
+        h.update(self.record_link.as_bytes());
         h.finish()
     }
 }
@@ -153,7 +158,7 @@ impl SortedIndex {
             .map(|(r, leaf)| Entry {
                 key: dimension.key_of(r),
                 seq: r.seq,
-                record_leaf: *leaf,
+                record_link: *leaf,
             })
             .collect();
         entries.sort_by(|a, b| a.key.cmp(&b.key).then(a.seq.cmp(&b.seq)));
