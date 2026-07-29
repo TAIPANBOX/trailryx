@@ -4,10 +4,10 @@
 
 **The tamper-evident record database for AI agents.**
 
-![Stage](https://img.shields.io/badge/stage-8%20of%2013-blue.svg)
+![Stage](https://img.shields.io/badge/stage-9%20of%2013-blue.svg)
 ![Core](https://img.shields.io/badge/core-frozen-success.svg)
 ![Rust](https://img.shields.io/badge/rust-1.85%2B-orange.svg)
-![Tests](https://img.shields.io/badge/tests-297-success.svg)
+![Tests](https://img.shields.io/badge/tests-315-success.svg)
 ![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)
 ![Dependencies](https://img.shields.io/badge/dependencies-0-success.svg)
 ![Unsafe](https://img.shields.io/badge/unsafe-forbidden-success.svg)
@@ -45,7 +45,7 @@ standards that would say *how* are not cited in the Official Journal yet.
 
 ## What exists
 
-Stages 0 to 8. The core is **frozen**: the journal format, the index structures
+Stages 0 to 9. The core is **frozen**: the journal format, the index structures
 and the proof shapes do not change without a version and a migration.
 
 | Crate | What it is | Tests |
@@ -60,13 +60,14 @@ and the proof shapes do not change without a version and a migration.
 | `trailryx-otlp` | protobuf reader, OTLP decode, the GenAI semconv mapper | 46 |
 | `trailryx-erasure` | payload envelopes, the key hierarchy, erasure | 32 |
 | `trailryx-verify` | the offline verifier. Depends on nothing, including us | 9 |
+| `trailryx-projection` | Thrift, a Parquet writer, and columnar projections | 18 |
 
 **Zero dependencies.** `unsafe` forbidden at the workspace level.
 
 ## Try it
 
 ```bash
-cargo test                                    # 297 tests
+cargo test                                    # 315 tests
 cargo run --bin trailryx-sim-run -- --help
 ```
 
@@ -237,6 +238,40 @@ consistent; whether it is the *real* history is what a signature and an external
 anchor establish, and saying so is the difference between an audit and a
 formality.
 
+## Columns for the tools everyone already has
+
+`trailryx-projection` writes Parquet. Hand-written, like everything else: a
+Thrift compact-protocol writer and a restricted Parquet encoder (PLAIN, no
+compression, one row group). Hand-writing an interchange format would be a poor
+trade if the result were merely Parquet-shaped, so correctness is delegated to
+somebody else's reader. The test suite writes a file and has **pyarrow** read
+every cell back:
+
+```
+pyarrow read 3 rows, 42 columns, 126 cells, all matching
+```
+
+Two rules govern what a projection is.
+
+**It is never evidence.** A Parquet file here is derived: delete it and it
+rebuilds from the journal, byte for byte. `Projection::provable()` returns
+false, as a method rather than as a paragraph, because the temptation is real:
+the projection is fast, it is what SQL wants, and its rows look exactly like the
+records they came from. Every row carries its `chain_link`, which is what keeps
+it useful without making it authoritative: a row traces back to the journal, and
+the proof comes from the segment.
+
+**It holds no payload and no free text.** A projection lands in object storage,
+gets copied into a lake, replicated, backed up: precisely the surface a key
+destruction cannot reach. So every column is a typed field, a validated token,
+an enum name or a hash, and a test walks every cell to confirm no value could be
+a sentence. `payload_hash` and `payload_key_id` connect a row to its payload;
+the payload stays behind its key, where erasure can still find it.
+
+Timestamps are nanoseconds, in columns named `_nanos`. No Parquet converted type
+carries nanosecond precision, and an export that rounds a timestamp on the way
+out is not the lossless export the roadmap asked for.
+
 ## What a review found
 
 An adversarial architecture review, run after stage 3, found the proof system
@@ -310,16 +345,18 @@ Actions become free and that script becomes the workflow unchanged.
 
 ## Next
 
-Stage 9 onward: Parquet projections, the SQL facade, object storage, federation.
+Stage 10 onward: the SQL facade, object storage, federation.
 
-Four things are deliberately unfinished behind us. Stage 6 has no HTTP or gRPC
+Five things are deliberately unfinished behind us. Stage 6 has no HTTP or gRPC
 transport, so the receiver takes bytes rather than listening on a socket, and no
 NDJSON source for live demo data. Stage 7 has no validated cipher behind its
 seam and no KMS-backed key provider, and its hostile erasure suite tries every
 recovery path that exists: caches, projections, exports and backups each arrive
 with their own attempt, or they arrive unchecked. Stage 8 signs nothing yet, so
 the verifier reports every pack as unsigned, and its compliance mapping and
-RFC 3161 anchor are still to come.
+RFC 3161 anchor are still to come. Stage 9 has no repeated columns, so lists are
+comma-joined (safe, because no identifier's character set contains a comma), and
+no storage tiering.
 
 Two known costs, both deferred deliberately. A range answer currently carries an
 inclusion proof per entry, so a full range is O(n²) hashing; the fix is a

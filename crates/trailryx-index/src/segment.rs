@@ -233,6 +233,20 @@ impl Segment {
         self.by_link.get(&link).and_then(|i| self.records.get(*i))
     }
 
+    /// The chain links, in journal order.
+    ///
+    /// The inverse of [`Segment::record_by_link`], and the reason a derived
+    /// table can point back at the evidence: a projection row carrying its link
+    /// can be traced to the journal and to an inclusion proof, and one without
+    /// it is a row nobody can connect to anything.
+    pub fn links(&self) -> Vec<Hash> {
+        let mut out = vec![Hash::ZERO; self.records.len()];
+        for (link, at) in &self.by_link {
+            out[*at] = *link;
+        }
+        out
+    }
+
     pub fn records(&self) -> &[Record] {
         &self.records
     }

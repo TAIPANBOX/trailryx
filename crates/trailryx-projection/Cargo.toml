@@ -1,0 +1,19 @@
+[package]
+name = "trailryx-projection"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+description = "Columnar projections: derived, rebuildable, and never evidence"
+
+[dependencies]
+trailryx-index = { path = "../trailryx-index" }
+trailryx-record = { path = "../trailryx-record" }
+
+[dev-dependencies]
+trailryx-crypto = { path = "../trailryx-crypto" }
+trailryx-journal = { path = "../trailryx-journal" }
+
+[lints]
+workspace = true
