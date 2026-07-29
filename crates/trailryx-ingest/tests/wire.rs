@@ -15,7 +15,7 @@ use std::time::{Duration, Instant};
 use trailryx_ingest::config::Config;
 use trailryx_ingest::handler::Ingest;
 use trailryx_ingest::server::{Server, Stopper, silent_log};
-use trailryx_otlp::{MapperConfig, OtlpSource};
+use trailryx_otlp::{Limits, MapperConfig, OtlpSource};
 use trailryx_record::{TenantId, Timestamp};
 
 const NOW: u64 = 1_700_000_000_000_000_000;
@@ -49,9 +49,14 @@ fn quick_config() -> Config {
 
 impl Harness {
     fn start(config: Config) -> Self {
+        Self::with_limits(config, Limits::default())
+    }
+
+    /// A server whose decoder limits are small enough for a test to reach.
+    fn with_limits(config: Config, limits: Limits) -> Self {
         let mapper = MapperConfig::new(TenantId::parse("acme").unwrap(), "acme.example").unwrap();
         let ingest = Arc::new(Ingest::new(
-            OtlpSource::new(mapper),
+            OtlpSource::with_limits(mapper, limits),
             config,
             Box::new(|| Timestamp(NOW)),
         ));
@@ -88,6 +93,12 @@ impl Harness {
     fn pending(&self) -> usize {
         self.ingest
             .with_source(|source| source.pending())
+            .expect("the lock is healthy")
+    }
+
+    fn dropped_spans(&self) -> u32 {
+        self.ingest
+            .with_source(|source| source.dropped().spans)
             .expect("the lock is healthy")
     }
 
@@ -802,4 +813,151 @@ fn a_trickled_body_is_cut_off_by_the_rate_floor_not_by_the_deadline() {
         "the floor took {elapsed:?}, so the deadline is still doing the work"
     );
     assert_eq!(h.pending(), 0, "nothing partial was handed onward");
+}
+
+#[test]
+fn a_quiet_kept_alive_connection_is_not_answered_at_all() {
+    // The costliest defect the adversarial review found, and the most ordinary
+    // case there is: after a response, a socket that goes quiet for longer than
+    // the per-syscall read timeout used to receive a complete 408 for a request
+    // that had never begun, and the client's real request, arriving a moment
+    // later, was swallowed by the drain. 408 is not in this server's retry
+    // table, so an exporter dropped the batch. With the shipped defaults the
+    // read timeout is five seconds and so is an OTel exporter's batch delay.
+    let h = Harness::start(Config {
+        read_timeout: Duration::from_millis(120),
+        idle_timeout: Duration::from_millis(1500),
+        header_timeout: Duration::from_millis(1500),
+        connection_lifetime: Duration::from_secs(10),
+        ..quick_config()
+    });
+
+    let mut stream = h.connect();
+    let one = export(&good_batch());
+    stream.write_all(&one).unwrap();
+    let mut chunk = [0u8; 4096];
+    let n = stream.read(&mut chunk).unwrap();
+    let first = String::from_utf8_lossy(&chunk[..n]).into_owned();
+    assert_eq!(status_of(&first), 200, "{first}");
+
+    // Longer than the per-syscall timeout, well inside the idle budget: exactly
+    // the gap an exporter leaves between batches.
+    std::thread::sleep(Duration::from_millis(400));
+
+    stream.write_all(&one).unwrap();
+    let _ = stream.flush();
+    let second = read_all(&mut stream);
+    assert_eq!(
+        status_of(&second),
+        200,
+        "the second export was answered {second}"
+    );
+    assert_eq!(h.pending(), 2, "both batches reached the store");
+}
+
+#[test]
+fn a_head_that_stops_arriving_is_still_answered() {
+    // The other side of that fix. A syscall timeout no longer ends a phase, so
+    // the phase deadline has to, or a half-sent head would hold a thread until
+    // the connection's whole lifetime ran out.
+    let h = Harness::start(Config {
+        read_timeout: Duration::from_millis(100),
+        header_timeout: Duration::from_millis(500),
+        idle_timeout: Duration::from_millis(100),
+        ..quick_config()
+    });
+
+    let started = Instant::now();
+    let mut stream = h.connect();
+    stream
+        .write_all(b"POST /v1/traces HTTP/1.1\r\nHost: x\r\n")
+        .unwrap();
+    let _ = stream.flush();
+    let response = read_all(&mut stream);
+
+    assert!(
+        started.elapsed() < Duration::from_secs(3),
+        "a begun head outlived its phase: {:?}",
+        started.elapsed()
+    );
+    assert_eq!(status_of(&response), 408, "{response}");
+}
+
+#[test]
+fn a_compressed_body_is_charged_what_it_can_inflate_to() {
+    // The critical finding. The in-flight budget charged the declared length, so
+    // 256 connections of fifteen kilobytes each could hold four gigabytes of
+    // decompressed bodies against a ceiling that had counted four megabytes.
+    let Some(compressed) = gzip(&good_batch()) else {
+        println!("skipped: no gzip on PATH");
+        return;
+    };
+    // A budget with room for exactly one worst-case body.
+    let h = Harness::start(Config {
+        max_body: 64 * 1024,
+        max_inflight_body: 64 * 1024,
+        max_connections: 8,
+        body_timeout: Duration::from_secs(3),
+        ..quick_config()
+    });
+
+    // One small compressed request is charged the whole ceiling, so a second
+    // concurrent one is shed rather than inflated.
+    let head = format!(
+        "POST /v1/traces HTTP/1.1\r\nHost: x\r\nContent-Type: application/x-protobuf\r\nContent-Encoding: gzip\r\nContent-Length: {}\r\n\r\n",
+        compressed.len() + 32
+    );
+    let mut holding = h.connect();
+    holding.write_all(head.as_bytes()).unwrap();
+    holding.write_all(&compressed).unwrap();
+    let _ = holding.flush();
+    std::thread::sleep(Duration::from_millis(200));
+
+    let response = h.exchange(&request(
+        "/v1/traces",
+        &[
+            ("Content-Type", "application/x-protobuf"),
+            ("Content-Encoding", "gzip"),
+        ],
+        &compressed,
+    ));
+    assert_eq!(status_of(&response), 503, "{response}");
+    assert!(response.contains("Retry-After: 1"), "{response}");
+    drop(holding);
+}
+
+#[test]
+fn spans_dropped_at_our_own_limits_are_not_reported_as_full_success() {
+    // The other critical finding. `submit` diffed the mapper's counter and the
+    // wire counter and not the decoder's, so a batch whose spans were thrown
+    // away at `max_spans` got a bare 200 with an empty body and the emitter was
+    // told everything landed.
+    let h = Harness::with_limits(
+        quick_config(),
+        Limits {
+            max_spans: 10,
+            ..Limits::default()
+        },
+    );
+    let body = batch((0..12).map(|i| span(Some([0xab; 16]), i + 1)).collect());
+
+    let response = h.exchange(&export(&body));
+    assert_eq!(
+        status_of(&response),
+        200,
+        "not a rejection: the batch arrived"
+    );
+    assert!(
+        !response.ends_with("\r\n\r\n"),
+        "a bare 200 would tell the emitter nothing was lost: {response}"
+    );
+    let at = response.find("\r\n\r\n").expect("a body follows") + 4;
+    let bytes = response.as_bytes();
+    assert_eq!(bytes[at], 0x0a, "a partial-success submessage: {response}");
+    assert!(
+        response[at..].contains("decode limits"),
+        "and it must name why: {response}"
+    );
+    assert_eq!(h.dropped_spans(), 2);
+    assert_eq!(h.pending(), 10);
 }

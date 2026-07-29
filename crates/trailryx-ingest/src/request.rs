@@ -120,6 +120,16 @@ pub struct Wire<S> {
     read_timeout: Duration,
 }
 
+/// What one read attempt produced.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Filled {
+    Bytes(usize),
+    /// The peer closed.
+    Eof,
+    /// The syscall timed out. Says nothing about whether the phase is over.
+    NothingYet,
+}
+
 /// How much room the buffer has for a head. Sized once, from configuration,
 /// never from a client.
 const READ_CHUNK: usize = 16 * 1024;
@@ -166,7 +176,20 @@ impl<S: Read> Wire<S> {
     /// `WouldBlock` and `TimedOut` are both a socket timeout on different
     /// platforms, and treating only one of them as such is the bug that makes a
     /// slowloris defence not work on half the machines it runs on.
-    fn fill(&mut self, deadline: Instant) -> Result<usize, Reject> {
+    ///
+    /// A per-syscall timeout is **not** the end of the phase. It used to be, and
+    /// an adversarial review measured what that cost: after a response, a quiet
+    /// kept-alive socket produced a complete 408 for a request that had never
+    /// begun, and the client's real request, arriving a moment later, was then
+    /// swallowed by the drain. On a persistent connection that answer is
+    /// indistinguishable from the answer to whatever the peer sent next, and 408
+    /// is not in this server's retry table, so an exporter drops the batch. With
+    /// the shipped defaults the read timeout is five seconds and so is an OTel
+    /// exporter's batch delay, which made it the most ordinary case there is.
+    ///
+    /// So the phase deadline decides, and a syscall that timed out early says
+    /// only that nothing has arrived yet.
+    fn fill(&mut self, deadline: Instant) -> Result<Filled, Reject> {
         if Instant::now() >= deadline {
             return Err(Reject::new(Status::RequestTimeout, "the deadline passed"));
         }
@@ -178,10 +201,10 @@ impl<S: Read> Wire<S> {
         }
         loop {
             match self.stream.read(&mut self.buf[self.filled..]) {
-                Ok(0) => return Ok(0),
+                Ok(0) => return Ok(Filled::Eof),
                 Ok(n) => {
                     self.filled += n;
-                    return Ok(n);
+                    return Ok(Filled::Bytes(n));
                 }
                 Err(e) if e.kind() == io::ErrorKind::Interrupted => continue,
                 Err(e)
@@ -190,7 +213,9 @@ impl<S: Read> Wire<S> {
                         io::ErrorKind::WouldBlock | io::ErrorKind::TimedOut
                     ) =>
                 {
-                    return Err(Reject::new(Status::RequestTimeout, "the peer went quiet"));
+                    // Nothing yet. Whether that is fatal is the deadline's
+                    // business, not this syscall's.
+                    return Ok(Filled::NothingYet);
                 }
                 Err(_) => return Err(Reject::new(Status::BadRequest, "the connection failed")),
             }
@@ -215,8 +240,10 @@ impl<S: Read> Wire<S> {
 
     /// Walk lines until the empty one, refusing anything that is not CRLF.
     ///
-    /// `Ok(None)` means the peer closed before sending anything, which on a
-    /// kept-alive connection is how a client says goodbye.
+    /// `Ok(None)` means nothing of a request arrived: either the peer closed, or
+    /// the phase ran out while the socket was silent. Both are goodbyes, and
+    /// neither is a message to answer. Answering one is how the next request
+    /// gets somebody else's response.
     fn find_head_end(
         &mut self,
         config: &Config,
@@ -266,13 +293,39 @@ impl<S: Read> Wire<S> {
                     _ => scan += 1,
                 }
             }
-            if self.fill(deadline)? == 0 {
-                // EOF. Clean only if nothing at all had arrived.
-                return if self.filled == 0 {
-                    Ok(None)
-                } else {
-                    Err(Reject::new(Status::BadRequest, "the head is incomplete"))
-                };
+            match self.fill(deadline)? {
+                Filled::Bytes(_) => {}
+                // The peer closed. Clean if it had said nothing, incomplete if
+                // it had said half a head.
+                Filled::Eof if self.filled == 0 => return Ok(None),
+                Filled::Eof => {
+                    return Err(Reject::new(Status::BadRequest, "the head is incomplete"));
+                }
+                // A syscall timed out. Whether that ends anything depends on the
+                // phase deadline and on whether a request had begun, and on
+                // nothing else. Returning here on the first quiet syscall was
+                // the first attempt at this fix and it closed a kept-alive
+                // connection during exactly the pause an exporter leaves
+                // between batches.
+                Filled::NothingYet => {
+                    if Instant::now() < deadline {
+                        continue;
+                    }
+                    return if self.filled == 0 {
+                        // Nothing of a request exists, so there is nothing to
+                        // answer. An unsolicited 408 on a persistent connection
+                        // is indistinguishable from the answer to whatever the
+                        // peer sends next.
+                        Ok(None)
+                    } else {
+                        // A head was begun and stopped arriving. That is a
+                        // request, and it gets an answer.
+                        Err(Reject::new(
+                            Status::RequestTimeout,
+                            "the head stopped arriving",
+                        ))
+                    };
+                }
             }
         }
     }
@@ -337,13 +390,14 @@ impl<S: Read> Wire<S> {
                 }
             }
 
-            let n = match self.fill(deadline) {
-                Ok(n) => n,
-                Err(reject) => return Err(BodyError::Refused(reject)),
-            };
-            if n == 0 {
+            match self.fill(deadline) {
+                Ok(Filled::Bytes(_)) => {}
                 // The peer stopped mid-body. Nothing partial goes onward.
-                return Err(BodyError::Truncated);
+                Ok(Filled::Eof) => return Err(BodyError::Truncated),
+                // Still coming, or not. The deadline and the rate floor above
+                // decide; a syscall timeout on its own decides nothing.
+                Ok(Filled::NothingYet) => continue,
+                Err(reject) => return Err(BodyError::Refused(reject)),
             }
             let take = (self.filled - self.at).min(length - body.len());
             body.extend_from_slice(&self.buf[self.at..self.at + take]);
@@ -360,11 +414,12 @@ impl<S: Read> Wire<S> {
         while seen < budget && Instant::now() < deadline {
             self.compact();
             match self.fill(deadline) {
-                Ok(0) | Err(_) => return,
-                Ok(n) => {
+                Ok(Filled::Bytes(n)) => {
                     seen += n;
                     self.at = self.filled;
                 }
+                Ok(Filled::Eof) | Err(_) => return,
+                Ok(Filled::NothingYet) => return,
             }
         }
     }

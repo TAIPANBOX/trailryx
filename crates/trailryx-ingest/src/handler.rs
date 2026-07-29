@@ -215,7 +215,11 @@ impl Ingest {
             ));
         }
 
-        // Shed before the handoff, because after it the batch is ours.
+        // A first look, cheap, so an obviously full queue is refused before a
+        // body is read at all. The decisive check is in `submit`, under the same
+        // lock as the push: this one is racy by construction and a review was
+        // right that on its own it lets the queue overshoot by one batch per
+        // connection.
         match self.with_source(|source| source.pending()) {
             Some(pending) if pending >= self.config.max_pending => {
                 return Verdict::Answer(
@@ -269,17 +273,34 @@ impl Ingest {
         // available without re-implementing its decoder, and reading a delta is
         // not re-implementing anything.
         let outcome = self.with_source(|source| {
+            // Under the same lock as the push, which is the only place the
+            // decision can be made without a race. Checked in `inspect` as well,
+            // so an obviously full queue costs nobody a body read.
+            if source.pending() >= self.config.max_pending {
+                return Err(());
+            }
             let malformed_before = source.wire_report().malformed_batches;
             let lost_before = source.report().lost();
+            // Three counters, not two. Spans the decoder threw away at its own
+            // limits live in a different family from spans the mapper refused,
+            // and reading only the mapper's meant a batch of sixty-five
+            // thousand spans got a bare two hundred with sixty-four of them
+            // gone. The emitter was told everything landed.
+            let dropped_before = source.dropped().spans;
             source.accept(&body, recorded_at);
-            (
+            Ok((
                 source.wire_report().malformed_batches - malformed_before,
                 source.report().lost() - lost_before,
-            )
+                source.dropped().spans - dropped_before,
+            ))
         });
 
-        let Some((malformed, lost)) = outcome else {
-            return self.unavailable("the ingest path is degraded");
+        let (malformed, lost, dropped) = match outcome {
+            Some(Ok(deltas)) => deltas,
+            Some(Err(())) => {
+                return self.unavailable("the ingest queue is full; the batch is still yours");
+            }
+            None => return self.unavailable("the ingest path is degraded"),
         };
 
         if malformed > 0 {
@@ -292,14 +313,15 @@ impl Ingest {
             );
         }
 
-        if lost > 0 {
-            return Response::new(Status::Ok).body(
-                ContentType::Protobuf,
-                encode_export_response(
-                    u64::from(lost),
-                    "some spans could not be mapped; see the store's ingest counters",
-                ),
-            );
+        let rejected = u64::from(lost) + u64::from(dropped);
+        if rejected > 0 {
+            let why = match (lost, dropped) {
+                (0, _) => "some spans were dropped at this server's decode limits",
+                (_, 0) => "some spans could not be mapped; see the store's ingest counters",
+                _ => "some spans were dropped at the decode limits and others could not be mapped",
+            };
+            return Response::new(Status::Ok)
+                .body(ContentType::Protobuf, encode_export_response(rejected, why));
         }
 
         // Nothing extra. A present-but-empty partial success makes some client

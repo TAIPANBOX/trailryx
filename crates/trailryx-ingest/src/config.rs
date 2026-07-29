@@ -48,6 +48,14 @@ pub struct Config {
 
     /// Across all connections at once, so 256 threads cannot each hold the
     /// per-request maximum.
+    ///
+    /// Divide it by [`Config::max_body`] to get how many gzip requests may be in
+    /// flight, because a compressed request is charged the worst case it can
+    /// inflate to rather than the length it declared. It was charged the declared
+    /// length until an adversarial review measured what that allows: 256
+    /// connections of fifteen kilobytes each, holding four gigabytes of
+    /// decompressed bodies, against a sixty-four megabyte ceiling that never
+    /// noticed because it had counted four megabytes.
     pub max_inflight_body: usize,
 
     /// Decompressed bytes per compressed byte. A real payload never approaches
@@ -93,7 +101,7 @@ impl Default for Config {
             max_header_count: 64,
             max_header_section: 16 * 1024,
             max_body: 16 * 1024 * 1024,
-            max_inflight_body: 64 * 1024 * 1024,
+            max_inflight_body: 256 * 1024 * 1024,
             gzip_max_ratio: 200,
             max_pending: 65_536,
             max_requests_per_connection: 100,

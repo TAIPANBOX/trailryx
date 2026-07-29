@@ -66,8 +66,15 @@ fn everything_gzip_produces_comes_back_exactly() {
         return;
     };
 
+    // Correctness only, so the ratio policy does not answer a question this
+    // test is not asking. The corpus deliberately includes a run of one byte,
+    // which compresses better than two hundred to one and is refused by the
+    // shipped bounds on purpose: whether that is the right policy is what
+    // `the_ratio_cap_fires_at_the_settings_the_server_actually_ships` and
+    // `an_ordinary_body_is_not_mistaken_for_a_bomb` are for.
     let bounds = Bounds {
         max_output: 8 * 1024 * 1024,
+        max_ratio: usize::MAX,
         ..Bounds::default()
     };
     let mut checked = 0;
@@ -158,9 +165,155 @@ fn a_ratio_no_real_payload_reaches_is_refused_even_under_the_cap() {
     let bounds = Bounds {
         max_output: 64 * 1024 * 1024,
         max_ratio: 50,
-        ratio_after_input: 1024,
+        ratio_after_output: 64 * 1024,
     };
     assert_eq!(gunzip(&bomb, bounds), Err(InflateError::RatioTooHigh));
+}
+
+#[test]
+fn the_ratio_cap_fires_at_the_settings_the_server_actually_ships() {
+    // The test above proved the check works when handed settings chosen to make
+    // it work. An adversarial review measured the shipped ones and found the
+    // gate opened at 32 KiB of consumed input while a 16 MiB bomb is 16 KiB, so
+    // the cap could not fire on any bomb worth sending. It was decoration with
+    // a comment claiming otherwise.
+    let Some(bomb) = gzip(&vec![0u8; 16 * 1024 * 1024 - 1], "-9") else {
+        println!("skipped: no gzip on PATH");
+        return;
+    };
+    assert!(
+        bomb.len() < 32 * 1024,
+        "the whole point is that the input is smaller than the old gate: {}",
+        bomb.len()
+    );
+    assert_eq!(
+        gunzip(&bomb, Bounds::default()),
+        Err(InflateError::RatioTooHigh),
+        "the shipped bounds must refuse this, not merely survive it"
+    );
+}
+
+#[test]
+fn an_ordinary_body_is_not_mistaken_for_a_bomb() {
+    // The other side of moving the gate. A real payload compresses a few times
+    // over, and refusing one with a 413 whose stated reason is false would be a
+    // worse bug than the one being fixed.
+    let Some(_) = gzip(b"probe", "-6") else {
+        println!("skipped: no gzip on PATH");
+        return;
+    };
+    for (name, data) in corpus() {
+        for level in ["-1", "-6", "-9"] {
+            let compressed = gzip(&data, level).expect("gzip works");
+            let ratio = data.len() / compressed.len().max(1);
+            if ratio >= Bounds::default().max_ratio {
+                continue; // a run of one byte is genuinely a bomb-shaped thing
+            }
+            assert_eq!(
+                gunzip(&compressed, Bounds::default()),
+                Ok(data.clone()),
+                "{name} at {level} was refused, ratio {ratio}"
+            );
+        }
+    }
+}
+
+#[test]
+fn a_body_of_nothing_but_block_headers_is_bounded() {
+    // Empty blocks produce no output, so neither the output cap nor the ratio
+    // cap has anything to measure. A review found 16 MiB of them burning
+    // twenty-one seconds of processor time with both caps silent.
+    //
+    // Built by hand: a stream of non-final empty fixed blocks. Each is three
+    // bits of header and seven of end-of-block, so they pack about six to five
+    // bytes.
+    // Ten bits per block: three of header, seven of end-of-block, which the
+    // fixed code spells as seven zero bits.
+    let mut bits: Vec<bool> = Vec::new();
+    for _ in 0..400_000 {
+        bits.extend([false, true, false]);
+        bits.extend([false; 7]);
+    }
+    // A final empty block, so the stream is well formed if anything gets there.
+    bits.extend([true, true, false]);
+    bits.extend([false; 7]);
+
+    let mut deflate = vec![0u8; bits.len().div_ceil(8)];
+    for (at, bit) in bits.iter().enumerate() {
+        if *bit {
+            deflate[at / 8] |= 1 << (at % 8);
+        }
+    }
+
+    let mut stream = vec![0x1f, 0x8b, 0x08, 0x00, 0, 0, 0, 0, 0x00, 0xff];
+    stream.extend_from_slice(&deflate);
+    stream.extend_from_slice(&0u32.to_le_bytes()); // the CRC of nothing
+    stream.extend_from_slice(&0u32.to_le_bytes()); // and its length
+
+    let started = std::time::Instant::now();
+    let outcome = gunzip(&stream, Bounds::default());
+    let elapsed = started.elapsed();
+
+    // Either it is refused as too much work, or it decodes to nothing quickly.
+    // What must not happen is minutes of processor time on half a megabyte.
+    assert!(
+        elapsed < std::time::Duration::from_secs(3),
+        "half a megabyte of block headers took {elapsed:?}"
+    );
+    match outcome {
+        Err(InflateError::TooMuchWork) | Ok(_) => {}
+        other => panic!("unexpected: {other:?}"),
+    }
+}
+
+#[test]
+fn an_incomplete_huffman_code_is_refused_like_every_other_decoder_refuses_it() {
+    // A code whose lengths do not fill the tree has bit patterns that decode to
+    // nothing. Every zlib-based decoder refuses one; this accepted them until a
+    // review pointed out that a stream the rest of the world rejects produced a
+    // body we handed to the store.
+    //
+    // Checked through the front door, because `Huffman` is private: a dynamic
+    // block whose code-length code is under-subscribed.
+    let mut stream = vec![0x1f, 0x8b, 0x08, 0x00, 0, 0, 0, 0, 0x00, 0xff];
+    // A dynamic block header declaring a single one-bit code length, which
+    // leaves half the tree unreachable.
+    stream.extend_from_slice(&[0x05, 0x00, 0x02, 0x00, 0x00, 0x00]);
+    stream.extend_from_slice(&0u32.to_le_bytes());
+    stream.extend_from_slice(&0u32.to_le_bytes());
+    let outcome = gunzip(&stream, Bounds::default());
+    assert!(outcome.is_err(), "{outcome:?}");
+}
+
+#[test]
+fn the_trailer_must_be_where_the_stream_ended() {
+    // The trailer was read from the last eight bytes whatever came before them,
+    // which a review caught two ways: bytes hidden between the end of the
+    // deflate data and the trailer were ignored, and a legal multi-member stream
+    // was refused as a checksum mismatch rather than as what it is.
+    let Some(good) = gzip(b"a short body", "-6") else {
+        println!("skipped: no gzip on PATH");
+        return;
+    };
+    assert!(gunzip(&good, Bounds::default()).is_ok());
+
+    // Eight bytes of anything, spliced in front of the trailer.
+    let mut padded = good[..good.len() - 8].to_vec();
+    padded.extend_from_slice(b"smuggled");
+    padded.extend_from_slice(&good[good.len() - 8..]);
+    assert_eq!(
+        gunzip(&padded, Bounds::default()),
+        Err(InflateError::TrailerNotWhereTheStreamEnded)
+    );
+
+    // Two members concatenated, which `gzip -c a b` produces and which this
+    // does not support: named, rather than reported as corruption.
+    let mut two = good.clone();
+    two.extend_from_slice(&good);
+    assert_eq!(
+        gunzip(&two, Bounds::default()),
+        Err(InflateError::TrailerNotWhereTheStreamEnded)
+    );
 }
 
 #[test]

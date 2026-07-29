@@ -59,6 +59,17 @@ pub enum InflateError {
     /// Small input, enormous output. The absolute cap alone still lets a few
     /// kilobytes buy the whole limit, repeatedly, across connections.
     RatioTooHigh,
+    /// The stream asked for far more work than its length can justify.
+    ///
+    /// A body of nothing but empty blocks produces no output at all, so neither
+    /// the output cap nor the ratio cap has anything to measure while the
+    /// decoder spends minutes on it.
+    TooMuchWork,
+    /// The deflate stream did not end where the gzip trailer begins.
+    ///
+    /// Either bytes are hidden between them, or this is a multi-member stream,
+    /// and the two need different answers rather than a checksum mismatch.
+    TrailerNotWhereTheStreamEnded,
 }
 
 impl std::fmt::Display for InflateError {
@@ -77,6 +88,15 @@ impl std::fmt::Display for InflateError {
             Self::LengthMismatch => write!(f, "the gzip length does not match"),
             Self::OutputTooLarge => write!(f, "the decompressed body exceeds the limit"),
             Self::RatioTooHigh => write!(f, "the compression ratio exceeds the limit"),
+            Self::TooMuchWork => {
+                write!(f, "the stream asks for more work than its length justifies")
+            }
+            Self::TrailerNotWhereTheStreamEnded => {
+                write!(
+                    f,
+                    "the deflate stream does not end where the trailer begins"
+                )
+            }
         }
     }
 }
@@ -90,9 +110,18 @@ pub struct Bounds {
     pub max_output: usize,
     /// Output divided by input consumed so far.
     pub max_ratio: usize,
-    /// The ratio is meaningless on a short stream, where a gzip header alone
-    /// skews it. Below this many input bytes it is not evaluated.
-    pub ratio_after_input: usize,
+    /// How much **output** must exist before the ratio is judged.
+    ///
+    /// This gated on *input consumed* until an adversarial review measured it:
+    /// a 16 MiB bomb is 16 KiB of input, and the gate opened at 32 KiB, so the
+    /// ratio cap could not fire on any bomb worth sending. It was decoration
+    /// with a comment claiming otherwise, which is worse than an absent check.
+    ///
+    /// Gating on output instead makes it bind exactly where it was meant to. A
+    /// legitimate body reaching this much output has consumed roughly this much
+    /// divided by its real ratio, so a stream that genuinely compresses better
+    /// than [`Bounds::max_ratio`] is refused and nothing else is.
+    pub ratio_after_output: usize,
 }
 
 impl Default for Bounds {
@@ -100,7 +129,7 @@ impl Default for Bounds {
         Self {
             max_output: 16 * 1024 * 1024,
             max_ratio: 200,
-            ratio_after_input: 32 * 1024,
+            ratio_after_output: 64 * 1024,
         }
     }
 }
@@ -164,6 +193,24 @@ impl<'a> Bits<'a> {
 // Huffman
 // ---------------------------------------------------------------------------
 
+/// Whether a code has to fill its tree.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Completeness {
+    /// A code read from the stream. Incomplete is an error: bit patterns that
+    /// decode to nothing make a decoder's output depend on how it happens to
+    /// fail, and every zlib-based decoder refuses one.
+    ///
+    /// With zlib's one exception, kept here: a code of one symbol or none, which
+    /// is what a distance code looks like in a block that has no matches.
+    Required,
+    /// The specification's own fixed pair. Its distance code is defined over
+    /// thirty symbols with five-bit codes, so two patterns of the thirty-two are
+    /// unused: incomplete by arithmetic and legal by definition. Requiring
+    /// completeness here broke every stream in the corpus, which is how this
+    /// distinction came to be written down.
+    AsSpecified,
+}
+
 /// A canonical Huffman code, held as counts per length plus symbols in order.
 struct Huffman {
     counts: [u16; 16],
@@ -172,6 +219,10 @@ struct Huffman {
 
 impl Huffman {
     fn new(lengths: &[u8]) -> Result<Self, InflateError> {
+        Self::build(lengths, Completeness::Required)
+    }
+
+    fn build(lengths: &[u8], completeness: Completeness) -> Result<Self, InflateError> {
         let mut counts = [0u16; 16];
         for &len in lengths {
             counts[usize::from(len)] += 1;
@@ -190,6 +241,20 @@ impl Huffman {
             if left < 0 {
                 return Err(InflateError::BadHuffmanTable);
             }
+        }
+
+        // And under-subscribed is refused too, which it was not until a review
+        // pointed out that a stream every zlib-based decoder rejects decoded
+        // here. An incomplete code has bit patterns that decode to nothing, and
+        // a decoder that walks off the end of one is a decoder whose output
+        // depends on how it happens to fail.
+        //
+        // The exception zlib makes and this makes with it: a code of one symbol,
+        // or none, which is what a distance code looks like in a block that has
+        // no matches. It is incomplete by arithmetic and legal by convention.
+        let symbols_used: u16 = counts.iter().skip(1).sum();
+        if left > 0 && symbols_used > 1 && completeness == Completeness::Required {
+            return Err(InflateError::BadHuffmanTable);
         }
 
         let mut offsets = [0u16; 16];
@@ -251,22 +316,41 @@ const CODE_LENGTH_ORDER: [usize; 19] = [
     16, 17, 18, 0, 8, 7, 9, 6, 10, 5, 11, 4, 12, 3, 13, 2, 14, 1, 15,
 ];
 
-fn fixed_tables() -> (Huffman, Huffman) {
-    let mut literal = [0u8; 288];
-    for (symbol, slot) in literal.iter_mut().enumerate() {
-        *slot = match symbol {
-            0..=143 => 8,
-            144..=255 => 9,
-            256..=279 => 7,
-            _ => 8,
-        };
-    }
-    let distance = [5u8; 30];
-    (
-        Huffman::new(&literal).expect("the fixed literal code is well formed by construction"),
-        Huffman::new(&distance).expect("the fixed distance code is well formed by construction"),
-    )
+/// The fixed code pair, built once for the life of the process.
+///
+/// Built per block until a review measured it: a 16 MiB body of empty fixed
+/// blocks burned twenty-one seconds of processor time while both the output cap
+/// and the ratio cap stayed silent, because empty blocks produce nothing to
+/// measure. There is exactly one fixed code in the specification, so there is no
+/// reason to build it more than once.
+fn fixed_tables() -> &'static (Huffman, Huffman) {
+    static FIXED: std::sync::OnceLock<(Huffman, Huffman)> = std::sync::OnceLock::new();
+    FIXED.get_or_init(|| {
+        let mut literal = [0u8; 288];
+        for (symbol, slot) in literal.iter_mut().enumerate() {
+            *slot = match symbol {
+                0..=143 => 8,
+                144..=255 => 9,
+                256..=279 => 7,
+                _ => 8,
+            };
+        }
+        let distance = [5u8; 30];
+        (
+            Huffman::build(&literal, Completeness::AsSpecified)
+                .expect("the fixed literal code is the specification's"),
+            Huffman::build(&distance, Completeness::AsSpecified)
+                .expect("the fixed distance code is the specification's"),
+        )
+    })
 }
+
+/// What building one Huffman table costs, in the same units as one symbol.
+///
+/// Approximate on purpose. The point is that a table is expensive and a symbol
+/// is cheap, so a stream made of nothing but table headers cannot hide behind a
+/// meter that counts only symbols.
+const TABLE_COST: usize = 300;
 
 // ---------------------------------------------------------------------------
 // The stream
@@ -275,6 +359,10 @@ fn fixed_tables() -> (Huffman, Huffman) {
 struct Out {
     bytes: Vec<u8>,
     bounds: Bounds,
+    /// Work done, in units where one symbol is one and one table is many.
+    work: usize,
+    /// Work allowed, derived from the input length and the output ceiling.
+    work_budget: usize,
 }
 
 impl Out {
@@ -284,19 +372,29 @@ impl Out {
         if self.bytes.len() >= self.bounds.max_output {
             return Err(InflateError::OutputTooLarge);
         }
-        let consumed = bits.consumed();
-        if consumed >= self.bounds.ratio_after_input
-            && self.bytes.len() / consumed.max(1) >= self.bounds.max_ratio
+        // Judged once there is enough output to judge, rather than once enough
+        // input has been read. A bomb's whole point is that its input is small.
+        if self.bytes.len() >= self.bounds.ratio_after_output
+            && self.bytes.len() / bits.consumed().max(1) >= self.bounds.max_ratio
         {
             return Err(InflateError::RatioTooHigh);
         }
         self.bytes.push(byte);
         Ok(())
     }
+
+    fn charge(&mut self, units: usize) -> Result<(), InflateError> {
+        self.work = self.work.saturating_add(units);
+        if self.work > self.work_budget {
+            return Err(InflateError::TooMuchWork);
+        }
+        Ok(())
+    }
 }
 
 fn inflate_blocks(bits: &mut Bits<'_>, out: &mut Out) -> Result<(), InflateError> {
     loop {
+        out.charge(1)?;
         let last = bits.bit()?;
         match bits.bits(2)? {
             0 => {
@@ -319,9 +417,10 @@ fn inflate_blocks(bits: &mut Bits<'_>, out: &mut Out) -> Result<(), InflateError
             }
             1 => {
                 let (literal, distance) = fixed_tables();
-                inflate_symbols(bits, out, &literal, &distance)?;
+                inflate_symbols(bits, out, literal, distance)?;
             }
             2 => {
+                out.charge(2 * TABLE_COST)?;
                 let (literal, distance) = dynamic_tables(bits)?;
                 inflate_symbols(bits, out, &literal, &distance)?;
             }
@@ -402,6 +501,7 @@ fn inflate_symbols(
     distance: &Huffman,
 ) -> Result<(), InflateError> {
     loop {
+        out.charge(1)?;
         let symbol = literal.decode(bits)?;
         match symbol {
             0..=255 => out.push(symbol as u8, bits)?,
@@ -507,12 +607,30 @@ pub fn gunzip(input: &[u8], bounds: Bounds) -> Result<Vec<u8>, InflateError> {
         return Err(InflateError::Truncated);
     }
 
-    let mut bits = Bits::new(&input[at..trailer_at]);
+    let deflate = &input[at..trailer_at];
+    let mut bits = Bits::new(deflate);
     let mut out = Out {
         bytes: Vec::new(),
         bounds,
+        work: 0,
+        // Proportional to what the stream may produce, plus a term for its own
+        // length, so a body of nothing but block headers is bounded by the
+        // length it paid for rather than by an output it never produces.
+        work_budget: bounds
+            .max_output
+            .saturating_add(input.len().saturating_mul(16))
+            .saturating_add(1_000_000),
     };
     inflate_blocks(&mut bits, &mut out)?;
+
+    // The trailer was read from the last eight bytes of the input regardless of
+    // where the stream ended, which a review caught two ways: a legal
+    // multi-member stream was refused as a checksum mismatch, and bytes hidden
+    // between the end of the deflate data and the trailer were ignored
+    // entirely. Requiring the two to meet refuses both, and names which.
+    if bits.consumed() < deflate.len() {
+        return Err(InflateError::TrailerNotWhereTheStreamEnded);
+    }
 
     let expected_crc = u32::from_le_bytes([
         input[trailer_at],
@@ -558,6 +676,37 @@ mod tests {
             gunzip(b"short", Bounds::default()),
             Err(InflateError::Truncated)
         );
+    }
+
+    #[test]
+    fn the_specifications_own_fixed_distance_code_is_not_rejected_as_incomplete() {
+        // Thirty symbols of five-bit codes leaves two of thirty-two patterns
+        // unused, so it is incomplete by arithmetic. Requiring completeness of
+        // it broke every stream in the corpus, which is why the two kinds of
+        // code are distinguished rather than treated alike.
+        assert!(Huffman::build(&[5u8; 30], Completeness::AsSpecified).is_ok());
+        assert_eq!(
+            Huffman::build(&[5u8; 30], Completeness::Required).err(),
+            Some(InflateError::BadHuffmanTable)
+        );
+    }
+
+    #[test]
+    fn an_incomplete_code_from_the_stream_is_refused() {
+        // The defect this closes: a code whose lengths leave patterns decoding
+        // to nothing was accepted, so a stream every other decoder rejects
+        // produced a body we handed onward.
+        assert_eq!(
+            Huffman::new(&[1, 2]).err(),
+            Some(InflateError::BadHuffmanTable),
+            "one one-bit code and one two-bit code leaves a pattern unreachable"
+        );
+        // zlib's exception, kept: a code of one symbol, which is what a distance
+        // code looks like in a block with no matches.
+        assert!(Huffman::new(&[1]).is_ok());
+        assert!(Huffman::new(&[0, 0, 0]).is_ok());
+        // And a complete code is still a complete code.
+        assert!(Huffman::new(&[1, 1]).is_ok());
     }
 
     #[test]

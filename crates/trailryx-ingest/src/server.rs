@@ -348,7 +348,14 @@ fn serve_connection(
                 let response = match ingest.inspect(&head) {
                     Verdict::Answer(response) => response,
                     Verdict::ReadBody { length, gzip } => {
-                        let want = usize::try_from(length).unwrap_or(usize::MAX);
+                        // What may actually be held, not what was declared. A
+                        // compressed body is charged the ceiling it can inflate
+                        // to: charging the declared length let two hundred and
+                        // fifty-six connections of fifteen kilobytes each hold
+                        // four gigabytes against a budget that had counted four
+                        // megabytes.
+                        let declared = usize::try_from(length).unwrap_or(usize::MAX);
+                        let want = if gzip { config.max_body } else { declared };
                         let Some(_budget) =
                             Budget::reserve(inflight, want, config.max_inflight_body)
                         else {

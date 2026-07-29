@@ -7,7 +7,7 @@
 ![Stage](https://img.shields.io/badge/stage-10%20of%2013-blue.svg)
 ![Core](https://img.shields.io/badge/core-frozen-success.svg)
 ![Rust](https://img.shields.io/badge/rust-1.85%2B-orange.svg)
-![Tests](https://img.shields.io/badge/tests-439-success.svg)
+![Tests](https://img.shields.io/badge/tests-450-success.svg)
 ![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)
 ![Dependencies](https://img.shields.io/badge/dependencies-0-success.svg)
 ![Unsafe](https://img.shields.io/badge/unsafe-forbidden-success.svg)
@@ -164,7 +164,7 @@ and the proof shapes do not change without a version and a migration.
 | `trailryx-verify` | the offline verifier, including its own ECDSA. Depends on nothing | 20 |
 | `trailryx-projection` | Thrift, a Parquet writer, and columnar projections | 18 |
 | `trailryx-sign` | what gets signed, and what a witness attests to | 4 |
-| `trailryx-ingest` | the OTLP/HTTP server: HTTP/1.1, gzip, all hand-written | 73 |
+| `trailryx-ingest` | the OTLP/HTTP server: HTTP/1.1, gzip, all hand-written | 84 |
 | `trailryx-demo` | the eight acceptance steps, walked end to end | - |
 
 **Zero dependencies.** `unsafe` forbidden at the workspace level.
@@ -172,7 +172,7 @@ and the proof shapes do not change without a version and a migration.
 ## Try it
 
 ```bash
-cargo test                                    # 439 tests
+cargo test                                    # 450 tests
 cargo run --bin trailryx-sim-run -- --help
 ```
 
@@ -295,10 +295,55 @@ permanent, fleet-wide holes in the evidence. A batch that could not be decoded i
 happens before the handoff, because `accept` never fails and once bytes go in
 they are ours.
 
-Thirty of the tests are written from the sender's side: a bare line feed, a
+Thirty-four of the tests are written from the sender's side: a bare line feed, a
 second request smuggled into the same TCP write, a body that trickles in below
 the rate floor, a kilobyte that inflates to four megabytes, more connections than
 the cap, a full queue, a truncated body that must never become half a record.
+
+## What an adversarial review found in it
+
+Six independent lenses over this crate, every finding handed to three skeptics
+told to refute it, ninety-six agents and eleven million tokens. Twelve findings
+survived, and they are eight distinct defects. The two worst:
+
+**The in-flight body budget charged the compressed length.** A gzip request
+reserved what it declared, then inflated to the 16 MiB cap and held that while it
+waited on the ingest lock. Two hundred and fifty-six connections of fifteen
+kilobytes each could hold four gigabytes against a sixty-four megabyte ceiling
+that had counted four megabytes. A compressed request is now charged the worst
+case it can inflate to, and the default ceiling says out loud that dividing it by
+`max_body` gives the number of concurrent gzip requests allowed.
+
+**The ratio cap could not fire.** It opened after 32 KiB of *consumed input*, and
+a 16 MiB bomb is 16 KiB of input. Measured: 16 MiB of zeros compresses to 16,328
+bytes and returned `Ok` at a ratio of 1027. The absolute output cap still bound,
+so nothing was unbounded, but the check whose entire purpose is to make an
+attacker's cost proportional was decoration with a comment claiming otherwise,
+which is worse than no check. It gates on produced *output* now, and the test
+asserts it at the settings the server actually ships rather than at settings
+chosen to make it pass.
+
+Then: spans the decoder threw away at its own limits were reported to the client
+as full success, because `submit` read two counters and there are three. An idle
+kept-alive connection was answered with an unsolicited 408 for a request that had
+never begun, and the client's real request was then swallowed by the drain; 408 is
+not retryable, and the default read timeout is five seconds, which is also an OTel
+exporter's default batch delay, so it was the most ordinary case there is. The
+queue-full check ran in a different lock acquisition from the push. An incomplete
+Huffman code was accepted, so a stream every zlib-based decoder rejects produced a
+body we handed to the store. The gzip trailer was read from the last eight bytes
+whatever came before them, so a legal multi-member stream was refused as
+corruption and bytes hidden before the trailer were ignored. And the fixed
+Huffman tables were rebuilt per block, so 16 MiB of empty blocks burned
+twenty-one seconds with every cap silent.
+
+All eight are fixed, each with a regression test. Fixing the incomplete-code one
+broke every stream in the corpus first, which is how the code learned to tell the
+specification's own fixed distance code, incomplete by arithmetic and legal by
+definition, apart from an incomplete code read off the wire.
+
+A single reviewer had looked at this crate before and found four things, none of
+them these.
 
 ## Erasing one person without breaking the audit trail
 
