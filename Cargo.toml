@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["crates/trailryx-sim", "crates/trailryx-record", "crates/trailryx-crypto", "crates/trailryx-contracts", "crates/trailryx-core"]
+members = ["crates/trailryx-sim", "crates/trailryx-record", "crates/trailryx-crypto", "crates/trailryx-contracts", "crates/trailryx-journal", "crates/trailryx-core"]
 
 [workspace.package]
 version = "0.0.1"

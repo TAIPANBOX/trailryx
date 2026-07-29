@@ -24,6 +24,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "trailryx-journal"
+version = "0.0.1"
+dependencies = [
+ "trailryx-crypto",
+ "trailryx-record",
+ "trailryx-sim",
+]
+
+[[package]]
 name = "trailryx-record"
 version = "0.0.1"
 
