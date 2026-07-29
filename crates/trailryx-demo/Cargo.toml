@@ -8,6 +8,7 @@ rust-version.workspace = true
 description = "The eight acceptance steps, walked end to end"
 
 [dependencies]
+trailryx-assemble = { path = "../trailryx-assemble" }
 trailryx-contracts = { path = "../trailryx-contracts" }
 trailryx-crypto = { path = "../trailryx-crypto" }
 trailryx-erasure = { path = "../trailryx-erasure" }

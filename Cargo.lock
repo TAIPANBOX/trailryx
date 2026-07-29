@@ -3,6 +3,16 @@
 version = 4
 
 [[package]]
+name = "trailryx-assemble"
+version = "0.0.1"
+dependencies = [
+ "trailryx-contracts",
+ "trailryx-erasure",
+ "trailryx-record",
+ "trailryx-sim",
+]
+
+[[package]]
 name = "trailryx-contracts"
 version = "0.0.1"
 dependencies = [
@@ -27,6 +37,7 @@ dependencies = [
 name = "trailryx-demo"
 version = "0.0.1"
 dependencies = [
+ "trailryx-assemble",
  "trailryx-contracts",
  "trailryx-crypto",
  "trailryx-erasure",

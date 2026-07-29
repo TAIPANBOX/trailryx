@@ -7,7 +7,7 @@
 ![Stage](https://img.shields.io/badge/stage-10%20of%2013-blue.svg)
 ![Core](https://img.shields.io/badge/core-frozen-success.svg)
 ![Rust](https://img.shields.io/badge/rust-1.85%2B-orange.svg)
-![Tests](https://img.shields.io/badge/tests-415-success.svg)
+![Tests](https://img.shields.io/badge/tests-439-success.svg)
 ![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)
 ![Dependencies](https://img.shields.io/badge/dependencies-0-success.svg)
 ![Unsafe](https://img.shields.io/badge/unsafe-forbidden-success.svg)
@@ -95,6 +95,38 @@ that one value is asserted rather than proved.
 
 No on-disk format changed to do this.
 
+## The missing half of the write path
+
+Both ends of it were built and tested before the middle was: a source produces an
+ingest unit, the journal takes a record, and nothing joined them. For one commit
+the join lived in the demo binary, which is the wrong home for a missing half of a
+product. `trailryx-assemble` is that half, and moving it out of the demo closed
+three defects a demo could tolerate and a store cannot.
+
+**Identities were a counter.** A counter restarts at one when the process does, so
+the first record after a restart claims an identity a record already has, the
+journal reports a duplicate, and the record is dropped: silent loss, from the one
+field that must not collide. They are ULIDs now, whose high bits are the record's
+own `recorded_at`, which is also what makes the record-id index answer a time range
+and not only a point lookup. A clock that steps backwards does not take the ids
+with it.
+
+**Every source name it had ever seen was remembered.** A demo exits in a second; a
+receiver runs for months. The window is bounded, and a parent that has fallen out
+of it yields no edge rather than a guess, because a false edge in a causal graph is
+worse than an absent one: an absent edge costs a reconstruction its completeness
+and the reconstruction says so.
+
+**The sealing order was the caller's problem.** It had to ask what the next id
+would be, seal a payload against it, and hand the reference back. Two steps that
+had to agree, in two places. Now the id is minted first and the sealing happens
+behind one call.
+
+It decides three things and refuses to decide anything else. The sequence number,
+the previous chain head and the segment are left at values nobody could mistake for
+real, because the journal stamps them on append and a plausible number there would
+be a lie that survives into a record.
+
 ## The question nobody else answers
 
 Agent telemetry usually lands in a span store. That works until an auditor asks
@@ -127,6 +159,7 @@ and the proof shapes do not change without a version and a migration.
 | `trailryx-index` | Merkle history tree, completeness proofs, segment composition | 53 |
 | `trailryx-store` | sealing, the read surface, causal reconstruction | 27 |
 | `trailryx-otlp` | protobuf reader, OTLP decode, the GenAI semconv mapper | 46 |
+| `trailryx-assemble` | what a source handed over, made into records | 24 |
 | `trailryx-erasure` | payload envelopes, the key hierarchy, erasure | 32 |
 | `trailryx-verify` | the offline verifier, including its own ECDSA. Depends on nothing | 20 |
 | `trailryx-projection` | Thrift, a Parquet writer, and columnar projections | 18 |
@@ -139,7 +172,7 @@ and the proof shapes do not change without a version and a migration.
 ## Try it
 
 ```bash
-cargo test                                    # 415 tests
+cargo test                                    # 439 tests
 cargo run --bin trailryx-sim-run -- --help
 ```
 

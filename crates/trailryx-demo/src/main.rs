@@ -21,14 +21,13 @@
 //! declares and confirms none is one the verifier considers retired, which is the
 //! part of that check this repository can actually answer for.
 
-mod assemble;
 mod signer;
 
-use assemble::Assembler;
 use std::io::Write;
 use std::path::Path;
 use std::process::ExitCode;
 use std::sync::Arc;
+use trailryx_assemble::Assembler;
 use trailryx_contracts::contracts::{ObjectStore, Source};
 use trailryx_contracts::fakes::{MemoryKeyProvider, MemoryObjectStore};
 use trailryx_contracts::ingest::{MetaDraft, PayloadPart};
@@ -50,6 +49,7 @@ use trailryx_record::{
 use trailryx_sign::{attest, sign_root_unvalidated};
 use trailryx_sim::clock::{Clock, SystemClock};
 use trailryx_sim::io::StdIo;
+use trailryx_sim::rng::SimRng;
 use trailryx_store::evidence::PackBuilder;
 use trailryx_store::query::{ProofStatus, Query, query_segment};
 use trailryx_store::seal::{SealOutcome, seal_segment};
@@ -148,7 +148,9 @@ fn walk(dir: &Path) -> Result<(), Failure> {
         Sha384Ctr,
         PredictableKeys::new(),
     );
-    let mut assembler = Assembler::new(ShardIx(0));
+    // Seeded, so a run is reproducible: the identities a run mints are a
+    // function of the seed and the times, and nothing here reaches for entropy.
+    let mut assembler = Assembler::new(ShardIx(0), SimRng::new(0x7461696c));
     let (mut journal, recovered) = Journal::open(
         ShardIx(0),
         SegmentId(1),
@@ -174,25 +176,15 @@ fn walk(dir: &Path) -> Result<(), Failure> {
     let mut written: Vec<Record> = Vec::new();
     let mut previous: Option<RecordId> = None;
     for spec in incident() {
-        let payload = if spec.payload.is_empty() {
-            None
-        } else {
-            Some(
-                vault
-                    .seal(
-                        RecordId(assembler_peek(&assembler)),
-                        &spec.payload,
-                        Some(&subject),
-                    )
-                    .map_err(|e| format!("sealing a payload: {e}"))?,
+        let record = assembler
+            .record(
+                spec.draft,
+                Timestamp(clock.wall_nanos()),
+                previous.map(|p| vec![p]).unwrap_or_default(),
+                spec.payload,
             )
-        };
-        let record = assembler.own(
-            spec.draft,
-            Timestamp(clock.wall_nanos()),
-            previous.map(|p| vec![p]).unwrap_or_default(),
-            payload,
-        );
+            .seal(&mut vault, Some(&subject))
+            .map_err(|e| format!("sealing a payload: {e}"))?;
         previous = Some(record.id);
         let stamped = append(&mut journal, &record, &mut io)?;
         note(&format!(
@@ -211,7 +203,10 @@ fn walk(dir: &Path) -> Result<(), Failure> {
     note("over a real socket, so the difference is visible rather than argued.");
     let otlp = ingest_over_http(&tenant, &clock)?;
     let otlp_record = assembler
-        .adopt(otlp, Timestamp(clock.wall_nanos()), &mut vault, None)
+        .adopt(otlp, Timestamp(clock.wall_nanos()))
+        // No subject: an agent rarely knows whose data is in a prompt at the
+        // moment it sends one. Attribution catches up in step six.
+        .seal(&mut vault, None)
         .map_err(|e| format!("assembling the OTLP record: {e}"))?;
     let otlp_record = append(&mut journal, &otlp_record, &mut io)?;
     note(&format!(
@@ -441,12 +436,18 @@ fn walk(dir: &Path) -> Result<(), Failure> {
 
     // The erasure is itself a record. It goes into a segment of its own, which
     // is where step seven picks it up.
-    let erasure_draft = assembler.own(
-        forgotten.draft.clone(),
-        Timestamp(clock.wall_nanos()),
-        Vec::new(),
-        Some(vault.manifest_ref(&forgotten)),
-    );
+    let mut erasure_draft = assembler
+        .record(
+            forgotten.draft.clone(),
+            Timestamp(clock.wall_nanos()),
+            Vec::new(),
+            Vec::new(),
+        )
+        .record;
+    // The manifest is a payload the store writes about itself, in the clear:
+    // it names no payloads and no people, and it is the evidence the erasure
+    // happened, so it must not be erasable.
+    trailryx_assemble::attach(&mut erasure_draft, vault.manifest_ref(&forgotten));
     let erasure = erasure_draft.clone();
     let rendered = format!("{erasure:?}");
     if rendered.contains(SUBJECT) {
@@ -756,12 +757,6 @@ fn incident() -> Vec<Step> {
 // ---------------------------------------------------------------------------
 // Plumbing
 // ---------------------------------------------------------------------------
-
-/// The id the assembler will mint next, so a payload can be sealed against the
-/// record that is about to carry it.
-fn assembler_peek(assembler: &Assembler) -> u128 {
-    assembler.peek()
-}
 
 fn append(journal: &mut Journal, record: &Record, io: &mut StdIo) -> Result<Record, Failure> {
     append_to(journal, record, io, SegmentId(1))

@@ -1,0 +1,17 @@
+[package]
+name = "trailryx-assemble"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+description = "The missing half of the write path: what a source handed over, made into records"
+
+[dependencies]
+trailryx-contracts = { path = "../trailryx-contracts" }
+trailryx-erasure = { path = "../trailryx-erasure" }
+trailryx-record = { path = "../trailryx-record" }
+trailryx-sim = { path = "../trailryx-sim" }
+
+[lints]
+workspace = true
