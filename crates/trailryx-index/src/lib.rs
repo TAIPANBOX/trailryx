@@ -19,6 +19,11 @@
 
 pub mod completeness;
 pub mod merkle;
+pub mod segment;
 
 pub use completeness::{CompletenessProof, Dimension, Entry, ProofFailure, SortedIndex};
 pub use merkle::{ConsistencyProof, InclusionProof, MerkleTree, empty_root, leaf_hash, node_hash};
+pub use segment::{
+    CompositeFailure, CompositeProof, Segment, SegmentContribution, SegmentManifest,
+    ShardContribution, ShardTree, StoreTree,
+};
