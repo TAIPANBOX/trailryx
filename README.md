@@ -4,10 +4,10 @@
 
 **The tamper-evident record database for AI agents.**
 
-![Stage](https://img.shields.io/badge/stage-9%20of%2013-blue.svg)
+![Stage](https://img.shields.io/badge/stage-10%20of%2013-blue.svg)
 ![Core](https://img.shields.io/badge/core-frozen-success.svg)
 ![Rust](https://img.shields.io/badge/rust-1.85%2B-orange.svg)
-![Tests](https://img.shields.io/badge/tests-339-success.svg)
+![Tests](https://img.shields.io/badge/tests-412-success.svg)
 ![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)
 ![Dependencies](https://img.shields.io/badge/dependencies-0-success.svg)
 ![Unsafe](https://img.shields.io/badge/unsafe-forbidden-success.svg)
@@ -45,7 +45,7 @@ standards that would say *how* are not cited in the Official Journal yet.
 
 ## What exists
 
-Stages 0 to 9. The core is **frozen**: the journal format, the index structures
+Stages 0 to 9, plus the transport. The core is **frozen**: the journal format, the index structures
 and the proof shapes do not change without a version and a migration.
 
 | Crate | What it is | Tests |
@@ -62,13 +62,14 @@ and the proof shapes do not change without a version and a migration.
 | `trailryx-verify` | the offline verifier, including its own ECDSA. Depends on nothing | 20 |
 | `trailryx-projection` | Thrift, a Parquet writer, and columnar projections | 18 |
 | `trailryx-sign` | what gets signed, and what a witness attests to | 4 |
+| `trailryx-ingest` | the OTLP/HTTP server: HTTP/1.1, gzip, all hand-written | 73 |
 
 **Zero dependencies.** `unsafe` forbidden at the workspace level.
 
 ## Try it
 
 ```bash
-cargo test                                    # 339 tests
+cargo test                                    # 412 tests
 cargo run --bin trailryx-sim-run -- --help
 ```
 
@@ -143,6 +144,58 @@ operation name this version does not know (refused rather than mapped to
 something adjacent, because a wrong event type is worse than a missing record).
 Everything dropped is counted, and the counts become a record: a gap nobody
 wrote down is worse than a gap, because the trail looks complete.
+
+## Actually reachable over a network
+
+`trailryx-ingest` is an OTLP/HTTP server with no dependencies: the HTTP/1.1
+parser, the gzip decoder and the protobuf response encoder are all in the crate.
+Point a stock OpenTelemetry SDK at it, or an OpenTelemetry Collector, and records
+arrive.
+
+```bash
+trailryx-ingest --bind 127.0.0.1:4318
+```
+
+```
+listening on 127.0.0.1:4318
+loopback only. there is no TLS and no authentication here.
+```
+
+**What it deliberately is not**, stated in the crate's own docs rather than left
+to be discovered: no TLS, no authentication, no HTTP/2 and so no OTLP over gRPC,
+no chunked bodies, no JSON, no metrics or logs, no pipelining. Anything that can
+reach the port can write records, which is why the default bind is loopback and a
+routable one announces itself at startup. A deployment that needs the network
+puts a proxy in front.
+
+That has a consequence worth saying in the same breath, and it is why the parser
+is as strict as it is: a proxy means two HTTP parsers in a row, and any
+disagreement between them about where a message ends is request smuggling. So the
+parser refuses to have an opinion about anything ambiguous. CRLF only, never a
+bare line feed, even though the RFC permits recognising one. `Transfer-Encoding`
+in any form is 501, which deletes that whole family rather than defending against
+it. A second `Content-Length` is a rejection, not a choice between the two.
+
+gzip is implemented because the Collector's exporter defaults to it, and agent →
+collector → store is the ordinary production shape: refusing it would mean the
+standard forwarder cannot talk to us and the failure it produces is a
+non-retryable 415, which is silent data loss at the emitter. The decoder is
+checked against streams the system `gzip` produced, at every level, and the
+output cap is enforced **inside** the inflate loop, because every published
+vulnerability in that class is the same bug: decompress fully, then measure.
+
+Which answer a client gets is its own design problem, because an OTLP client
+keeps a batch on 429, 502, 503 and 504 and throws it away on everything else. So
+backpressure is 503 and never 500: a five-second blip answered with 500 becomes
+permanent, fleet-wide holes in the evidence. A batch that could not be decoded is
+400, so the emitter stops resending bytes that will never decode. And shedding
+happens before the handoff, because `accept` never fails and once bytes go in
+they are ours.
+
+Thirty of the tests are written from the sender's side: a bare line feed, a
+second request smuggled into the same TCP write, a body that trickles in below
+the rate floor, a kilobyte that inflates to four megabytes, more connections than
+the cap, a full queue, a truncated body that must never become half a record.
 
 ## Erasing one person without breaking the audit trail
 
@@ -402,9 +455,10 @@ Actions become free and that script becomes the workflow unchanged.
 
 ## Next
 
-Stage 10 onward: the SQL facade, object storage, federation.
+Object storage, federation, and the provable query language that replaces the
+SQL facade.
 
-Four things are deliberately unfinished behind us. Stage 6 has no HTTP or gRPC
+Five things are deliberately unfinished behind us. Stage 6 has no HTTP or gRPC
 transport, so the receiver takes bytes rather than listening on a socket, and no
 NDJSON source for live demo data. Stage 7 has no validated cipher behind its
 seam and no KMS-backed key provider, and its hostile erasure suite tries every

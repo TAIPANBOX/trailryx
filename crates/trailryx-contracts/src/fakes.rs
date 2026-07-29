@@ -346,8 +346,11 @@ impl AuthProvider for StaticAuth {
         match action {
             Action::ReadMetadata | Action::Query | Action::ProduceEvidence => Decision::Allow,
             // Reading the trail and reading the prompts in it are different
-            // permissions.
-            Action::ReadPayload | Action::Erase | Action::Administer => Decision::Deny,
+            // permissions. So is writing to it: this principal is an auditor,
+            // and an auditor who can also write is not an auditor.
+            Action::ReadPayload | Action::Erase | Action::Administer | Action::Ingest => {
+                Decision::Deny
+            }
         }
     }
 }

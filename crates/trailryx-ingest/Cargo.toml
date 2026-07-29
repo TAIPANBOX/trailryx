@@ -1,0 +1,20 @@
+[package]
+name = "trailryx-ingest"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+description = "The OTLP/HTTP ingest server: a hand-written HTTP/1.1 listener with no TLS and no illusions about it"
+
+[dependencies]
+trailryx-contracts = { path = "../trailryx-contracts" }
+trailryx-otlp = { path = "../trailryx-otlp" }
+trailryx-record = { path = "../trailryx-record" }
+
+[[bin]]
+name = "trailryx-ingest"
+path = "src/main.rs"
+
+[lints]
+workspace = true

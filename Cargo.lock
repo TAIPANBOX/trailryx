@@ -43,6 +43,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "trailryx-ingest"
+version = "0.0.1"
+dependencies = [
+ "trailryx-contracts",
+ "trailryx-otlp",
+ "trailryx-record",
+]
+
+[[package]]
 name = "trailryx-journal"
 version = "0.0.1"
 dependencies = [

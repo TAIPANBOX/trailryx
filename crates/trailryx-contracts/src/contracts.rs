@@ -229,6 +229,14 @@ pub enum Action {
     ProduceEvidence,
     Erase,
     Administer,
+    /// Writing records in. Its own action rather than a reader's or an
+    /// administrator's.
+    ///
+    /// Added when the ingest server needed it, and worth the breaking change:
+    /// the alternative was every agent shipping telemetry holding a permission
+    /// that also lets it erase people, which is not a permission an agent
+    /// should be able to lose control of.
+    Ingest,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
