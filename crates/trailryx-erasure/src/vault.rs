@@ -174,6 +174,23 @@ pub struct Forgotten {
     pub keys_destroyed: u32,
     /// Keys already gone. Erasing twice is not an error and not a lie either.
     pub keys_already_gone: u32,
+    /// Keys whose custodian **scheduled** destruction and has not performed it.
+    ///
+    /// Nonzero means this erasure is not finished. Every real key management
+    /// service schedules: AWS KMS waits 7 to 30 days, GCP Cloud KMS 30 by default,
+    /// and both let an operator cancel. See [`Destroyed::Scheduled`].
+    pub keys_scheduled: u32,
+    /// The latest moment any custodian named, when anything was scheduled.
+    ///
+    /// The latest rather than the earliest: the erasure is done when the last key
+    /// goes, not the first.
+    pub completes_at: Option<Timestamp>,
+    /// Whether an operator could still undo this.
+    ///
+    /// `true` is the fact a controller must not hide from a data subject. The
+    /// payload is unreadable and it is **not erased**, and one API call brings it
+    /// back for up to a month.
+    pub reversible: bool,
     pub manifest: Hash,
     pub manifest_size: u64,
     /// The subject's own key id, which is what an auditor holding the handle
@@ -186,6 +203,17 @@ pub struct Forgotten {
     /// record is findable by a handle holder and useless to everybody else.
     pub tag: Hash,
     pub draft: MetaDraft,
+}
+
+impl Forgotten {
+    /// Whether the erasure is finished, as opposed to promised.
+    ///
+    /// The question a controller answers to a data subject, asked in one place so
+    /// that no call site answers it by looking at `keys_destroyed` and forgetting
+    /// that a scheduled key is still readable to whoever can cancel the schedule.
+    pub fn is_complete(&self) -> bool {
+        self.keys_scheduled == 0
+    }
 }
 
 /// Payload custody: seal, open, attribute, forget.
@@ -391,18 +419,45 @@ impl<O: ObjectStore, K: KeyProvider, A: Aead, S: KeySource> Vault<O, K, A, S> {
 
         let mut destroyed = 0u32;
         let mut already = 0u32;
+        let mut scheduled = 0u32;
+        let mut completes_at: Option<Timestamp> = None;
+        let mut reversible = false;
         let mut entries = Vec::new();
         for key in &keys {
             match self.provider.destroy(*key)? {
                 Destroyed::Now => destroyed += 1,
                 Destroyed::Already => already += 1,
+                Destroyed::Scheduled {
+                    effective_at,
+                    reversible: undoable,
+                } => {
+                    scheduled += 1;
+                    // The latest, because the erasure finishes when the last key
+                    // goes. Taking the earliest would let a controller promise a
+                    // date on which some payloads were still readable.
+                    completes_at = Some(match completes_at {
+                        Some(seen) if seen.as_nanos() >= effective_at.as_nanos() => seen,
+                        _ => effective_at,
+                    });
+                    reversible |= undoable;
+                }
             }
             entries.push(manifest_entry(subject_key, *key));
         }
-        // Every key is gone, so the row is safe to forget. `destroy` is
-        // idempotent, which is what makes the retry after a partial failure
-        // correct rather than merely possible.
-        self.ledger.drop_subject(subject);
+
+        // The row goes only when every key is actually gone.
+        //
+        // `KeyLedger::drop_subject` documents the rule and this is the second time
+        // it has had to be widened. It used to drop the row before the destroy
+        // loop, so a mid-loop failure left surviving keys with nothing recording
+        // that they must die. Now the same reasoning covers a scheduled key: the
+        // custodian has promised and not performed, an operator can still cancel,
+        // and the row is the only thing that will make the follow-up look again. A
+        // store that dropped it here would have no way left to find out whether
+        // the erasure it reported ever happened.
+        if scheduled == 0 {
+            self.ledger.drop_subject(subject);
+        }
 
         // Sorted, so the manifest does not leak the order keys were created in,
         // which is the order the records were written in.
@@ -430,11 +485,20 @@ impl<O: ObjectStore, K: KeyProvider, A: Aead, S: KeySource> Vault<O, K, A, S> {
             }
         }
 
-        let draft = self.erasure_draft(recorded_at, tag, manifest_hash, destroyed + already)?;
+        let draft = self.erasure_draft(
+            recorded_at,
+            tag,
+            manifest_hash,
+            destroyed + already + scheduled,
+            scheduled,
+        )?;
 
         Ok(Forgotten {
             keys_destroyed: destroyed,
             keys_already_gone: already,
+            keys_scheduled: scheduled,
+            completes_at,
+            reversible,
             manifest: manifest_hash,
             manifest_size: manifest.len() as u64,
             subject_key,
@@ -450,6 +514,7 @@ impl<O: ObjectStore, K: KeyProvider, A: Aead, S: KeySource> Vault<O, K, A, S> {
         tag: Hash,
         manifest_hash: Hash,
         keys: u32,
+        scheduled: u32,
     ) -> Result<MetaDraft, VaultError> {
         let agent_id =
             AgentId::parse_strict(format!("agent://{}/trailryx.erasure", self.trust_domain))
@@ -502,17 +567,29 @@ impl<O: ObjectStore, K: KeyProvider, A: Aead, S: KeySource> Vault<O, K, A, S> {
                 memory_ref: Some(tag),
                 ..Basis::default()
             },
-            // Nothing to erase is a real answer and a different one from having
-            // erased something. A controller has to be able to say both.
-            verdict: Some(if keys > 0 {
-                Verdict::Allowed
-            } else {
-                Verdict::NotApplicable
+            // Three answers, and they are three because collapsing any pair of
+            // them would be a lie a controller then repeats to a data subject.
+            //
+            // `Held` is the one that had to be added: a custodian that scheduled
+            // destruction has promised and not performed, so the erasure is
+            // pending, not done. The word already meant this in the record
+            // vocabulary, so nothing about the frozen format changes. Writing
+            // `Allowed` here would have made an unfinished erasure indistinguishable
+            // from a finished one in the trail, which is the trail lying about the
+            // one operation it exists to prove.
+            verdict: Some(match (keys, scheduled) {
+                (0, _) => Verdict::NotApplicable,
+                (_, 0) => Verdict::Allowed,
+                _ => Verdict::Held,
             }),
             error: None,
             latency_micros: None,
             tokens_in: Some(keys),
-            tokens_out: None,
+            // How many of them are only promised. A reader comparing this against
+            // `tokens_in` learns whether the erasure finished without needing to
+            // trust the verdict, and the two cannot disagree silently because a
+            // test compares them.
+            tokens_out: Some(scheduled),
             cost_micros: None,
         })
     }

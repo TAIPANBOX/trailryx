@@ -170,18 +170,79 @@ pub struct KeyId(pub Hash);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Destroyed {
-    /// The key existed and is now gone.
+    /// The key existed and is now gone. Irreversibly.
     Now,
     /// It was already gone. Destroying twice is not an error.
     Already,
+    /// The custodian **scheduled** destruction and has not performed it.
+    ///
+    /// This variant exists because the contract could not be honoured by any
+    /// real key management service without it, and the shortfall was in the
+    /// direction that matters. Both of the two the plan names behave this way:
+    ///
+    /// - **AWS KMS** `ScheduleKeyDeletion` takes a mandatory waiting period of
+    ///   **7 to 30 days**, default 30, and the actual date may be up to 24 hours
+    ///   later than scheduled. During it the key is `Pending deletion` and cannot
+    ///   be used in cryptographic operations. `CancelKeyDeletion` brings it back.
+    /// - **GCP Cloud KMS** `CryptoKeyVersions.destroy` schedules destruction,
+    ///   default 30 days. The version is `scheduled for destruction` and unusable,
+    ///   and `CryptoKeyVersions.restore` brings it back.
+    ///
+    /// Both read 30 July 2026 from the providers' own documentation.
+    ///
+    /// So during the window the payload is **unreadable and not erased**, and the
+    /// difference is not academic: an operator with one API call can undo it for
+    /// up to a month. A store that reported this as erasure would be telling a
+    /// data subject their data is gone while it is one call from coming back,
+    /// which is precisely "erased" quietly meaning "hidden".
+    Scheduled {
+        /// When the custodian says the key material actually goes.
+        ///
+        /// Treat it as the earliest, not the exact moment: AWS documents up to a
+        /// further 24 hours.
+        effective_at: Timestamp,
+        /// Whether the custodian will still undo this.
+        ///
+        /// `true` for both providers above during their window. A provider whose
+        /// scheduling is one-way sets it `false`, and a caller may then treat the
+        /// schedule as a promise rather than as an intention.
+        reversible: bool,
+    },
+}
+
+impl Destroyed {
+    /// Whether the key material is gone for good.
+    ///
+    /// The question a caller actually has, asked once here so that no call site
+    /// answers it by matching on `Now` and forgetting the third variant exists.
+    pub fn is_final(self) -> bool {
+        matches!(self, Self::Now | Self::Already)
+    }
+
+    /// Whether somebody could still bring this key back.
+    pub fn is_reversible(self) -> bool {
+        matches!(
+            self,
+            Self::Scheduled {
+                reversible: true,
+                ..
+            }
+        )
+    }
 }
 
 /// Custody of the keys that make erasure real.
 ///
 /// **Guarantee to preserve:** after [`KeyProvider::destroy`], `unwrap` for that
-/// key fails forever, and a key id is never reissued. Erasure in this system is
-/// the destruction of a key, so a provider that can resurrect one has quietly
-/// turned "erased" into "hidden".
+/// key fails **from that moment on**, and a key id is never reissued. Erasure in
+/// this system is the destruction of a key, so a provider that can resurrect one
+/// has quietly turned "erased" into "hidden".
+///
+/// The guarantee used to say "fails forever", and against a real key management
+/// service that was false: see [`Destroyed::Scheduled`]. What holds universally is
+/// the weaker statement above, and the difference is not swept up: a provider that
+/// only schedules must say so, and it is then the **caller's** duty not to report
+/// erasure as complete. `trailryx_erasure::Vault` does not.
 pub trait KeyProvider {
     /// Wrap a data key under a key-encryption key.
     fn wrap(&mut self, kek: KeyId, dek: &[u8]) -> AdapterResult<Vec<u8>>;

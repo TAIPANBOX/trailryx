@@ -13,7 +13,7 @@
 //! without one is a path nobody checked.
 
 use trailryx_contracts::contracts::{KeyId, KeyProvider, ObjectStore};
-use trailryx_contracts::fakes::{MemoryKeyProvider, MemoryObjectStore};
+use trailryx_contracts::fakes::{MemoryKeyProvider, MemoryObjectStore, SchedulingKeyProvider};
 use trailryx_contracts::ingest::PayloadPart;
 use trailryx_crypto::Sha384;
 use trailryx_erasure::aead::Aead;
@@ -670,4 +670,281 @@ fn two_vaults_erasing_do_not_write_over_each_others_evidence() {
             "a record commits to evidence bytes the store does not hold"
         );
     }
+}
+
+// ---------------------------------------------------------------------------
+// A custodian that schedules, which is every real one
+// ---------------------------------------------------------------------------
+//
+// AWS KMS waits 7 to 30 days before it shreds a key and lets an operator cancel
+// throughout; GCP Cloud KMS waits 30 by default and has a restore. Both read from
+// their own documentation on 30 July 2026. So `destroy` returning "gone" was a
+// shape no production deployment could honour, and the gap was in the direction
+// that matters: the store would have told a data subject their data was gone while
+// it was one API call from coming back, for up to a month.
+//
+// These tests are about that single distinction, and the last one is the point:
+// cancelling a schedule brings the payload back.
+
+type SchedulingVault = Vault<MemoryObjectStore, SchedulingKeyProvider, Sha384Ctr, PredictableKeys>;
+
+/// A window of a thousand nanoseconds. A real one is days; a test needs a number it
+/// can reason about, and the arithmetic is the same either way.
+const WINDOW: u64 = 1_000;
+
+fn scheduling_vault() -> SchedulingVault {
+    Vault::unvalidated(
+        TenantId::parse("acme").unwrap(),
+        "acme.example",
+        MemoryObjectStore::default(),
+        SchedulingKeyProvider::new(NOW, WINDOW),
+        Sha384Ctr,
+        PredictableKeys::new(),
+    )
+}
+
+/// The finding this whole change exists for: a scheduled destruction is not an
+/// erasure, and `forget` must not say it is.
+#[test]
+fn a_scheduled_destruction_is_not_reported_as_a_finished_erasure() {
+    let mut v = scheduling_vault();
+    let handle = subject("s-kms");
+    v.seal(RecordId(1), &parts(), Some(&handle)).unwrap();
+
+    let forgotten = v.forget(&handle, NOW).unwrap();
+
+    assert!(
+        forgotten.keys_scheduled > 0,
+        "the custodian scheduled and the vault did not notice"
+    );
+    assert_eq!(
+        forgotten.keys_destroyed, 0,
+        "nothing was destroyed, only promised"
+    );
+    assert!(
+        !forgotten.is_complete(),
+        "an erasure with a scheduled key is not complete"
+    );
+    assert!(
+        forgotten.reversible,
+        "both named custodians allow a cancel, and hiding that from a controller is the defect"
+    );
+    assert_eq!(
+        forgotten.completes_at,
+        Some(Timestamp(NOW.as_nanos() + WINDOW)),
+        "the caller has to learn when, or it cannot tell anybody"
+    );
+}
+
+/// And the record says so. A trail that recorded a pending erasure as a finished
+/// one would be lying about the single operation it exists to prove.
+#[test]
+fn the_erasure_record_says_held_rather_than_allowed_while_a_key_is_only_scheduled() {
+    let mut v = scheduling_vault();
+    let handle = subject("s-held");
+    v.seal(RecordId(1), &parts(), Some(&handle)).unwrap();
+    let forgotten = v.forget(&handle, NOW).unwrap();
+
+    assert_eq!(
+        forgotten.draft.verdict,
+        Some(trailryx_record::Verdict::Held),
+        "a promised erasure must not be recorded as an allowed one"
+    );
+    // The counts are in the record too, so a reader can reach the same conclusion
+    // without trusting the verdict, and the two cannot drift apart unnoticed.
+    assert_eq!(forgotten.draft.tokens_out, Some(forgotten.keys_scheduled));
+    assert_eq!(
+        forgotten.draft.tokens_in,
+        Some(forgotten.keys_destroyed + forgotten.keys_already_gone + forgotten.keys_scheduled)
+    );
+
+    // Contrast: a custodian that destroys at once records the finished answer.
+    let mut immediate = vault();
+    let other = subject("s-now");
+    immediate.seal(RecordId(1), &parts(), Some(&other)).unwrap();
+    let done = immediate.forget(&other, NOW).unwrap();
+    assert_eq!(done.draft.verdict, Some(trailryx_record::Verdict::Allowed));
+    assert_eq!(done.draft.tokens_out, Some(0));
+    assert!(done.is_complete());
+}
+
+/// The payload is unreadable during the window, which is what both custodians
+/// document and what makes the weaker contract guarantee true.
+#[test]
+fn a_scheduled_key_cannot_be_used_while_the_window_is_open() {
+    let mut v = scheduling_vault();
+    let handle = subject("s-window");
+    let reference = v.seal(RecordId(1), &parts(), Some(&handle)).unwrap();
+    assert!(
+        v.open(RecordId(1), &reference).is_ok(),
+        "sealed and readable to begin with"
+    );
+
+    v.forget(&handle, NOW).unwrap();
+    assert!(
+        v.open(RecordId(1), &reference).is_err(),
+        "a scheduled key must refuse at once, not at the end of the window"
+    );
+}
+
+/// The reason a scheduled destruction is not an erasure, demonstrated rather than
+/// argued: cancel the schedule and the payload comes back.
+///
+/// This is what a controller would be hiding by reporting the erasure as finished,
+/// and it is the exact shape of `CancelKeyDeletion` and `CryptoKeyVersions.restore`.
+#[test]
+fn cancelling_a_schedule_brings_the_payload_back() {
+    let mut v = scheduling_vault();
+    let handle = subject("s-cancel");
+    let reference = v.seal(RecordId(1), &parts(), Some(&handle)).unwrap();
+    let plain = v.open(RecordId(1), &reference).unwrap();
+
+    let forgotten = v.forget(&handle, NOW).unwrap();
+    assert!(forgotten.reversible);
+    assert!(
+        v.open(RecordId(1), &reference).is_err(),
+        "unreadable during the window"
+    );
+
+    // The operator cancels, exactly as either provider's API allows. The key that
+    // was scheduled is the per-record KEK the ledger holds against this subject;
+    // the subject KEK is only what the erasure record's tag is derived from.
+    let key = kek_for_record(&TenantId::parse("acme").unwrap(), RecordId(1));
+    assert!(
+        v.provider_mut().cancel(key),
+        "the custodian should have had a schedule to cancel"
+    );
+
+    assert_eq!(
+        v.open(RecordId(1), &reference).unwrap(),
+        plain,
+        "the payload came back, which is why the window is not an erasure"
+    );
+}
+
+/// Once the window closes the material is gone and there is nothing left to cancel.
+#[test]
+fn when_the_window_closes_the_key_is_gone_for_good() {
+    let mut v = scheduling_vault();
+    let handle = subject("s-elapse");
+    let reference = v.seal(RecordId(1), &parts(), Some(&handle)).unwrap();
+    v.forget(&handle, NOW).unwrap();
+
+    let key = kek_for_record(&TenantId::parse("acme").unwrap(), RecordId(1));
+    let shredded = {
+        let k = v.provider_mut();
+        k.advance_to(Timestamp(NOW.as_nanos() + WINDOW + 1));
+        k.elapse()
+    };
+    assert!(shredded > 0, "the window elapsed and nothing was shredded");
+
+    assert!(!v.provider_mut().cancel(key), "nothing left to cancel");
+    assert!(v.open(RecordId(1), &reference).is_err());
+
+    // And a repeat erasure now reports the finished answer, because it is finished.
+    let again = v.forget(&handle, NOW).unwrap();
+    assert!(again.is_complete(), "{again:?}");
+}
+
+/// An erasure job retries. A custodian that restarted its clock on every retry
+/// would schedule an erasure that never lands, so the schedule has to hold still.
+#[test]
+fn retrying_forget_does_not_push_the_completion_date_out() {
+    let mut v = scheduling_vault();
+    let handle = subject("s-retry");
+    v.seal(RecordId(1), &parts(), Some(&handle)).unwrap();
+
+    let first = v.forget(&handle, NOW).unwrap();
+    v.provider_mut()
+        .advance_to(Timestamp(NOW.as_nanos() + WINDOW / 2));
+    let second = v
+        .forget(&handle, Timestamp(NOW.as_nanos() + WINDOW / 2))
+        .unwrap();
+
+    assert_eq!(
+        first.completes_at, second.completes_at,
+        "the retry moved the date, so the erasure recedes every time it is retried"
+    );
+    assert_eq!(first.keys_scheduled, second.keys_scheduled);
+}
+
+/// The subject's row survives a merely scheduled destruction, because the row is
+/// the only thing that will make a follow-up look again. Dropping it here would
+/// leave the store with no way to find out whether the erasure it reported ever
+/// happened.
+#[test]
+fn the_subject_row_is_kept_while_a_destruction_is_only_promised() {
+    let mut v = scheduling_vault();
+    let handle = subject("s-row");
+    v.seal(RecordId(1), &parts(), Some(&handle)).unwrap();
+    v.seal(RecordId(2), &parts(), Some(&handle)).unwrap();
+
+    let scheduled = v.forget(&handle, NOW).unwrap();
+    // One key per record, both registered against the subject at seal time. The
+    // count is the number of keys that have to die, not the number of subjects.
+    assert_eq!(scheduled.keys_scheduled, 2, "a key per sealed record");
+
+    // The row is still there, so the retry sees the same keys rather than an empty
+    // subject and a "we hold nothing about this person" answer.
+    let retry = v.forget(&handle, NOW).unwrap();
+    assert_eq!(retry.keys_scheduled, scheduled.keys_scheduled);
+    assert_eq!(
+        retry.manifest, scheduled.manifest,
+        "the same keys, so the same manifest"
+    );
+
+    {
+        let k = v.provider_mut();
+        k.advance_to(Timestamp(NOW.as_nanos() + WINDOW + 1));
+        k.elapse();
+    }
+    let done = v.forget(&handle, NOW).unwrap();
+    assert!(done.is_complete());
+    // Now the row may go, and a further erasure finds nothing, which is a real and
+    // different answer.
+    let empty = v.forget(&handle, NOW).unwrap();
+    assert_eq!(empty.keys_destroyed + empty.keys_scheduled, 0);
+    assert_eq!(
+        empty.draft.verdict,
+        Some(trailryx_record::Verdict::NotApplicable),
+        "nothing to erase is its own answer"
+    );
+}
+
+/// A custodian whose scheduling is one way is still not finished, and still says so,
+/// but a controller learns that nobody can undo it.
+#[test]
+fn an_irreversible_schedule_is_still_incomplete_and_says_it_cannot_be_undone() {
+    let mut v = Vault::unvalidated(
+        TenantId::parse("acme").unwrap(),
+        "acme.example",
+        MemoryObjectStore::default(),
+        SchedulingKeyProvider::new(NOW, WINDOW).irreversible(),
+        Sha384Ctr,
+        PredictableKeys::new(),
+    );
+    let handle = subject("s-oneway");
+    v.seal(RecordId(1), &parts(), Some(&handle)).unwrap();
+    let forgotten = v.forget(&handle, NOW).unwrap();
+
+    assert!(!forgotten.is_complete(), "promised is not performed");
+    assert!(
+        !forgotten.reversible,
+        "this custodian will not undo it, and that is worth telling a controller"
+    );
+    assert_eq!(
+        forgotten.draft.verdict,
+        Some(trailryx_record::Verdict::Held)
+    );
+}
+
+/// The contract's own conformance suite, against the scheduling provider. Its
+/// guarantees have to hold for a custodian that schedules, or the suite was only
+/// ever describing the fake that happened to be written first.
+#[test]
+fn the_key_provider_conformance_suite_passes_against_a_scheduling_custodian() {
+    let mut provider = SchedulingKeyProvider::new(NOW, WINDOW);
+    let report = trailryx_contracts::conformance::key_provider(&mut provider);
+    let failures: Vec<_> = report.failures().map(|c| c.name).collect();
+    assert!(failures.is_empty(), "{}: {failures:?}", report.summary());
 }

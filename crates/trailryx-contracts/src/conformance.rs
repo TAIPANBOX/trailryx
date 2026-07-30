@@ -245,12 +245,20 @@ pub fn key_provider<K: KeyProvider>(k: &mut K) -> Report {
     r.check("the key exists before destruction", k.exists(kek), "");
 
     let d1 = k.destroy(kek);
+    // A provider may destroy now or schedule it. Both are acceptable answers and
+    // they are not the same answer, which is the whole point of the third variant:
+    // the suite used to demand `Now` and would have failed every real key
+    // management service, all of which schedule.
     r.check(
         "destroy reports the key was there",
-        d1 == Ok(Destroyed::Now),
-        format!("expected Now, got {d1:?}"),
+        matches!(d1, Ok(Destroyed::Now) | Ok(Destroyed::Scheduled { .. })),
+        format!("expected Now or Scheduled, got {d1:?}"),
     );
+    let scheduled = matches!(d1, Ok(Destroyed::Scheduled { .. }));
 
+    // `exists` answers "can this key still be used", not "has the material been
+    // shredded". A scheduled key is unusable now, so both kinds of provider answer
+    // the same way and the check does not have to branch.
     r.check(
         "the key is gone",
         !k.exists(kek),
@@ -259,17 +267,40 @@ pub fn key_provider<K: KeyProvider>(k: &mut K) -> Report {
 
     let after = k.unwrap(kek, &wrapped);
     r.check(
-        "unwrap fails forever after destruction",
+        "unwrap fails from the moment of destruction",
         after.is_err(),
         "a destroyed key still unwraps: erasure would be a lie",
     );
 
     let d2 = k.destroy(kek);
-    r.check(
-        "destroy is idempotent",
-        d2 == Ok(Destroyed::Already),
-        format!("expected Already, got {d2:?}"),
-    );
+    if scheduled {
+        // A second call must not restart the clock. A provider that pushed the
+        // effective time out on every retry would make an erasure job that retries
+        // an erasure that never lands, and the retry is the normal case.
+        let same = matches!((&d1, &d2), (Ok(a), Ok(b)) if a == b);
+        r.check(
+            "destroying twice reports the same schedule",
+            same,
+            format!("first {d1:?}, then {d2:?}: the schedule moved"),
+        );
+    } else {
+        r.check(
+            "destroy is idempotent",
+            d2 == Ok(Destroyed::Already),
+            format!("expected Already, got {d2:?}"),
+        );
+    }
+
+    // A schedule that a caller cannot place in time is a schedule nobody can act
+    // on: the whole point of the variant is that the caller learns when, and
+    // whether somebody can still undo it.
+    if let Ok(Destroyed::Scheduled { effective_at, .. }) = &d1 {
+        r.check(
+            "a scheduled destruction names a time",
+            effective_at.as_nanos() > 0,
+            "the effective time is the epoch, which no custodian means",
+        );
+    }
 
     // A provider that lets the same id be wrapped again has effectively
     // resurrected the key, and every payload wrapped under it becomes readable.

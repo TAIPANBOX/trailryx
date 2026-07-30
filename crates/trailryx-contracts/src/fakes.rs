@@ -140,6 +140,144 @@ impl KeyProvider for MemoryKeyProvider {
     }
 }
 
+/// A custodian that **schedules** destruction, the way every real one does.
+///
+/// AWS KMS waits 7 to 30 days, GCP Cloud KMS 30 by default, and both let an
+/// operator cancel during the window; see [`Destroyed::Scheduled`] for the
+/// citations. This models that: `destroy` schedules, the key becomes unusable at
+/// once, the material stays until `elapse` is called, and `cancel` brings it back
+/// exactly as `CancelKeyDeletion` and `CryptoKeyVersions.restore` do.
+///
+/// It exists because a seam nobody ran is a seam nobody checked, and because the
+/// interesting behaviour is not the happy path: it is that a caller must not report
+/// erasure while a schedule is open. `trailryx-erasure` has a test that cancels a
+/// schedule and confirms the payload comes back, which is the fact a controller has
+/// to be prevented from hiding.
+#[derive(Debug)]
+pub struct SchedulingKeyProvider {
+    live: BTreeSet<KeyId>,
+    /// Scheduled, with the moment the custodian named. Still holding material.
+    pending: BTreeMap<KeyId, Timestamp>,
+    tombstones: BTreeSet<KeyId>,
+    /// How far ahead this custodian schedules, in nanoseconds. A real one is days;
+    /// a test needs a number it can reason about.
+    window_nanos: u64,
+    /// The custodian's clock, injected, because nothing in this workspace reads
+    /// one for itself.
+    now: Timestamp,
+    /// Whether this custodian will undo a schedule. Both named providers will.
+    reversible: bool,
+}
+
+impl SchedulingKeyProvider {
+    pub fn new(now: Timestamp, window_nanos: u64) -> Self {
+        Self {
+            live: BTreeSet::new(),
+            pending: BTreeMap::new(),
+            tombstones: BTreeSet::new(),
+            window_nanos,
+            now,
+            reversible: true,
+        }
+    }
+
+    /// A custodian whose scheduling is one way, for a caller that wants to know
+    /// the difference matters.
+    pub fn irreversible(mut self) -> Self {
+        self.reversible = false;
+        self
+    }
+
+    pub fn advance_to(&mut self, now: Timestamp) {
+        self.now = now;
+    }
+
+    /// The window closes: everything due is shredded for good.
+    pub fn elapse(&mut self) -> usize {
+        let due: Vec<KeyId> = self
+            .pending
+            .iter()
+            .filter(|(_, at)| at.as_nanos() <= self.now.as_nanos())
+            .map(|(k, _)| *k)
+            .collect();
+        for key in &due {
+            self.pending.remove(key);
+            self.tombstones.insert(*key);
+        }
+        due.len()
+    }
+
+    /// `CancelKeyDeletion`. The key comes back and every payload under it becomes
+    /// readable again, which is the whole reason a scheduled destruction is not an
+    /// erasure.
+    pub fn cancel(&mut self, kek: KeyId) -> bool {
+        if !self.reversible {
+            return false;
+        }
+        if self.pending.remove(&kek).is_some() {
+            self.live.insert(kek);
+            return true;
+        }
+        false
+    }
+
+    pub fn scheduled_count(&self) -> usize {
+        self.pending.len()
+    }
+}
+
+impl KeyProvider for SchedulingKeyProvider {
+    fn wrap(&mut self, kek: KeyId, dek: &[u8]) -> AdapterResult<Vec<u8>> {
+        // A scheduled key is unusable, and a shredded one is gone. Neither may be
+        // wrapped under: doing so would resurrect an id.
+        if self.tombstones.contains(&kek) || self.pending.contains_key(&kek) {
+            return Err(AdapterError::Rejected("key id is destroyed or scheduled"));
+        }
+        self.live.insert(kek);
+        Ok(scramble(kek, dek))
+    }
+
+    fn unwrap(&mut self, kek: KeyId, wrapped: &[u8]) -> AdapterResult<Vec<u8>> {
+        // The material still exists during the window and the custodian still
+        // refuses to use it. That is what both providers document, and it is why
+        // the contract's guarantee is "fails from now on" rather than "forever".
+        if !self.live.contains(&kek) {
+            return Err(AdapterError::Rejected("no such key"));
+        }
+        Ok(scramble(kek, wrapped))
+    }
+
+    fn destroy(&mut self, kek: KeyId) -> AdapterResult<Destroyed> {
+        if self.tombstones.contains(&kek) {
+            return Ok(Destroyed::Already);
+        }
+        // A second call must not move the date. An erasure job retries, and a
+        // custodian that restarted its clock on every retry would schedule an
+        // erasure that never lands.
+        if let Some(at) = self.pending.get(&kek) {
+            return Ok(Destroyed::Scheduled {
+                effective_at: *at,
+                reversible: self.reversible,
+            });
+        }
+        if !self.live.remove(&kek) {
+            return Ok(Destroyed::Already);
+        }
+        let at = Timestamp(self.now.as_nanos().saturating_add(self.window_nanos));
+        self.pending.insert(kek, at);
+        Ok(Destroyed::Scheduled {
+            effective_at: at,
+            reversible: self.reversible,
+        })
+    }
+
+    fn exists(&self, kek: KeyId) -> bool {
+        // "Can this be used", not "has the material been shredded". A scheduled key
+        // answers no, and that is the honest answer to the question asked.
+        self.live.contains(&kek)
+    }
+}
+
 /// Broken on purpose: keeps no tombstone, so wrapping under a destroyed id
 /// brings the key back and every payload under it becomes readable again.
 ///

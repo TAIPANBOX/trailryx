@@ -33,9 +33,18 @@ The guarantees are stated out loud, so a report can name the one it breaks:
   metadata. An input that lands prompt text, a name or any personal data in a
   typed metadata field is a report, and `crates/trailryx-record/src/schema.rs`
   is the table it would breach.
-- **Erasure**: after `forget`, no path recovers the payload. A path that does is a
-  report, and the hostile suite in `crates/trailryx-erasure/tests/` is where a new
-  one belongs.
+- **Erasure**: after a **completed** `forget`, no path recovers the payload. A path
+  that does is a report, and the hostile suite in `crates/trailryx-erasure/tests/`
+  is where a new one belongs.
+
+  "Completed" is load-bearing and was added on 30 July 2026. Every real key
+  custodian schedules destruction rather than performing it: AWS KMS waits 7 to 30
+  days and GCP Cloud KMS 30 by default, and both let an operator cancel throughout.
+  So `Forgotten::is_complete()` can be false, the erasure record says `Held` rather
+  than `Allowed`, and during that window the payload is **unreadable and not
+  erased**. A `forget` that reported a scheduled destruction as a finished one would
+  be a report; so would a path that reads a payload whose key the custodian has
+  already shredded.
 - **The anchor**: a timestamp token in a pack must be about that pack's root. A
   token whose imprint is a different root and which the verifier does not report as
   BROKEN is a report, because the pack would then be describing its own evidence.
@@ -55,6 +64,11 @@ The guarantees are stated out loud, so a report can name the one it breaks:
 
 Stated here so nobody spends their time on it:
 
+- **A cancelled destruction is not a defect in this store.** An operator with the
+  custodian's credentials can undo a scheduled key deletion, and no software here
+  can stop them. What the store must do is never claim the erasure finished while
+  that is possible, and it does not. Making the window shorter, or irreversible, is
+  a key-management policy decision and belongs in the custodian.
 - **The AEAD and the key source shipped in-tree are stand-ins**, and say so:
   `Aead::is_validated()` returns false and `Vault::new` refuses them. A deployment
   is expected to supply a validated implementation behind that seam. Breaking

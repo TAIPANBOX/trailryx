@@ -7,7 +7,7 @@
 ![Stage](https://img.shields.io/badge/stage-9%20of%2013-blue.svg)
 ![Core](https://img.shields.io/badge/core-frozen-success.svg)
 ![Rust](https://img.shields.io/badge/rust-1.85%2B-orange.svg)
-![Tests](https://img.shields.io/badge/tests-837-success.svg)
+![Tests](https://img.shields.io/badge/tests-846-success.svg)
 ![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)
 ![Dependencies](https://img.shields.io/badge/dependencies-0-success.svg)
 ![Unsafe](https://img.shields.io/badge/unsafe-forbidden-success.svg)
@@ -266,7 +266,7 @@ and the proof shapes do not change without a version and a migration.
 ## Try it
 
 ```bash
-cargo test                                    # 837 tests
+cargo test                                    # 846 tests
 cargo run --bin trailryx-sim-run -- --help
 ```
 
@@ -562,6 +562,26 @@ about this person"), and three of four payloads stayed readable with no key id l
 anywhere to say they had to die. Destroy first, drop the row only when every
 destroy succeeded; `destroy` is already idempotent, which is what makes the retry
 correct rather than merely possible.
+
+That reasoning had to be widened once more, on 30 July 2026, and the second time it
+was not a bug in the code but a shape the contract could not have. **No real key
+custodian destroys a key when asked.** AWS KMS `ScheduleKeyDeletion` waits 7 to 30
+days, GCP Cloud KMS 30 by default, and both let an operator cancel throughout the
+window; the key is unusable meanwhile, and the material is still there. Both read
+from the providers' own documentation.
+
+So `Destroyed` had exactly two answers and both meant "gone", which no production
+deployment could honour. There is now a third: **the custodian promised**. The store
+refuses to report that as an erasure. `Forgotten::is_complete()` is false, the
+erasure record's verdict is `Held` rather than `Allowed` (a word the record
+vocabulary already had, so nothing about the frozen format changed), the subject's
+ledger row is kept because it is the only thing that will make a follow-up look
+again, and a controller learns both the date and whether anyone can still undo it.
+
+The test that makes this concrete does not argue it: it cancels the schedule and the
+payload comes back. Reporting the window as an erasure would have told a data
+subject their data was gone while it was one API call from returning, for up to a
+month, which is precisely "erased" quietly meaning "hidden".
 
 **A segment naming a shard the pack did not list was verified by nothing.** The
 verifier walks down from `pack.shards`, and nothing asserted that every section
@@ -912,7 +932,7 @@ that is the part an auditor cannot do without the pack. It then says out loud th
 it did not check the authority's signature, and prints the command that does:
 
 ```
-[note]  anchor: "digicert" stamped this root at 1785421800, token 738 bytes, nonce 837344827
+[note]  anchor: "digicert" stamped this root at 1785421800, token 738 bytes, nonce 846344827
 [weak]  anchor-signature: this verifier checked that "digicert"'s token is over this
         root and did not check the authority's signature; verify it with
         `openssl ts -verify` against their published certificate
@@ -1130,7 +1150,8 @@ acknowledged line and the assembler mints a fresh identity, which is why it
 declares at-least-once delivery; it does not follow a rotation, and it refuses a
 gzipped, zstd-compressed or length-prefixed export by naming the collector setting
 that produced it rather than half-reading it. Stage 7 has no validated cipher behind its
-seam and no KMS-backed key provider, and its hostile erasure suite tries every
+seam, and its key seam now models a real custodian's scheduling window even though
+no cloud KMS adapter ships, and its hostile erasure suite tries every
 recovery path that exists: caches, projections, exports and backups each arrive
 with their own attempt, or they arrive unchecked. Stage 8 is done: the RFC 3161 anchor, the
 compliance mapping, and reproducible builds with a published seed corpus. Stage 9 has real Parquet lists now; what
