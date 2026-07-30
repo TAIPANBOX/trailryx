@@ -15,11 +15,17 @@ rust-version.workspace = true
 # of that boundary: every other crate has zero third-party dependencies, and the
 # core builds and passes its tests with this crate absent.
 [dependencies]
+async-trait = "0.1"
 datafusion = "54"
 trailryx-index = { path = "../trailryx-index" }
 trailryx-projection = { path = "../trailryx-projection" }
 trailryx-record = { path = "../trailryx-record" }
 trailryx-store = { path = "../trailryx-store" }
+
+[dev-dependencies]
+tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
+trailryx-crypto = { path = "../trailryx-crypto" }
+trailryx-journal = { path = "../trailryx-journal" }
 
 [lints]
 workspace = true

@@ -107,6 +107,16 @@ pub fn project_columns(segments: &[&Segment]) -> Vec<Column> {
 /// Every entry is a typed field, a validated token, an enum name or a hash.
 /// There is no column that could hold a sentence, which is checked by a test
 /// rather than left to whoever adds the next one.
+/// The columns for a set of records and their chain links.
+///
+/// Public because the SQL facade projects the records an index returned rather than
+/// a whole segment, and the column list has to have exactly one home: a second copy
+/// of it in the facade would drift, and a drifted projection is a table whose columns
+/// mean something different from the file's.
+pub fn columns_from_records(rows: &[(Record, Hash)]) -> Vec<Column> {
+    build_columns(rows)
+}
+
 fn build_columns(rows: &[(Record, Hash)]) -> Vec<Column> {
     let text = |f: &dyn Fn(&Record) -> String| -> Values {
         Values::String(rows.iter().map(|(r, _)| Some(f(r))).collect())

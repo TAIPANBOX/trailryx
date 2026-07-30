@@ -7,7 +7,7 @@
 ![Stage](https://img.shields.io/badge/stage-9%20of%2013-blue.svg)
 ![Core](https://img.shields.io/badge/core-frozen-success.svg)
 ![Rust](https://img.shields.io/badge/rust-1.85%2B-orange.svg)
-![Tests](https://img.shields.io/badge/tests-857-success.svg)
+![Tests](https://img.shields.io/badge/tests-870-success.svg)
 ![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)
 ![Dependencies](https://img.shields.io/badge/deps-0%20in%20the%20core-success.svg)
 ![Unsafe](https://img.shields.io/badge/unsafe-forbidden-success.svg)
@@ -259,6 +259,7 @@ and the proof shapes do not change without a version and a migration.
 | `trailryx-anchor` | RFC 3161 timestamping: TSP, the CMS subset, and RSA over Montgomery arithmetic | 52 |
 | `trailryx-ingest` | the OTLP/HTTP server: HTTP/1.1, gzip, bearer auth, all hand-written | 119 |
 | `trailryx-compliance` | a versioned map from what is proved to what a framework asks, and what it does not | 12 |
+| `trailryx-sql` | the SQL facade: DataFusion over the projections, predicates pushed into the index. **The one crate with third-party dependencies** | 17 |
 | `trailryx-demo` | the eight acceptance steps, and a reader for a collector's file | - |
 
 **Zero third-party dependencies in every crate above.** `unsafe` forbidden at the
@@ -284,7 +285,7 @@ thing an auditor reads.
 ## Try it
 
 ```bash
-cargo test                                    # 857 tests
+cargo test                                    # 870 tests
 cargo run --bin trailryx-sim-run -- --help
 ```
 
@@ -317,6 +318,45 @@ digest worth anything: it is only meaningful published next to a toolchain versi
 and a target triple.
 
 ## The export has to be readable without us
+
+## SQL that either proves or says it did not
+
+```sql
+SELECT * FROM records WHERE run_id = 'run-b';        -- proof: full
+SELECT * FROM records WHERE severity = 'error';      -- proof: partial, and it says why
+```
+
+`docs/planning/trailryx-architecture.md` §3.2 is one sentence: SQL does not become a
+hole in the proof model, because it either proves or honestly says it did not. A
+predicate on one of the five provable dimensions becomes the sorted dimension of an
+authenticated index range and the answer carries a completeness proof. Anything else
+is still applied, so the rows are right, and the answer is marked **partial with the
+reason named**.
+
+The classification lives in a module that **knows nothing about DataFusion**, because
+it is the part that decides whether an answer is provable: it has to be testable with
+no async runtime, no session and no planner, and it has to survive the engine changing
+its expression type.
+
+Two things the tests found, both of which would have been quiet lies:
+
+**A facade must never answer `Unsupported` to `supports_filters_pushdown`.**
+DataFusion does not hand an unsupported filter to the scan at all, so the facade never
+learns the predicate existed and reports a **full** proof for a query it saw only part
+of. `severity = 'error'` came back marked fully provable until a test asked. Everything
+we cannot prove exactly is now `Inexact`: the engine re-checks it, which costs a
+redundant comparison and buys the ability to tell the truth.
+
+**Two bounds on the same column are one range, not two rivals.** DataFusion rewrites
+`BETWEEN` into `>= AND <=`, and reading the second as a competing dimension made the
+most ordinary time-range query report partial. A `partial` that fires on ordinary
+queries teaches a reader that partial means nothing in particular, which is worse than
+no proof at all.
+
+`INSERT` is not on offer, and the test asserts the property that matters: no write
+**completes**. DataFusion plans the statement happily; the refusal comes at execution.
+An earlier version of that test checked only that planning failed and was itself
+wrong.
 
 ## Two verifiers, so the format is what is proved
 
@@ -968,7 +1008,7 @@ that is the part an auditor cannot do without the pack. It then says out loud th
 it did not check the authority's signature, and prints the command that does:
 
 ```
-[note]  anchor: "digicert" stamped this root at 1785421800, token 738 bytes, nonce 857344827
+[note]  anchor: "digicert" stamped this root at 1785421800, token 738 bytes, nonce 870344827
 [weak]  anchor-signature: this verifier checked that "digicert"'s token is over this
         root and did not check the authority's signature; verify it with
         `openssl ts -verify` against their published certificate

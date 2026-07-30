@@ -23,4 +23,4 @@ pub mod projection;
 pub mod thrift;
 
 pub use parquet::{Column, ColumnType, Values, WriteError};
-pub use projection::{Projection, SCHEMA_VERSION, project, project_columns};
+pub use projection::{Projection, SCHEMA_VERSION, columns_from_records, project, project_columns};

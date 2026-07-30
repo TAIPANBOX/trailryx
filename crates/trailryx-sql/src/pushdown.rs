@@ -59,6 +59,13 @@ pub enum Predicate {
     /// Carried rather than discarded so the answer can name it. A predicate the
     /// store cannot see is exactly the thing a partial proof exists to disclose.
     Opaque(String),
+    /// A bound that was folded into another predicate's range on the same column.
+    ///
+    /// Kept as an entry rather than removed so the placements a caller gets back line
+    /// up one to one with the filters it passed in. It costs no proof: the bound was
+    /// taken into account, and calling it unproved would report a partial answer for a
+    /// query that was answered whole.
+    Absorbed(String),
 }
 
 impl Predicate {
@@ -130,6 +137,14 @@ impl Plan {
 /// and stated: taking whichever arrived first would make the provability of an
 /// answer depend on the order somebody typed a `WHERE` clause.
 pub fn plan(predicates: &[Predicate], fallback: Dimension) -> Plan {
+    // Two bounds on the SAME column are one range, not two rivals.
+    //
+    // DataFusion rewrites `x BETWEEN a AND b` into `x >= a AND x <= b`, which arrives
+    // as two predicates. Reading the second as a competing dimension made the most
+    // ordinary time-range query report a partial proof, which is worse than useless:
+    // it teaches a reader that partial means nothing in particular.
+    let predicates = &merge_bounds(predicates);
+
     let chosen = predicates
         .iter()
         .position(|p| matches!(p, Predicate::Equals { .. }) && p.dimension().is_some())
@@ -182,6 +197,8 @@ pub fn plan(predicates: &[Predicate], fallback: Dimension) -> Plan {
                 placements.push(Placement::Engine);
                 unproved.push(text.clone());
             }
+            // Folded into the chosen range, so it is accounted for and costs nothing.
+            Predicate::Absorbed(_) => placements.push(Placement::Indexed),
         }
     }
 
@@ -190,6 +207,59 @@ pub fn plan(predicates: &[Predicate], fallback: Dimension) -> Plan {
         placements,
         unproved,
     }
+}
+
+/// Combine same-column range bounds, keeping one entry per input so the caller's
+/// placements still line up with the filters it was given.
+///
+/// The merged entry sits at the position of the first bound and the later ones become
+/// `Absorbed`, which is `Indexed` for the purpose of the proof: they were taken into
+/// account, and pretending otherwise would report a partial proof for a query that
+/// was fully answered.
+fn merge_bounds(predicates: &[Predicate]) -> Vec<Predicate> {
+    let mut out: Vec<Predicate> = predicates.to_vec();
+    let mut i = 0;
+    while i < out.len() {
+        let Predicate::Between { column, .. } = &out[i] else {
+            i += 1;
+            continue;
+        };
+        let column = column.clone();
+        let mut j = i + 1;
+        while j < out.len() {
+            let combine = matches!(
+                &out[j],
+                Predicate::Between { column: other, .. } if *other == column
+            );
+            if !combine {
+                j += 1;
+                continue;
+            }
+            let Predicate::Between { lo, hi, .. } = out.remove(j) else {
+                unreachable!("checked immediately above")
+            };
+            if let Predicate::Between {
+                lo: into_lo,
+                hi: into_hi,
+                ..
+            } = &mut out[i]
+            {
+                // The intersection: the higher lower bound and the lower upper bound.
+                // Byte order is value order on every provable dimension, which is why
+                // a byte comparison is the right comparison here.
+                if lo > *into_lo {
+                    *into_lo = lo;
+                }
+                if hi < *into_hi {
+                    *into_hi = hi;
+                }
+            }
+            out.insert(j, Predicate::Absorbed(column.clone()));
+            j += 1;
+        }
+        i += 1;
+    }
+    out
 }
 
 #[cfg(test)]

@@ -2865,8 +2865,12 @@ version = "0.0.1"
 name = "trailryx-sql"
 version = "0.0.1"
 dependencies = [
+ "async-trait",
  "datafusion",
+ "tokio",
+ "trailryx-crypto",
  "trailryx-index",
+ "trailryx-journal",
  "trailryx-projection",
  "trailryx-record",
  "trailryx-store",

@@ -103,6 +103,63 @@ impl Dimension {
         nanos.to_be_bytes().to_vec()
     }
 
+    /// The index key for a value as a **reader** sees it, rendered as text.
+    ///
+    /// This exists for the SQL facade, and it exists here rather than there for one
+    /// reason: a key derivation that is written twice is a key derivation that will
+    /// drift. If the facade computed a key itself and got one byte different, its
+    /// range would miss records the index holds and the completeness proof would be
+    /// about a range nobody asked for. So every key comes from this file.
+    ///
+    /// The text form is the projection's, because the projection is what a reader
+    /// queries: a record id is 32 hex characters, an event type is its name.
+    /// `None` means the literal does not name a value on this dimension, which the
+    /// caller must treat as "not provable" rather than as an empty range.
+    pub fn key_from_text(self, text: &str) -> Option<Vec<u8>> {
+        Some(match self {
+            Self::RecordId => {
+                // 32 hex characters, as `record_id` is projected. A shorter or
+                // longer literal is not a record id, and padding one would build a
+                // range around a value nobody meant.
+                if text.len() != 32 || !text.bytes().all(|b| b.is_ascii_hexdigit()) {
+                    return None;
+                }
+                let mut out = Vec::with_capacity(16);
+                for i in (0..32).step_by(2) {
+                    out.push(u8::from_str_radix(&text[i..i + 2], 16).ok()?);
+                }
+                out
+            }
+            Self::RecordedAt => text.parse::<u64>().ok()?.to_be_bytes().to_vec(),
+            Self::AgentId | Self::RunId => text.as_bytes().to_vec(),
+            Self::EventType => {
+                let event = EventType::ALL.iter().find(|e| e.as_str() == text)?;
+                vec![event_code(*event)]
+            }
+        })
+    }
+
+    /// The same, for a literal that arrived as an integer rather than as text.
+    ///
+    /// Only the numeric dimension has one. A SQL comparison of `run_id` against a
+    /// number is a comparison this store cannot prove, and answering it with a key
+    /// derived from a rendering would be answering a different question.
+    pub fn key_from_i64(self, value: i64) -> Option<Vec<u8>> {
+        match self {
+            Self::RecordedAt => u64::try_from(value).ok().map(|v| v.to_be_bytes().to_vec()),
+            Self::EventType => {
+                let code = u8::try_from(value).ok()?;
+                // Only a code that names an event type. A raw byte nobody defined
+                // would build a range over nothing while looking like a filter.
+                EventType::ALL
+                    .iter()
+                    .any(|e| event_code(*e) == code)
+                    .then_some(vec![code])
+            }
+            _ => None,
+        }
+    }
+
     pub fn id_key(id: trailryx_record::RecordId) -> Vec<u8> {
         id.0.to_be_bytes().to_vec()
     }
@@ -124,6 +181,89 @@ fn event_code(e: EventType) -> u8 {
         EventType::RunCompleted => 8,
         EventType::Erasure => 9,
         EventType::StoreEvent => 10,
+    }
+}
+
+#[cfg(test)]
+mod key_from_literal_tests {
+    use super::*;
+    use trailryx_record::{RecordId, Timestamp};
+
+    /// The property the function exists for: a key built from a reader's literal
+    /// must be byte-identical to the key built from the record. Anything else and a
+    /// range misses records the index holds while the proof says it was complete.
+    #[test]
+    fn a_key_from_text_equals_the_key_from_the_record() {
+        let id = RecordId(0x0123_4567_89ab_cdef_0011_2233_4455_6677);
+        assert_eq!(
+            Dimension::RecordId.key_from_text("0123456789abcdef0011223344556677"),
+            Some(Dimension::id_key(id))
+        );
+        assert_eq!(
+            Dimension::RecordedAt.key_from_text("1700000000000000000"),
+            Some(Dimension::time_key(
+                Timestamp(1_700_000_000_000_000_000).as_nanos()
+            ))
+        );
+        assert_eq!(
+            Dimension::EventType.key_from_text("model_call"),
+            Some(vec![event_code(EventType::ModelCall)])
+        );
+        assert_eq!(
+            Dimension::RunId.key_from_text("run-a"),
+            Some(b"run-a".to_vec())
+        );
+    }
+
+    /// A literal that does not name a value must be `None`, never a padded or
+    /// truncated key. A key built around a value nobody meant is a range whose
+    /// completeness proof is about the wrong question.
+    #[test]
+    fn a_literal_that_names_nothing_is_refused_rather_than_coerced() {
+        for text in [
+            "",
+            "0123",
+            "zzzz456789abcdef0011223344556677",
+            "0123456789abcdef00112233445566778899",
+        ] {
+            assert_eq!(
+                Dimension::RecordId.key_from_text(text),
+                None,
+                "{text:?} is not a record id"
+            );
+        }
+        assert_eq!(Dimension::RecordedAt.key_from_text("-1"), None);
+        assert_eq!(Dimension::RecordedAt.key_from_text("not a number"), None);
+        assert_eq!(Dimension::EventType.key_from_text("no_such_event"), None);
+    }
+
+    #[test]
+    fn an_integer_literal_resolves_only_where_the_dimension_is_numeric() {
+        assert_eq!(
+            Dimension::RecordedAt.key_from_i64(1_700_000_000_000_000_000),
+            Some(1_700_000_000_000_000_000u64.to_be_bytes().to_vec())
+        );
+        assert_eq!(Dimension::RecordedAt.key_from_i64(-1), None);
+        // An event code nobody defined is not a filter, it is a range over nothing.
+        assert_eq!(Dimension::EventType.key_from_i64(2), Some(vec![2]));
+        assert_eq!(Dimension::EventType.key_from_i64(200), None);
+        assert_eq!(Dimension::RunId.key_from_i64(5), None);
+        assert_eq!(Dimension::AgentId.key_from_i64(5), None);
+        assert_eq!(Dimension::RecordId.key_from_i64(5), None);
+    }
+
+    /// Every event type must be reachable by name, or a query on one of them would
+    /// silently be unprovable.
+    #[test]
+    fn every_event_type_resolves_by_its_own_name() {
+        for event in EventType::ALL {
+            assert_eq!(
+                Dimension::EventType.key_from_text(event.as_str()),
+                Some(vec![event_code(*event)]),
+                "{} did not resolve",
+                event.as_str()
+            );
+        }
     }
 }
 

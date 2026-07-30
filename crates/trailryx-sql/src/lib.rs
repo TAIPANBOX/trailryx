@@ -47,3 +47,4 @@
 //! and nowhere else.
 
 pub mod pushdown;
+pub mod table;
