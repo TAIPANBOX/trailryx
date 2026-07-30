@@ -24,9 +24,15 @@
 //! - **No chunked bodies.** `Transfer-Encoding` in any form is 501, which
 //!   deletes the request-smuggling family rather than defending against it. No
 //!   chunk parser, no chunk extensions, no trailer section.
-//! - **No JSON.** `application/json` is 415. Serving it would mean a second
-//!   OTLP decoder, and a second decoder at a trust boundary is a second thing
-//!   that can be wrong differently from the first.
+//! - **No JSON.** `application/json` is 415, still, and the reason has changed.
+//!   It used to be that serving JSON would mean a second OTLP decoder, and a
+//!   second decoder at a trust boundary is a second thing that can be wrong
+//!   differently from the first. That decoder now exists: `trailryx_otlp::jsonl`
+//!   reads a collector's exported file. What has not changed is the decision to
+//!   keep it off *this* surface, which is the one exposed to the network, and the
+//!   two decoders are pinned to agree by `trailryx-otlp/tests/differential.rs`
+//!   rather than by hoping. A file an operator hands over is a different
+//!   transport, not a wider network surface.
 //! - **No metrics and no logs.** `/v1/metrics` and `/v1/logs` are 404. This
 //!   store records what agents did.
 //! - **No pipelining and no response compression.**

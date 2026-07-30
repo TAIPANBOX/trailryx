@@ -26,5 +26,12 @@ trailryx-verify = { path = "../trailryx-verify" }
 name = "trailryx-demo"
 path = "src/main.rs"
 
+# A file of OTLP/JSON lines in, records out. Its own binary rather than a flag on
+# the demo: the demo is the acceptance run and must not grow a mode that skips
+# most of it.
+[[bin]]
+name = "trailryx-jsonl"
+path = "src/jsonl_main.rs"
+
 [lints]
 workspace = true

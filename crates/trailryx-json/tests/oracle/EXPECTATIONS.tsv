@@ -1,0 +1,227 @@
+# What trailryx-json is expected to do with each corpus case.
+# Columns: name, trailryx_verdict, reason. Lines beginning with # are comments.
+# Verdicts: accept, reject_syntax, reject_limit, reject_encoding.
+# A reason containing UNSURE is an open question for the implementation pass, not a claim.
+y_structure_lonely_true	accept	RFC 8259 section 2: a JSON text is any value, and validate accepts a bare top-level scalar
+y_structure_lonely_false	accept	a bare top-level scalar is a JSON text
+y_structure_lonely_null	accept	a bare top-level scalar is a JSON text
+y_structure_lonely_int	accept	a bare top-level scalar is a JSON text
+y_structure_lonely_negative_real	accept	minus, int, frac: the whole number grammar in five bytes
+y_structure_lonely_string	accept	a bare top-level scalar is a JSON text
+y_structure_empty_array	accept	one container, no members
+y_structure_empty_object	accept	one container, no members
+y_structure_array_of_one_object	accept	two containers, well within max_depth 25
+y_structure_object_of_one_array	accept	two containers, three elements
+y_structure_object_of_object_of_array	accept	four containers, no member name repeated in the same object
+y_structure_array_of_every_scalar	accept	all four scalar kinds in one array
+y_structure_nested_25_deep	accept	exactly max_depth 25, the deepest nesting the reader admits
+y_structure_array_1000_elements	accept	there is no bound on elements in one array; only objects have a member cap
+y_structure_object_256_members	accept	exactly max_keys_per_object 256, and the duplicate vector holds all of them
+i_structure_nested_26_deep	accept	within max_depth, which is a backstop at 32 and no longer a parity device: the wire/JSON depth parity moved to otlpjson, where it is counted in OTLP message levels
+i_structure_nested_33_deep	reject_limit	one container past max_depth 32
+i_structure_nested_1000_deep	reject_limit	max_depth 25, refused at the twenty-sixth bracket rather than at the end
+i_structure_nested_100000_deep	reject_limit	max_depth 25, and the refusal costs no stack because skipping is iterative
+i_structure_object_257_members	reject_limit	the 257th member passes max_keys_per_object 256
+n_structure_100000_opening_brackets	reject_limit	depth is reached at the twenty-sixth bracket, long before the missing close, so this is a bound and not a syntax error
+n_structure_alternating_nesting_unclosed	reject_limit	each [{"": repeat opens two containers, so max_depth 25 is passed at the thirteenth of fifty
+n_structure_open_array	reject_syntax	the document ends where an element or a close belongs
+n_structure_open_object	reject_syntax	the document ends where a member name or a close belongs
+n_structure_open_object_after_name	reject_syntax	the document ends where a colon belongs
+n_structure_open_object_after_colon	reject_syntax	the document ends where a value belongs
+n_structure_open_array_after_value	reject_syntax	the document ends where a comma or a close belongs
+n_structure_open_array_nested	reject_syntax	the inner array closed, the outer one did not
+n_structure_close_unopened_array	reject_syntax	] cannot start a value
+n_structure_close_unopened_object	reject_syntax	} cannot start a value
+n_structure_mismatched_brackets	reject_syntax	} cannot close the array that [ opened
+n_structure_array_trailing_comma	reject_syntax	TrailingComma: a comma where a value belongs
+n_structure_object_trailing_comma	reject_syntax	TrailingComma: a comma where a member name belongs
+n_structure_array_double_comma	reject_syntax	the second comma sits where a value belongs
+n_structure_array_comma_only	reject_syntax	a comma with nothing either side of it
+n_structure_array_leading_comma	reject_syntax	a leading comma is distinguishable from a separating one because the frame has seen nothing yet
+n_structure_object_leading_comma	reject_syntax	a leading comma is distinguishable from a separating one because the frame has seen nothing yet
+n_structure_object_comma_where_value_belongs	reject_syntax	the member has a colon and then a comma instead of a value
+n_structure_object_missing_colon	reject_syntax	ExpectedColon: a name then a value with no colon between them
+n_structure_object_double_colon	reject_syntax	ExpectedColon: the second colon is where a value belongs
+n_structure_object_comma_for_colon	reject_syntax	ExpectedColon: a comma cannot separate a name from its value
+n_structure_object_colon_before_name	reject_syntax	ExpectedName: a colon cannot start a member
+n_structure_object_number_key	reject_syntax	ExpectedName: a member name must be a string
+n_structure_object_unquoted_key	reject_syntax	ExpectedName: a bare word is not a string
+n_structure_object_extra_content	reject_syntax	TrailingContent: the second object is content after a complete value
+n_structure_two_bare_values	reject_syntax	TrailingContent: two values on one line, which is how a synthetic record gets appended to a real one
+n_structure_two_objects_one_line	reject_syntax	TrailingContent: two values on one line
+n_structure_two_arrays_no_space	reject_syntax	TrailingContent: two values on one line
+n_structure_trailing_nul	reject_syntax	TrailingContent: a trailing NUL is content, per the Syntax::TrailingContent doc
+n_structure_leading_nul	reject_syntax	UnexpectedByte: a NUL is valid UTF-8, so this is a syntax refusal and not an encoding one, and it cannot start a value
+n_structure_empty_document	reject_syntax	the bytes end where a value belongs; the framer skips a blank line and it never reaches validate, so this case only arises when validate is called directly
+n_structure_only_whitespace	reject_syntax	whitespace and then the end, where a value belongs; a spaces-only line is blank to the framer and never reaches validate
+n_structure_single_comma	reject_syntax	a comma cannot start a value
+n_structure_single_colon	reject_syntax	a colon cannot start a value
+n_structure_array_colon_for_comma	reject_syntax	a colon cannot separate array elements
+n_structure_line_comment_after_value	reject_syntax	TrailingContent: JSON has no comments, so // is content after the value
+n_structure_block_comment_before_value	reject_syntax	UnexpectedByte: JSON has no comments, so / cannot start a value
+n_structure_single_star	reject_syntax	UnexpectedByte: * cannot start a value
+n_structure_bare_word	reject_syntax	BadLiteral: not true, false or null
+n_structure_true_with_trailing_letters	reject_syntax	reject either as BadLiteral or as TrailingContent depending on whether the literal scanner demands a delimiter; both are reject_syntax
+n_structure_capital_true	reject_syntax	UnexpectedByte: the literals are lowercase only
+n_structure_capital_null	reject_syntax	UnexpectedByte: the literals are lowercase only
+y_number_zero	accept	int is 0 or a nonzero digit and more digits
+y_number_negative_zero	accept	minus zero is in the grammar, and it stays the two bytes the producer wrote
+y_number_negative_int	accept	minus and digits
+y_number_fraction_leading_zero	accept	a leading zero is legal before the decimal point, and only there
+y_number_zero_exponent	accept	0e1 is grammar-conformant even though the value is zero
+y_number_zero_exponent_plus	accept	an explicit plus in the exponent is legal; only a leading plus on the number is not
+y_number_capital_exponent	accept	E and e are the same token
+y_number_exponent_leading_zero	accept	the exponent is one or more digits with no leading-zero rule
+y_number_zero_capital_exponent_zero	accept	zero mantissa and zero exponent, both legal
+y_number_real_exponent	accept	int, frac and exp together
+y_number_real_negative_exponent	accept	a minus in the exponent is legal
+y_number_padded_by_whitespace	accept	spaces around a value are whitespace between tokens
+y_number_i64_max	accept	19 digits, well inside max_number_bytes 1024
+y_number_i64_min	accept	the value converts exactly through as_i64 because the digits were never handed to an f64
+y_number_u64_max	accept	20 digits, and u64 range is checked on demand rather than at parse
+y_number_smallest_normal_double	accept	kept as digits; the subnormal boundary that hung PHP is a conversion question and this reader does not convert
+y_number_more_precision_than_double	accept	Number holds the producer's digits, so nothing rounds on the way in
+y_number_nanosecond_timestamp	accept	19 digits, the widest timestamp OTLP produces
+i_number_i64_max_plus_one	accept	grammar-conformant and 19 bytes; as_i64 failing later is a caller's error, not a parse error
+i_number_u64_max_plus_one	accept	grammar-conformant and 20 bytes; the range check happens in as_u64, on demand
+i_number_huge_positive_exponent	accept	grammar-conformant and 5 bytes; as_f64 returning infinity is the caller's problem and the digits are still exact
+i_number_huge_negative_exponent	accept	grammar-conformant and 6 bytes; underflow to zero happens only if someone asks for an f64
+i_number_real_underflow	accept	grammar-conformant and 12 bytes
+i_number_exponent_expansion	accept	Resolved: the literal is 20 bytes so no length bound touches it, and the grammar accepts it. The exponent-expansion attack is defeated one layer later, where Number converts by checked integer arithmetic with the exponent clamped, so as_u64 and as_f64_finite both return None within twenty multiplications. The lib.rs doc that claimed the length bound refused it has been corrected.
+i_number_1024_digit_integer	accept	exactly max_number_bytes 1024
+i_number_1025_digit_integer	reject_limit	1025 bytes passes max_number_bytes 1024
+i_number_5000_digit_integer	reject_limit	5000 bytes passes max_number_bytes 1024, and this is the case CPython also refuses, for its own 4300-digit reason
+i_number_5000_digit_fraction	reject_limit	5002 bytes of literal; the bound is on the literal and does not care that a fraction converts where an integer of the same length does not
+n_number_leading_zero	reject_syntax	BadNumber: int is 0 or a nonzero digit followed by digits, so 01 is two tokens
+n_number_negative_leading_zero	reject_syntax	BadNumber: the leading-zero rule applies after the minus too
+n_number_double_zero	reject_syntax	BadNumber: 00 is two tokens
+n_number_leading_zero_with_exponent	reject_syntax	BadNumber: the leading zero is refused before the exponent is even read
+n_number_leading_plus	reject_syntax	BadNumber: only a minus may lead, and str::parse would have accepted this
+n_number_bare_fraction	reject_syntax	BadNumber: int is not optional, and str::parse would have accepted this
+n_number_trailing_dot	reject_syntax	BadNumber: frac needs at least one digit, and str::parse would have accepted this
+n_number_dot_before_exponent	reject_syntax	BadNumber: frac needs at least one digit before the exponent
+n_number_dot_only	reject_syntax	BadNumber: a bare dot is not a number
+n_number_minus_only	reject_syntax	BadNumber: a bare minus is not a number
+n_number_double_minus	reject_syntax	BadNumber: one minus, at the front
+n_number_exponent_no_digits	reject_syntax	BadNumber: exp needs at least one digit
+n_number_exponent_plus_no_digits	reject_syntax	BadNumber: exp needs at least one digit after the sign
+n_number_exponent_minus_no_digits	reject_syntax	BadNumber: exp needs at least one digit after the sign
+n_number_bare_exponent	reject_syntax	UnexpectedByte: e cannot start a value
+n_number_double_exponent	reject_syntax	BadNumber: one exponent per number
+n_number_trailing_plus	reject_syntax	BadNumber: a trailing plus is not part of any number
+n_number_double_dot	reject_syntax	BadNumber: one decimal point per number
+n_number_trailing_letter	reject_syntax	BadNumber: f is not a suffix JSON has
+n_number_hex_literal	reject_syntax	BadNumber: JSON has no hex literals, and str::parse::<i64> rejects this but many hand-rolled scanners do not
+n_number_digit_separator	reject_syntax	BadNumber: JSON has no digit separator, unlike Rust, Python and JavaScript literals
+n_number_space_inside	reject_syntax	the space ends the number and 000 is then a second value in the array with no comma
+n_number_inf	reject_syntax	BadNumber: Inf is not a JSON literal
+n_number_infinity	reject_syntax	BadNumber, and a declared divergence: CPython accepts Infinity, we do not, because it is not JSON
+n_number_negative_infinity	reject_syntax	BadNumber, and a declared divergence: CPython accepts -Infinity, we do not
+n_number_nan	reject_syntax	BadNumber, and a declared divergence: CPython accepts NaN, we do not, and str::parse::<f64> would have accepted it too
+n_number_negative_nan	reject_syntax	BadNumber: not a literal any parser in the comparison set accepts
+n_number_infinity_as_object_value	reject_syntax	BadNumber: the divergence is refused wherever a value belongs, not only at the top level
+y_string_simple	accept	three unescaped characters between quotes
+y_string_empty	accept	the empty string is a string
+y_string_all_simple_escapes	accept	the whole escape alphabet in one string, and it shrinks on unescaping as the no-string-cap argument requires
+y_string_escaped_nul	accept	an escaped NUL is a legal scalar value and a Rust String holds it; only a raw byte below 0x20 is refused
+y_string_escaped_unit_separator	accept	escaped control characters are how JSON carries them
+y_string_escaped_structure_is_not_structure	accept	the unescaped text is [1] and is never rescanned, so escaped brackets cannot smuggle structure
+y_string_escaped_comma_and_quotes	accept	the unescaped text is a,"b" and stays one string
+y_string_escaped_lf_is_not_a_separator	accept	an escaped LF is a character in the string, which is exactly why a raw one has to be refused
+y_string_raw_del	accept	a JSON control character is b < 0x20, so DEL is ordinary and char::is_control is the wrong predicate
+y_string_raw_c1_controls	accept	U+0080 to U+009F are not JSON control characters and are legal raw
+y_string_raw_line_separators	accept	U+2028 and U+2029 are ordinary characters in JSON, whatever JavaScript thinks
+y_string_escaped_line_separators	accept	the escaped spelling of the same two characters
+y_string_noncharacter_uffff_escaped	accept	a noncharacter is a valid Unicode scalar value; nothing in the grammar excludes it
+y_string_noncharacter_uffff_raw	accept	valid UTF-8 for a noncharacter, which from_utf8 accepts and so do we
+y_string_noncharacter_ufdd0_raw	accept	valid UTF-8 for a noncharacter in the U+FDD0 block
+y_string_replacement_char_escaped	accept	U+FFFD as a value is fine; what is refused is U+FFFD appearing because we repaired something
+y_string_valid_surrogate_pair	accept	a well-formed pair combines to U+1F600
+y_string_last_scalar_value_escaped	accept	the pair for U+10FFFF, the highest scalar value
+y_string_last_scalar_value_raw	accept	F4 8F BF BF is U+10FFFF and is the last four-byte sequence from_utf8 accepts
+y_string_utf8_two_three_four_byte	accept	one character of each multibyte width
+y_string_escaped_quote_inside	accept	an escaped quote does not close the string
+y_string_trailing_escaped_backslash	accept	the escaped backslash is consumed, so the following quote closes the string
+y_string_solidus_raw_and_escaped	accept	both spellings of / are legal and unescape to the same character
+y_string_escaped_key_and_value	accept	a member name may be escaped like any other string
+i_string_lone_high_surrogate_escaped	reject_syntax	LoneSurrogate, a declared divergence: Rust cannot hold one in a String, so every lenient path is lossy
+i_string_lone_low_surrogate_escaped	reject_syntax	LoneSurrogate: an unpaired low surrogate is refused for the same reason as a high one
+i_string_high_surrogate_then_bmp	reject_syntax	LoneSurrogate: the high surrogate is not followed by a low one
+i_string_two_high_surrogates	reject_syntax	LoneSurrogate: two highs are not a pair
+i_string_low_then_high_surrogate	reject_syntax	LoneSurrogate: the order matters, high then low
+i_string_high_surrogate_after_text	reject_syntax	LoneSurrogate: this is the escalation case, "superadmin\ud888" must never become superadmin
+i_string_lone_surrogate_as_key	reject_syntax	LoneSurrogate: a member name is a string and is held to the same rule
+n_string_single_quotes	reject_syntax	UnexpectedByte: an apostrophe cannot start a value
+n_string_unterminated	reject_syntax	the closing quote is missing, so the document ends inside the string
+n_string_escape_then_eof	reject_syntax	the document ends inside an escape
+n_string_backslash_before_closing_quote	reject_syntax	the escaped quote does not close the string, so the document ends inside it
+n_string_bad_escape_apostrophe	reject_syntax	BadEscape: an apostrophe is not in the escape alphabet, whatever JavaScript allows
+n_string_bad_escape_x	reject_syntax	BadEscape: JSON has no hex escape, only \u
+n_string_bad_escape_zero	reject_syntax	BadEscape: \0 is not in the alphabet, which is why an escaped NUL has to be written \u0000
+n_string_bad_escape_capital_u	reject_syntax	BadEscape: the escape is lowercase u only
+n_string_bad_escape_a	reject_syntax	BadEscape: \a is a C escape and not a JSON one
+n_string_bad_escape_v	reject_syntax	BadEscape: \v is a C escape and not a JSON one
+n_string_bad_escape_line_continuation	reject_syntax	BadEscape: a backslash before a raw newline is not a continuation, JSON has none
+n_string_short_u_escape	reject_syntax	BadEscape: \u needs exactly four hex digits
+n_string_nonhex_u_escape	reject_syntax	BadEscape: Z is not a hex digit
+n_string_u_escape_with_space	reject_syntax	BadEscape: a space is not a hex digit
+n_string_u_escape_with_brace	reject_syntax	BadEscape: \u{41} is Rust and JavaScript syntax, not JSON
+n_string_u_escape_truncated_by_quote	reject_syntax	BadEscape: the closing quote arrives inside the four hex digits
+n_string_raw_tab	reject_syntax	ControlInString: a raw tab is below 0x20 and must be escaped, even though tab is whitespace between tokens
+n_string_raw_lf	reject_syntax	ControlInString: this is the check that stops one record being split across two lines
+n_string_raw_cr	reject_syntax	ControlInString: a raw CR inside a string is a control character, which is why a lone CR can never be a record separator
+n_string_raw_nul	reject_syntax	ControlInString: a raw NUL is below 0x20
+n_string_raw_unit_separator	reject_syntax	ControlInString: 0x1F is the last control character
+n_string_raw_backspace	reject_syntax	ControlInString: must be written \b
+n_string_raw_form_feed	reject_syntax	ControlInString: must be written \f
+n_string_raw_lf_in_key	reject_syntax	ControlInString: a member name is a string and is held to the same rule
+n_encoding_overlong_slash_c0_af	reject_encoding	InvalidUtf8: an overlong encoding of /, the classic way to smuggle a separator past a naive checker
+n_encoding_overlong_nul_c0_80	reject_encoding	InvalidUtf8: modified-UTF-8 NUL, which Java writes and UTF-8 does not allow
+n_encoding_overlong_three_byte	reject_encoding	InvalidUtf8: a three-byte overlong encoding of /
+n_encoding_surrogate_ed_a0_80	reject_encoding	InvalidUtf8, not LoneSurrogate: the whole-line UTF-8 check runs first and from_utf8 refuses surrogates encoded as UTF-8
+n_encoding_surrogate_pair_raw_utf8	reject_encoding	InvalidUtf8: CESU-8 spelling of a surrogate pair, refused as bytes before any surrogate rule applies
+n_encoding_above_max_f4_bf_bf_bf	reject_encoding	InvalidUtf8: above U+10FFFF
+n_encoding_five_byte_start_f8	reject_encoding	InvalidUtf8: there are no five-byte sequences in UTF-8
+n_encoding_lone_continuation_byte	reject_encoding	InvalidUtf8: a continuation byte with nothing to continue
+n_encoding_truncated_three_byte	reject_encoding	InvalidUtf8: a three-byte sequence two bytes long
+n_encoding_fe_byte	reject_encoding	InvalidUtf8: 0xFE never appears in UTF-8
+n_encoding_invalid_in_number	reject_encoding	InvalidUtf8: the line is checked as a whole before the grammar, so where the bad byte sits does not change the class
+n_encoding_invalid_in_exponent	reject_encoding	InvalidUtf8: refused as bytes, not as BadNumber
+n_encoding_invalid_in_escape	reject_encoding	InvalidUtf8: refused as bytes, not as BadEscape
+n_encoding_invalid_in_key	reject_encoding	InvalidUtf8: a member name is bytes like everything else
+n_encoding_invalid_before_value	reject_encoding	InvalidUtf8 at offset 0
+n_encoding_invalid_after_value	reject_encoding	InvalidUtf8, not TrailingContent, because the encoding check covers the whole line before the grammar sees any of it
+i_encoding_utf8_bom_then_object	accept	a UTF-8 BOM at offset 0 is skipped and the rest is parsed, and the framer records leading_bom so it is visible rather than silent
+i_encoding_utf8_bom_then_scalar	accept	the BOM is skipped and a bare scalar is a JSON text
+n_encoding_utf8_bom_only	reject_syntax	the BOM is skipped and the bytes then end where a value belongs
+n_encoding_utf8_bom_inside_array	reject_syntax	UnexpectedByte: U+FEFF is valid UTF-8 and is not one of the four whitespace bytes, so away from offset 0 it cannot start a value
+n_encoding_utf8_bom_before_key	reject_syntax	UnexpectedByte: a BOM is only special at absolute offset 0
+n_encoding_utf16le_bom	reject_encoding	Utf16Le by the framer's sniff, InvalidUtf8 if the bytes reach validate directly; either way reject_encoding, and the point is that it is named rather than half-read as ASCII
+n_encoding_utf16be_bom	reject_encoding	Utf16Be by the sniff, InvalidUtf8 through validate; either way reject_encoding
+n_encoding_utf32le_bom	reject_encoding	Utf32Le by the sniff, which is why FF FE 00 00 has to be tested before FF FE; InvalidUtf8 through validate
+n_encoding_utf32be_bom	reject_encoding	Utf32Be by the sniff; through validate the FE byte is invalid UTF-8, so the class is the same by either path even though the variant differs
+n_encoding_utf16le_no_bom	reject_syntax	valid UTF-8 with interleaved NULs, so it fails closed on the NUL after the brace as a syntax error, exactly as the frame.rs note says
+n_encoding_utf16be_no_bom	reject_syntax	UnexpectedByte: the leading NUL cannot start a value
+y_whitespace_all_four_around_value	accept	space, tab, CR and LF are the four bytes RFC 8259 allows between tokens
+y_whitespace_lone_cr_between_elements	accept	a lone CR is whitespace between tokens and never a record separator
+y_whitespace_newlines_inside_object	accept	LF is legal JSON whitespace, so validate accepts this; the framer would have cut the same bytes into five lines, and keeping the two questions apart is deliberate
+y_whitespace_flood_before_value	accept	10000 spaces is whitespace; the only bound in reach is max_line_bytes at 16 MiB
+y_whitespace_flood_inside_array	accept	whitespace before an element costs nothing but bytes
+y_whitespace_flood_between_members	accept	whitespace between a name and its colon is legal
+n_whitespace_form_feed_separator	reject_syntax	UnexpectedByte: form feed is not one of the four, and u8::is_ascii_whitespace would have wrongly accepted it
+n_whitespace_form_feed_leading	reject_syntax	UnexpectedByte: form feed is not JSON whitespace anywhere
+n_whitespace_vertical_tab_separator	reject_syntax	UnexpectedByte: U+000B is not JSON whitespace
+n_whitespace_nbsp_before_value	reject_syntax	UnexpectedByte: U+00A0 is whitespace to char::is_whitespace and not to JSON
+n_whitespace_line_separator_between_elements	reject_syntax	UnexpectedByte: U+2028 is whitespace to char::is_whitespace and not to JSON
+n_whitespace_ideographic_space	reject_syntax	UnexpectedByte: U+3000 is not JSON whitespace
+n_whitespace_cr_between_two_values	reject_syntax	TrailingContent: the CR is whitespace, so the second array is a second value on the same line
+y_object_duplicate_key	reject_syntax	DuplicateName, a declared divergence: last-wins is CVE-2017-12635 and a winner picked by implementation detail must not be baked into evidence
+y_object_duplicate_key_same_value	reject_syntax	DuplicateName: the values agreeing does not make the document unambiguous, and comparing values would be a different rule
+y_object_duplicate_key_escaped_name	reject_syntax	DuplicateName: names are compared after unescaping, so \u0061 is a
+y_object_duplicate_key_escaped_backslash	reject_syntax	DuplicateName: both spellings unescape to the two characters a and backslash then b
+y_object_duplicate_empty_key	reject_syntax	DuplicateName: the empty name is a name
+y_object_duplicate_key_after_nested	reject_syntax	DuplicateName: the check is per object and survives a nested container between the two members
+y_object_duplicate_key_inside_array	reject_syntax	DuplicateName: an object inside an array gets its own frame and its own check
+y_object_nfc_and_nfd_keys	accept	compared byte for byte after unescaping and never normalised: an NFC and an NFD spelling are two different keys, and folding them would be a linguistic decision about evidence
+y_object_same_name_in_sibling_objects	accept	duplicate detection is per object, so b in two different objects is not a duplicate
+y_object_keys_differ_by_case	accept	byte comparison, so a and A are two keys

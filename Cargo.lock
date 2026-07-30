@@ -90,12 +90,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "trailryx-json"
+version = "0.0.1"
+dependencies = [
+ "trailryx-sim",
+]
+
+[[package]]
 name = "trailryx-otlp"
 version = "0.0.1"
 dependencies = [
  "trailryx-assemble",
  "trailryx-contracts",
  "trailryx-crypto",
+ "trailryx-json",
  "trailryx-record",
  "trailryx-sim",
 ]

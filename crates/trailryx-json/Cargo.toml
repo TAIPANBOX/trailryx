@@ -1,0 +1,21 @@
+[package]
+name = "trailryx-json"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+description = "A strict, bounded RFC 8259 reader and a JSON Lines framer. Depends on nothing."
+
+# Empty on purpose, and not even a `trailryx-` path dependency. This crate must
+# not know what OTLP is: a grammar that can see the encoding above it is a
+# grammar that gets quietly shaped by it.
+[dependencies]
+
+[dev-dependencies]
+# The deterministic sweep needs a seeded generator, and the one in the tree is
+# the one the whole project reproduces runs with.
+trailryx-sim = { path = "../trailryx-sim" }
+
+[lints]
+workspace = true

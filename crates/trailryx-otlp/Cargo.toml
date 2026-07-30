@@ -11,6 +11,10 @@ description = "OTLP ingest and the OpenTelemetry GenAI semantic-convention mappe
 trailryx-record = { path = "../trailryx-record" }
 trailryx-crypto = { path = "../trailryx-crypto" }
 trailryx-contracts = { path = "../trailryx-contracts" }
+# The reader `otlpjson` drives. A dependency and not a copy: the grammar at the
+# trust boundary must be one thing, so that a bound raised for JSON Lines ingest
+# is the same bound OTLP/JSON gets.
+trailryx-json = { path = "../trailryx-json" }
 
 [dev-dependencies]
 # The mapper's output only means something once it becomes records, and the

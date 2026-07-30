@@ -1,0 +1,28 @@
+# Every corpus case where CPython's json and node's JSON.parse disagree.
+# Columns: name, cpython, node, why. Lines beginning with # are comments.
+#
+# Produced by:  python3 cases.py | tee /tmp/corpus.tsv | python3 classify.py
+#               python3 classify.py < /tmp/corpus.tsv ; node classify.js < /tmp/corpus.tsv
+# Run on 2026-07-30 with CPython 3.14.6 and node v22.23.1 (V8), 222 cases,
+# 5 disagreements. Rerun after either tool is upgraded: this file is a
+# measurement, not a specification.
+#
+# The map is smaller than the reputation of the problem suggests, and the reason
+# is worth writing down: the two remaining classes are the only ones where a
+# mainstream parser still reads bytes as a document that another mainstream
+# parser refuses outright. Every other divergence in the corpus is a divergence
+# between one of them and *us*, which lives in EXPECTATIONS.tsv, or it is a
+# divergence in the value returned rather than in the verdict, which lives in
+# values.py and floats.py.
+#
+# One caveat stated plainly, because it flatters the agreement number: the
+# sixteen invalid-UTF-8 cases agree partly by construction. classify.js checks
+# the bytes round-trip through Buffer.toString before JSON.parse sees them,
+# because node's decoder substitutes U+FFFD instead of failing. Without that
+# check node would accept most of them as documents full of replacement
+# characters and the disagreement count would be sixteen higher.
+n_number_infinity	accept	reject	CPython's scanner has three non-standard literals built in, and Infinity is one of them; JSON has none and V8 refuses it, which makes CPython the outlier here rather than node.
+n_number_negative_infinity	accept	reject	Same non-standard literal with a sign, handled as a special case in CPython's scanner before the number grammar is consulted at all.
+n_number_nan	accept	reject	CPython returns float('nan'); the value then compares unequal to itself, so a record carrying it can never be matched against a copy of itself.
+n_number_infinity_as_object_value	accept	reject	The same three literals are accepted anywhere a value belongs, not only at the top level, so a single member is enough to make a document unportable.
+i_number_5000_digit_integer	reject	accept	CPython refuses to convert an integer literal of more than 4300 digits (the CVE-2020-10735 mitigation, on by default since 3.11) and raises ValueError, not JSONDecodeError; node reads the same digits as a double and hands back Infinity, so the value that reaches the caller is not in the document.

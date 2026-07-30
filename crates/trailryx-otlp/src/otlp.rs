@@ -125,7 +125,7 @@ pub enum SpanKind {
 }
 
 impl SpanKind {
-    fn from_wire(v: u64) -> Self {
+    pub(crate) fn from_wire(v: u64) -> Self {
         match v {
             1 => Self::Internal,
             2 => Self::Server,
@@ -145,7 +145,7 @@ pub enum StatusCode {
 }
 
 impl StatusCode {
-    fn from_wire(v: u64) -> Self {
+    pub(crate) fn from_wire(v: u64) -> Self {
         match v {
             1 => Self::Ok,
             2 => Self::Error,
@@ -603,7 +603,7 @@ fn decode_kvlist(
     Ok(attrs)
 }
 
-fn push_attr(into: &mut Vec<Attr>, attr: Attr, limits: Limits, dropped: &mut Dropped) {
+pub(crate) fn push_attr(into: &mut Vec<Attr>, attr: Attr, limits: Limits, dropped: &mut Dropped) {
     if into.len() >= limits.max_attributes {
         dropped.attributes = dropped.attributes.saturating_add(1);
         return;
@@ -617,6 +617,6 @@ fn push_attr(into: &mut Vec<Attr>, attr: Attr, limits: Limits, dropped: &mut Dro
 /// scope name, a status message. Those go to the payload plane anyway, and
 /// losing the whole span over one bad byte in a name would fail an emitter for
 /// something nobody reads.
-fn lossy_string(raw: &[u8]) -> String {
+pub(crate) fn lossy_string(raw: &[u8]) -> String {
     String::from_utf8_lossy(raw).into_owned()
 }

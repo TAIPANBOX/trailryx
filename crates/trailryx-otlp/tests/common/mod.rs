@@ -6,6 +6,11 @@
 
 #![allow(dead_code)]
 
+/// The same batch in OTLP/JSON, written independently of everything below.
+pub mod jsonenc;
+/// The one fixture both encoders write, as data.
+pub mod spec;
+
 pub fn varint(mut value: u64) -> Vec<u8> {
     let mut out = Vec::new();
     loop {
