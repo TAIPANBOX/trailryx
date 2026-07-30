@@ -1,6 +1,6 @@
 name: ci
 
-# The same ten checks `.githooks/pre-push` runs, so a green push is a green pull
+# The same eleven checks `.githooks/pre-push` runs, so a green push is a green pull
 # request and neither can drift from the other.
 #
 # THE GUARD ON `if:` STAYS, and it is not decoration. Actions minutes are metered on
@@ -94,6 +94,11 @@ jobs:
       # correctness one, and `sim/corpus.tsv` says so in its own header.
       - name: seed corpus reproduces
         run: cargo run --quiet --release --bin trailryx-sim-run -- --corpus sim/corpus.tsv
+
+      # Two verifiers, one pack: the Rust one and `verifier-py/trailryx_verify.py`.
+      # Two implementations that agree prove the format rather than the author.
+      - name: two verifiers agree
+        run: cargo test -p trailryx-store --test two_verifiers --quiet
 
       # The same source must produce the same verifier binary from any directory, or
       # an auditor cannot check the binary they run against the source they read.

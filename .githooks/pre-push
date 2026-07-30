@@ -109,6 +109,11 @@ else
   fail=$((fail + 1))
 fi
 
+# Two verifiers, one pack. The plan asks for a second independent implementation in
+# another language because two that agree prove the FORMAT rather than the author,
+# and this is where they are held to the same verdict on the same bytes.
+step "two verifiers agree" cargo test -p trailryx-store --test two_verifiers --quiet
+
 # The same source must produce the same verifier binary from any directory, or an
 # auditor cannot check the binary they run against the source they read. Stage 8's
 # other exit criterion, and it takes about three seconds.

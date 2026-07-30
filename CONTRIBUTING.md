@@ -28,12 +28,13 @@ against.
 
 ## Before you push
 
-`.githooks/pre-push` runs ten checks and refuses the push if any fails:
+`.githooks/pre-push` runs eleven checks and refuses the push if any fails:
 formatting, clippy with warnings as errors, the whole test suite, a standalone build
 of the substrate crate, the zero-dependency count, an `unsafe` scan, the determinism
 criterion (one seed reproduces a run byte for byte), the published seed corpus in
-`sim/corpus.tsv`, a reproducible build of the offline verifier from two directories
-with different names, and a two-hundred-seed durability sweep. About forty seconds.
+`sim/corpus.tsv`, the Python verifier in `verifier-py/` agreeing with the Rust one on
+the same packs, a reproducible build of the offline verifier from two directories with
+different names, and a two-hundred-seed durability sweep. About forty seconds.
 It is the same set `.github/workflows/ci.yml` runs, so a green push is a green pull
 request.
 
@@ -78,5 +79,9 @@ rather than committed.
 where each stage says what it did **not** do, stage by stage. Every review finding
 raised so far has been measured and either fixed or refuted, so the open work is now
 the named gaps rather than a candidate list: gRPC, a validated cipher behind the AEAD
-seam, RFC 3161 anchoring, repeated Parquet columns, and the provable query language
-that replaces the SQL facade.
+seam, the SQL facade, object storage, federation, and a second independent
+implementation of the offline verifier in another language.
+
+`docs/planning/trailryx-architecture.md` is the design and it wins over any summary,
+including the ones in this file and in the README. A sentence here that contradicts it
+is a defect in the sentence.

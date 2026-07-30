@@ -7,7 +7,7 @@
 ![Stage](https://img.shields.io/badge/stage-9%20of%2013-blue.svg)
 ![Core](https://img.shields.io/badge/core-frozen-success.svg)
 ![Rust](https://img.shields.io/badge/rust-1.85%2B-orange.svg)
-![Tests](https://img.shields.io/badge/tests-846-success.svg)
+![Tests](https://img.shields.io/badge/tests-849-success.svg)
 ![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)
 ![Dependencies](https://img.shields.io/badge/dependencies-0-success.svg)
 ![Unsafe](https://img.shields.io/badge/unsafe-forbidden-success.svg)
@@ -266,7 +266,7 @@ and the proof shapes do not change without a version and a migration.
 ## Try it
 
 ```bash
-cargo test                                    # 846 tests
+cargo test                                    # 849 tests
 cargo run --bin trailryx-sim-run -- --help
 ```
 
@@ -299,6 +299,24 @@ digest worth anything: it is only meaningful published next to a toolchain versi
 and a target triple.
 
 ## The export has to be readable without us
+
+## Two verifiers, so the format is what is proved
+
+`verifier-py/trailryx_verify.py` reads the same pack in Python, standard library
+only, sharing no code with the Rust one. `docs/planning/trailryx-plan.md` asks for it
+under R6 with one sentence: **two implementations that agree prove the format, not the
+author.** The gate runs both on the same packs, good and tampered, and requires the
+same verdict and the same record count.
+
+It has already paid for itself. The Python's sequence check compared each record to
+the one before it, which is weaker than the Rust one in a way that matters: a segment
+missing its **first** record would have passed. The Rust verifier had been
+strengthened past that after an adversarial review; the Python had not, and running
+the two against each other is what surfaced it.
+
+What it does not prove is stated in its own README first rather than last: it was
+written by reading the Rust, so it would not catch the same misunderstanding made
+twice, and it checks no signatures.
 
 A proprietary format is a trust debt: an auditor would have to believe our reader.
 `docs/planning/trailryx-plan.md` §6.3 settles that debt with one obligation, a
@@ -932,7 +950,7 @@ that is the part an auditor cannot do without the pack. It then says out loud th
 it did not check the authority's signature, and prints the command that does:
 
 ```
-[note]  anchor: "digicert" stamped this root at 1785421800, token 738 bytes, nonce 846344827
+[note]  anchor: "digicert" stamped this root at 1785421800, token 738 bytes, nonce 849344827
 [weak]  anchor-signature: this verifier checked that "digicert"'s token is over this
         root and did not check the authority's signature; verify it with
         `openssl ts -verify` against their published certificate
@@ -1120,13 +1138,14 @@ proves and erases. That is the test of whose engine it is.
 git config core.hooksPath .githooks   # once
 ```
 
-`.githooks/pre-push` runs ten checks and refuses the push if any fails:
+`.githooks/pre-push` runs eleven checks and refuses the push if any fails:
 formatting, clippy with warnings as errors, the tests, a standalone build of the
 substrate crate, a zero-dependency check, an `unsafe` check, the determinism
-criterion, the published seed corpus, a reproducible build of the verifier from two
-different paths, and a 200-seed durability sweep. About forty seconds.
+criterion, the published seed corpus, the two verifiers agreeing on the same packs, a
+reproducible build of the verifier from two different paths, and a 200-seed durability
+sweep. About forty seconds.
 
-`.github/workflows/ci.yml` runs the same ten plus `cargo audit`, so a green push
+`.github/workflows/ci.yml` runs the same eleven plus `cargo audit`, so a green push
 is a green pull request. It keeps a guard that skips every job while the repository
 is private, because Actions minutes are metered there and free here. The repository
 went public on 30 July 2026 and the condition released itself, which is why it was
@@ -1135,8 +1154,15 @@ in both directions.
 
 ## Next
 
-Object storage, federation, and the provable query language that replaces the
-SQL facade.
+Object storage, federation, and the SQL facade: Postgres wire protocol over a
+`TableProvider` that pushes predicates on the provable dimensions into the
+authenticated index, so an answer either carries its completeness proof or says which
+predicate did not fall on a provable dimension.
+
+That sentence used to read "the provable query language that replaces the SQL facade",
+which contradicted `docs/planning/trailryx-architecture.md` §3.1 and §3.2 in both
+halves: SQL **is** the first-class interface, and nothing replaces it. Provability is
+not a different language, it is where the predicate is evaluated.
 
 Four things are deliberately unfinished behind us. Stage 6 has no gRPC transport,
 because gRPC is HTTP/2, which is HPACK and frames and flow control. (This
