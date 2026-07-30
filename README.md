@@ -14,41 +14,43 @@
 
 </div>
 
-An agent refuses a refund. It emails a customer. It spends nine tenths of a budget
-in four minutes. Months later somebody asks what happened, and that somebody is a
-customer, an auditor, a regulator, or the engineer on call at 3am.
+An agent is partway through a customer's request when it runs into its spending
+limit, and refuses. Months later somebody asks why: the customer, an auditor, a
+regulator, or the engineer on call.
 
 Today the answer is logs, and the honest thing to say about logs is that anyone with
 access could have edited them, and that nobody can tell whether the lines you were
 shown are all the lines there were.
 
-Trailryx is a database built for that question. It keeps what agents did, and it can
+Trailryx is a database built for that moment. It keeps what agents did, and it can
 prove four things about what it hands back.
 
-**Nothing was altered.** Each record is sealed together with the one before it, so
-the records form a chain. Change a single field, or quietly drop a record from the
+**Nobody edited it.** Each record is sealed together with the one before it, so the
+records form a chain. Change a single field, or quietly drop a record from the
 middle, and every seal after it stops matching. The check is arithmetic on the data
 itself, so it does not depend on trusting whoever runs the database, and it can be
-run by someone who does not.
+run by somebody who does not.
 
-**Nothing is missing.** Any database can show you five records. Showing that five is
-all there ever was is a different and much harder claim, and it is the one an auditor
-actually needs. So every answer arrives with a completeness proof: a short receipt,
-checkable on its own, saying these are all the records matching this question, for
-the fields Trailryx indexes.
+**Nobody hid part of it.** Any database can show you five records. Showing that five
+is all there ever was is a different and much harder claim, and it is the one an
+auditor actually needs. So every answer arrives with a completeness proof: a short
+receipt, checkable on its own, saying these are all the records that match. It holds
+for the five ways you can ask: by time, by agent, by run, by kind of event, and by
+the record's own id.
 
-**The whole story, not one line.** A decision is not a single event. The record of
-one carries what led to it: which policy version was in force, what the budget was at
-each step, which model and settings, the prompt by its hash, which tools were within
-reach, what was retrieved. Ask why the refund was refused and you get the chain that
-produced it, not a line saying it was refused.
+**The reasons are there, not only the outcome.** A decision is not a single event.
+The record of one carries what led to it: which policy version was in force, what the
+budget was at each step, which model and settings, the prompt by its hash, which
+tools were within reach, what was retrieved. Ask why the request was refused and you
+get the chain that produced it. The demo below prints exactly that, next to what an
+ordinary tracing SDK would have kept instead.
 
 **One person can still be erased.** People have the right to have their data deleted,
-and a ledger that cannot honour that is not lawful in Europe, whatever else it
-proves. Here each payload is encrypted under its own key, and erasing a person
-destroys their keys. The content becomes unrecoverable, every earlier proof still
-verifies, and the record itself shows that an erasure happened and when. Gone, and
-still provable that nothing else quietly went with it.
+so a store that can never delete anything cannot hold anything about people in
+Europe, whatever else it proves. Here each payload is encrypted under its own key,
+and erasing a person destroys their keys. The content becomes unrecoverable, every
+earlier proof still verifies, and the record itself shows that an erasure happened
+and when. Gone, and still provable that nothing else quietly went with it.
 
 Two sentences carry the whole design.
 
