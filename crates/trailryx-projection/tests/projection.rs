@@ -125,18 +125,46 @@ fn an_absent_optional_field_is_a_null_rather_than_a_zero() {
     }
 }
 
+/// A repeated field is a real Parquet list, and an empty one is empty rather than
+/// absent.
+///
+/// That distinction is the improvement over the comma-joined columns these
+/// replaced. Joining had to spell an empty list as a null, because an empty string
+/// and a one-element list containing an empty string are the same text; a list
+/// column does not have to choose, so a record with no tools reads as a record with
+/// no tools rather than as a record that did not say.
 #[test]
-fn a_repeated_field_joins_on_a_separator_its_values_cannot_contain() {
+fn a_repeated_field_is_a_list_and_an_empty_one_is_empty_rather_than_null() {
     let s = segment();
     let columns = project_columns(&[&s]);
+    for name in [
+        "tool_manifest",
+        "on_behalf_of",
+        "caused_by",
+        "identity_chain",
+    ] {
+        let column = columns.iter().find(|c| c.name == name).unwrap();
+        assert!(
+            column.values.is_list_column(),
+            "{name} should be a list column"
+        );
+        // A `Vec` in a record is never null, so the column is required. Marking it
+        // optional would offer a reader a distinction the data cannot make.
+        assert!(
+            !column.optional,
+            "{name} is a Vec, which is never null, so the column must be required"
+        );
+    }
+
     let tools = columns.iter().find(|c| c.name == "tool_manifest").unwrap();
     assert_eq!(
         tools.values.cell(0),
-        Some("lookup_balance,send_email".to_owned())
+        Some("lookup_balance,send_email".to_owned()),
+        "the rendered form is still comma-joined for comparison, but the column is not"
     );
     assert_eq!(
         tools.values.cell(1),
-        None,
-        "an empty list is absent, not empty"
+        Some(String::new()),
+        "an empty list is an empty list, not a null"
     );
 }

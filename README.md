@@ -7,7 +7,7 @@
 ![Stage](https://img.shields.io/badge/stage-9%20of%2013-blue.svg)
 ![Core](https://img.shields.io/badge/core-frozen-success.svg)
 ![Rust](https://img.shields.io/badge/rust-1.85%2B-orange.svg)
-![Tests](https://img.shields.io/badge/tests-836-success.svg)
+![Tests](https://img.shields.io/badge/tests-837-success.svg)
 ![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)
 ![Dependencies](https://img.shields.io/badge/dependencies-0-success.svg)
 ![Unsafe](https://img.shields.io/badge/unsafe-forbidden-success.svg)
@@ -253,7 +253,7 @@ and the proof shapes do not change without a version and a migration.
 | `trailryx-assemble` | what a source handed over, made into records | 29 |
 | `trailryx-erasure` | payload envelopes, the key hierarchy, erasure | 35 |
 | `trailryx-verify` | the offline verifier, including its own ECDSA and a 90-line token reader. Depends on nothing | 29 |
-| `trailryx-projection` | Thrift, a Parquet writer, and columnar projections | 18 |
+| `trailryx-projection` | Thrift, a Parquet writer with real lists, and columnar projections | 19 |
 | `trailryx-sign` | what gets signed, and what a witness attests to | 4 |
 | `trailryx-asn1` | a bounded DER reader, enough for RFC 3161 and nothing more. Depends on nothing | 30 |
 | `trailryx-anchor` | RFC 3161 timestamping: TSP, the CMS subset, and RSA over Montgomery arithmetic | 52 |
@@ -266,7 +266,7 @@ and the proof shapes do not change without a version and a migration.
 ## Try it
 
 ```bash
-cargo test                                    # 836 tests
+cargo test                                    # 837 tests
 cargo run --bin trailryx-sim-run -- --help
 ```
 
@@ -297,6 +297,27 @@ because the tempting response to a new failure is to paste the new number in.
 `docs/reproducing.md` has the recipe, the digest, and the sentence that makes a
 digest worth anything: it is only meaningful published next to a toolchain version
 and a target triple.
+
+## The export has to be readable without us
+
+A proprietary format is a trust debt: an auditor would have to believe our reader.
+`docs/planning/trailryx-plan.md` §6.3 settles that debt with one obligation, a
+guaranteed lossless export to Parquet and JSON that is verifiable on its own, and
+calls it a sales argument rather than a concession.
+
+So the Parquet writer is hand-written to keep the zero-dependency property, and its
+correctness is **not argued here**. The test suite writes a file and has **pyarrow**
+read every cell back. The four repeated fields are real Parquet lists in the
+canonical three-level form, not comma-joined strings, and the oracle insists the
+reader hands back a *list* rather than text that renders the same: a column that
+needs local knowledge to read carries the trust debt the export was meant to settle.
+
+The hazard lists exist to get wrong is the empty one. It writes a level pair and
+**no value**, and getting that wrong shifts every later row by one and produces a
+file that parses cleanly and says something else. So there is a case with empty lists
+at the start, in the middle and at the end, two list columns in a row and a scalar
+beside them, and both of the likeliest encoding mistakes were introduced on purpose
+to check that pyarrow catches them. It does.
 
 ```
 seed=777 steps=20000 digest=42c29db84fa0d604 lines=37394 crashes=95 violations=0
@@ -1112,9 +1133,8 @@ that produced it rather than half-reading it. Stage 7 has no validated cipher be
 seam and no KMS-backed key provider, and its hostile erasure suite tries every
 recovery path that exists: caches, projections, exports and backups each arrive
 with their own attempt, or they arrive unchecked. Stage 8 is done: the RFC 3161 anchor, the
-compliance mapping, and reproducible builds with a published seed corpus. Stage 9 has no
-repeated columns, so lists are comma-joined (safe, because no identifier's
-character set contains a comma), and no storage tiering.
+compliance mapping, and reproducible builds with a published seed corpus. Stage 9 has real Parquet lists now; what
+is left there is storage tiering, which is object storage and belongs with stage 11.
 
 Two debts the core review named are closed, and the interesting part is that neither
 needed the record schema opened after all. Both descriptions above said they did,

@@ -120,6 +120,13 @@ fn build_columns(rows: &[(Record, Hash)]) -> Vec<Column> {
     let maybe_int = |f: &dyn Fn(&Record) -> Option<i64>| -> Values {
         Values::Int64(rows.iter().map(|(r, _)| f(r)).collect())
     };
+    // A real Parquet list, not a comma-joined string. The record field is a `Vec`
+    // that is always present and whose elements are validated tokens, so the
+    // column is a required LIST of required elements and an empty vec is an empty
+    // list rather than a null.
+    let list = |f: &dyn Fn(&Record) -> Vec<String>| -> Values {
+        Values::StringList(rows.iter().map(|(r, _)| f(r)).collect())
+    };
 
     vec![
         // Identity and placement.
@@ -149,9 +156,14 @@ fn build_columns(rows: &[(Record, Hash)]) -> Vec<Column> {
             "parent_run_id",
             maybe_text(&|r| r.parent_run_id.as_ref().map(|v| v.as_str().to_owned())),
         ),
-        Column::optional(
+        Column::required(
             "on_behalf_of",
-            maybe_text(&|r| join(r.on_behalf_of.iter().map(|p| p.as_str()))),
+            list(&|r| {
+                r.on_behalf_of
+                    .iter()
+                    .map(|p| p.as_str().to_owned())
+                    .collect()
+            }),
         ),
         // When. Nanoseconds throughout: a lossless export cannot round a
         // timestamp on the way out, and no Parquet converted type carries
@@ -183,9 +195,14 @@ fn build_columns(rows: &[(Record, Hash)]) -> Vec<Column> {
         // What.
         Column::required("event_type", text(&|r| r.event_type.as_str().to_owned())),
         Column::required("severity", text(&|r| r.severity.as_str().to_owned())),
-        Column::optional(
+        Column::required(
             "caused_by",
-            maybe_text(&|r| join(r.caused_by.iter().map(|c| format!("{:032x}", c.0)))),
+            list(&|r| {
+                r.caused_by
+                    .iter()
+                    .map(|c| format!("{:032x}", c.0))
+                    .collect()
+            }),
         ),
         // On what grounds.
         Column::optional(
@@ -221,13 +238,25 @@ fn build_columns(rows: &[(Record, Hash)]) -> Vec<Column> {
             "prompt_hash",
             maybe_text(&|r| r.basis.prompt_hash.map(|h| h.to_hex())),
         ),
-        Column::optional(
+        Column::required(
             "tool_manifest",
-            maybe_text(&|r| join(r.basis.tool_manifest.iter().map(|t| t.as_str()))),
+            list(&|r| {
+                r.basis
+                    .tool_manifest
+                    .iter()
+                    .map(|t| t.as_str().to_owned())
+                    .collect()
+            }),
         ),
-        Column::optional(
+        Column::required(
             "identity_chain",
-            maybe_text(&|r| join(r.basis.identity_chain.iter().map(|p| p.as_str()))),
+            list(&|r| {
+                r.basis
+                    .identity_chain
+                    .iter()
+                    .map(|p| p.as_str().to_owned())
+                    .collect()
+            }),
         ),
         // How it ended.
         Column::optional(
@@ -278,20 +307,4 @@ fn build_columns(rows: &[(Record, Hash)]) -> Vec<Column> {
         Column::required("kem_alg", text(&|r| r.algorithms.kem.as_str().to_owned())),
         Column::required("mapper_version", int(&|r| i64::from(r.mapper.0))),
     ]
-}
-
-/// Join validated tokens with commas.
-///
-/// Safe because every identifier's character set excludes a comma, so the
-/// separator cannot appear inside a value and the join is reversible. A
-/// Parquet list would be better and needs repetition levels, which this writer
-/// does not have; the trade is written down here rather than left as a column
-/// that looks scalar and is not.
-fn join<'a>(items: impl Iterator<Item = impl AsRef<str> + 'a>) -> Option<String> {
-    let joined: Vec<String> = items.map(|i| i.as_ref().to_owned()).collect();
-    if joined.is_empty() {
-        None
-    } else {
-        Some(joined.join(","))
-    }
 }
