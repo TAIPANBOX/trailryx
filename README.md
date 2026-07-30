@@ -695,8 +695,9 @@ The skeptics ran on the second attempt, and three more findings survived them an
 are fixed here: one line with no terminator was counted as two unterminated tails,
 a repeated attribute key lost every value after the first to neither plane, and the
 `prompt_hash` fix above turned out to be half a fix, because the collision was still
-live one nesting level down in the shape the conventions actually use. Six candidates
-remain open and are listed in the roadmap rather than quietly dropped.
+live one nesting level down in the shape the conventions actually use. Three candidates remain open, each measured against the code rather than counted, and
+listed in the roadmap rather than quietly dropped. That number read six until somebody
+checked it, which is the same staleness this README complains about elsewhere.
 
 ## Erasing one person without breaking the audit trail
 
