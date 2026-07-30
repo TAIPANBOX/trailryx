@@ -468,3 +468,39 @@ fn a_flush_inside_a_multibyte_character_is_not_corruption() {
     assert_eq!(src.line_report().malformed_lines, 1);
     assert_eq!(src.line_report().bad_encoding, 1);
 }
+
+#[test]
+fn one_line_with_no_terminator_is_one_unterminated_tail_however_it_arrived() {
+    // The latch was a flag cleared whenever the carry emptied, and the framer also
+    // empties the carry when it discards an oversize line, so one line with no
+    // terminator was counted twice: once while it was still a partial line under
+    // the cap and again at `finish`. That number reaches a hashed, signed anomaly
+    // record, so an operator was told about two truncated lines in a file with one.
+    let json = trailryx_json::Limits {
+        max_line_bytes: 64,
+        ..trailryx_json::Limits::default()
+    };
+    let bytes = [b'x'; 80];
+    for chunks in [
+        vec![80usize],
+        vec![40, 40],
+        vec![10, 10, 10, 10, 40],
+        vec![63, 17],
+    ] {
+        let mut src =
+            JsonlSource::with_limits(cfg(), trailryx_otlp::Limits::default(), json, Mode::Tail);
+        let mut at = 0;
+        for n in &chunks {
+            src.accept_chunk(&bytes[at..at + n], NOW);
+            at += n;
+        }
+        src.finish(NOW);
+        let report = src.line_report();
+        assert_eq!(
+            report.unterminated_final_line, 1,
+            "fed as {chunks:?}: one line, one unterminated tail"
+        );
+        assert_eq!(report.oversize_lines, 1, "fed as {chunks:?}");
+        let _ = src.poll(usize::MAX);
+    }
+}

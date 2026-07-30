@@ -7,7 +7,7 @@
 ![Stage](https://img.shields.io/badge/stage-10%20of%2013-blue.svg)
 ![Core](https://img.shields.io/badge/core-frozen-success.svg)
 ![Rust](https://img.shields.io/badge/rust-1.85%2B-orange.svg)
-![Tests](https://img.shields.io/badge/tests-669-success.svg)
+![Tests](https://img.shields.io/badge/tests-674-success.svg)
 ![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)
 ![Dependencies](https://img.shields.io/badge/dependencies-0-success.svg)
 ![Unsafe](https://img.shields.io/badge/unsafe-forbidden-success.svg)
@@ -159,7 +159,7 @@ and the proof shapes do not change without a version and a migration.
 | `trailryx-index` | Merkle history tree, completeness proofs, segment composition | 54 |
 | `trailryx-store` | sealing, the read surface, causal reconstruction | 58 |
 | `trailryx-json` | a strict bounded RFC 8259 reader and a JSON Lines framer. Depends on nothing | 116 |
-| `trailryx-otlp` | two OTLP transports, one mapper: protobuf and JSON, the GenAI semconv, the file source | 133 |
+| `trailryx-otlp` | two OTLP transports, one mapper: protobuf and JSON, the GenAI semconv, the file source | 138 |
 | `trailryx-assemble` | what a source handed over, made into records | 27 |
 | `trailryx-erasure` | payload envelopes, the key hierarchy, erasure | 35 |
 | `trailryx-verify` | the offline verifier, including its own ECDSA. Depends on nothing | 20 |
@@ -173,7 +173,7 @@ and the proof shapes do not change without a version and a migration.
 ## Try it
 
 ```bash
-cargo test                                    # 669 tests
+cargo test                                    # 674 tests
 cargo run --bin trailryx-sim-run -- --help
 ```
 
@@ -585,10 +585,12 @@ sequence" from "this sequence is broken", so the fix cost nothing, and the exemp
 applies only to the last line, because a truncated character before a terminator is
 real corruption.
 
-Eleven candidates are still unverified and written down in the roadmap rather than
-quietly dropped: five about counter accounting in the source, three about the mapper
-that predate this work, two about remaining parity details. They need the skeptics
-the review never got.
+The skeptics ran on the second attempt, and three more findings survived them and
+are fixed here: one line with no terminator was counted as two unterminated tails,
+a repeated attribute key lost every value after the first to neither plane, and the
+`prompt_hash` fix above turned out to be half a fix, because the collision was still
+live one nesting level down in the shape the conventions actually use. Six candidates
+remain open and are listed in the roadmap rather than quietly dropped.
 
 ## Erasing one person without breaking the audit trail
 

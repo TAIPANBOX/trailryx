@@ -9,7 +9,7 @@ mod common;
 
 use common::*;
 use trailryx_contracts::contracts::Source;
-use trailryx_otlp::{MapperConfig, OtlpSource};
+use trailryx_otlp::{Limits, MapperConfig, OtlpSource};
 use trailryx_record::{PayloadClass, TenantId, Timestamp};
 
 const NOW: Timestamp = Timestamp(1_700_000_000_400_000_000);
@@ -29,6 +29,38 @@ enum Plane {
     /// Not understood by this version, written down verbatim on the encrypted
     /// side.
     Diagnostic,
+}
+
+/// One mapped ingest from one span, at the default limits.
+fn mapped(spans: &[SpanBuilder]) -> trailryx_contracts::ingest::Ingest {
+    mapped_with(spans, trailryx_otlp::Limits::default())
+}
+
+/// The same, at chosen limits, so a test can make a value oversize.
+fn mapped_with(
+    spans: &[SpanBuilder],
+    limits: trailryx_otlp::Limits,
+) -> trailryx_contracts::ingest::Ingest {
+    let mut src = OtlpSource::with_limits(
+        MapperConfig::new(TenantId::parse("acme").unwrap(), "acme.example").unwrap(),
+        limits,
+    );
+    src.accept(&request(&service("billing"), "scope", spans), NOW);
+    src.poll(1).unwrap().remove(0)
+}
+
+/// The diagnostic part: every attribute this version did not understand.
+fn unmapped(ingest: &trailryx_contracts::ingest::Ingest) -> String {
+    String::from_utf8(
+        ingest
+            .payload
+            .iter()
+            .find(|p| p.class == PayloadClass::Diagnostic)
+            .expect("there is always a diagnostic part")
+            .bytes
+            .clone(),
+    )
+    .expect("the diagnostic part is text")
 }
 
 #[test]
@@ -308,5 +340,142 @@ fn a_derived_code_is_not_a_second_copy_of_the_content() {
     assert!(
         String::from_utf8_lossy(&items[0].payload.last().unwrap().bytes)
             .contains("ivan@example.com")
+    );
+}
+
+#[test]
+fn an_attribute_key_cannot_forge_a_line_in_the_payload() {
+    // `push_line` escaped the value and wrote the key raw, so a key holding a
+    // newline wrote an extra field into the leftover payload. An attribute key is
+    // the emitter's free text exactly as much as its value is, and these bytes are
+    // hashed with the record committing to the hash, so a forged line is a forged
+    // payload. The comment above `push_line` claimed to prevent this and prevented
+    // half of it.
+    let hostile = "forged\ngen_ai.request.model\tclaude-opus-5";
+    let span = SpanBuilder::new("chat")
+        .trace_id(vec![0xab; 16])
+        .span_id(vec![0x11; 8])
+        .str_attr("gen_ai.operation.name", "chat")
+        .str_attr(hostile, "x");
+    let ingest = mapped(&[span]);
+    let leftover = unmapped(&ingest);
+
+    // One line per attribute the mapper did not recognise, and the hostile key is
+    // one attribute however many newlines it contains.
+    let forged: Vec<&str> = leftover
+        .lines()
+        .filter(|l| l.starts_with("gen_ai.request.model\t"))
+        .collect();
+    assert!(forged.is_empty(), "a key forged a field: {leftover:?}");
+    assert!(
+        leftover.contains("forged\\ngen_ai.request.model\\tclaude-opus-5\t"),
+        "the key must arrive escaped and whole: {leftover:?}"
+    );
+}
+
+#[test]
+fn a_prompt_nobody_saw_gets_no_hash_rather_than_the_hash_of_nothing() {
+    // `prompt_hash` is metadata, so it survives erasure and is committed into a
+    // published root, and its whole purpose is that two records carrying the same
+    // hash were about the same prompt. An `AnyValue` that arrived empty, whether
+    // because the emitter wrote `{}` or because the decoder dropped it for size,
+    // rendered as `null` and hashed to one value shared by every such record.
+    // Measured before the fix: two unrelated oversize prompts and an empty value
+    // all gave the same sixteen leading hex digits.
+    let tight = Limits {
+        max_value_bytes: 32,
+        ..Limits::default()
+    };
+    let oversize = |text: &str| {
+        let span = SpanBuilder::new("chat")
+            .trace_id(vec![0xab; 16])
+            .span_id(vec![0x11; 8])
+            .str_attr("gen_ai.operation.name", "chat")
+            .str_attr("gen_ai.input.messages", text);
+        mapped_with(&[span], tight).meta.basis.prompt_hash
+    };
+    assert_eq!(oversize(&"secret alpha ".repeat(20)), None);
+    assert_eq!(oversize(&"different beta ".repeat(20)), None);
+
+    // A prompt we did see is still hashed, and an empty string is a thing the
+    // emitter said rather than a thing we failed to read, so it is hashed too and
+    // differs from a real one.
+    let seen = |text: &str| {
+        let span = SpanBuilder::new("chat")
+            .trace_id(vec![0xab; 16])
+            .span_id(vec![0x11; 8])
+            .str_attr("gen_ai.operation.name", "chat")
+            .str_attr("gen_ai.input.messages", text);
+        mapped(&[span]).meta.basis.prompt_hash
+    };
+    let real = seen("who am i").expect("a prompt we read is hashed");
+    let empty_string = seen("").expect("an empty string is what the emitter said");
+    assert_ne!(real, empty_string);
+}
+
+#[test]
+fn a_repeated_attribute_key_keeps_every_value_it_sent() {
+    // OTLP does not forbid a repeated key and emitters produce them. The mapper
+    // filtered the KEY rather than the occurrence, so `Span::attr` read the first
+    // value into metadata and the payload skipped all of them: every later value
+    // went to neither plane, with nothing counting it. Measured on a span carrying
+    // `gen_ai.request.model` twice, the second model name appeared nowhere at all.
+    let span = SpanBuilder::new("chat")
+        .trace_id(vec![0xab; 16])
+        .span_id(vec![0x11; 8])
+        .str_attr("gen_ai.operation.name", "chat")
+        .str_attr("gen_ai.request.model", "gpt-4o-mini")
+        .str_attr("gen_ai.request.model", "claude-opus-5")
+        .str_attr("acme.note", "first")
+        .str_attr("acme.note", "second");
+    let ingest = mapped(&[span]);
+
+    // The typed field still takes the first, which is the mapper's documented rule
+    // and not what changed.
+    assert_eq!(
+        ingest.meta.basis.model.as_ref().map(|m| m.as_str()),
+        Some("gpt-4o-mini")
+    );
+
+    // And every value the mapper did not use is written down.
+    let leftover = unmapped(&ingest);
+    assert!(
+        leftover.contains("gen_ai.request.model\t\"claude-opus-5\"\n"),
+        "the second model name went nowhere: {leftover:?}"
+    );
+    // Quoted, because the leftover renders each value the way everything hashed in
+    // this store is rendered, and a string is rendered with its quotes.
+    assert!(leftover.contains("acme.note\t\"first\"\n"), "{leftover:?}");
+    assert!(leftover.contains("acme.note\t\"second\"\n"), "{leftover:?}");
+}
+
+#[test]
+fn a_repeated_content_key_stays_content_rather_than_becoming_a_diagnostic() {
+    // A repeat of a content key is content as much as the first one is, so it gets
+    // a part of its own with the same class. Writing it into the leftover text
+    // would put a prompt into a `Diagnostic` part, which is the plane boundary
+    // moving under a repeated key.
+    let span = SpanBuilder::new("chat")
+        .trace_id(vec![0xab; 16])
+        .span_id(vec![0x11; 8])
+        .str_attr("gen_ai.operation.name", "chat")
+        .attr("gen_ai.input.messages", any_string("what is my balance"))
+        .attr("gen_ai.input.messages", any_string("and my overdraft"));
+    let ingest = mapped(&[span]);
+
+    let prompts: Vec<String> = ingest
+        .payload
+        .iter()
+        .filter(|p| p.class == PayloadClass::Prompt)
+        .map(|p| String::from_utf8(p.bytes.clone()).expect("text"))
+        .collect();
+    assert_eq!(prompts.len(), 2, "both prompts must survive: {prompts:?}");
+    assert!(prompts[0].contains("what is my balance"));
+    assert!(prompts[1].contains("and my overdraft"));
+
+    let leftover = unmapped(&ingest);
+    assert!(
+        !leftover.contains("overdraft"),
+        "content reached the diagnostic part: {leftover:?}"
     );
 }

@@ -404,8 +404,18 @@ pub struct JsonlSource {
     acked: Cursor,
     counters: Counters,
     anomalies_reported: u64,
-    /// Whether the partial line currently held has already been counted.
-    tail_noted: bool,
+    /// Which line's unterminated tail has already been counted.
+    ///
+    /// The framer's finished-line count, not a flag, and that is the fix rather
+    /// than the design. A flag was cleared whenever the carry became empty, and
+    /// the carry also becomes empty when the framer discards a line for being
+    /// oversize, so one line with no terminator was counted twice: once while it
+    /// was still a partial line under the cap, and again at `finish`. Measured at a
+    /// 64-byte cap with one 80-byte line fed as two forty-byte chunks:
+    /// `unterminated_final_line` came back 2. That number reaches a hashed,
+    /// signed anomaly record, so an operator reading it was told about two
+    /// truncated lines in a file that held one.
+    tail_noted_at: Option<u64>,
     /// A byte-order mark said this stream is not UTF-8, so nothing more is read.
     stream_refused: bool,
 }
@@ -447,7 +457,7 @@ impl JsonlSource {
             acked: Cursor(0),
             counters: Counters::default(),
             anomalies_reported: 0,
-            tail_noted: false,
+            tail_noted_at: None,
             stream_refused: false,
         }
     }
@@ -537,6 +547,10 @@ impl JsonlSource {
         }
         let mut produced = 0usize;
         let limits = self.json_limits;
+        // Read before `finish`, because `finish` advances it for the line it is
+        // about to end, and the question here is whether THAT line was already
+        // counted.
+        let ending = self.framer.line_no();
         let mut framer = std::mem::replace(&mut self.framer, Framer::new(limits));
         let outcome = framer.finish(|line| {
             produced += self.take_line(&line, true, recorded_at);
@@ -545,10 +559,12 @@ impl JsonlSource {
         self.framer = framer;
 
         match outcome {
-            // The stream stopped in the middle of a line, and nothing has said so
+            // The stream stopped in the middle of a line and nothing has said so
             // yet: an oversize line discarded to a newline that never came leaves
-            // no partial line for `note_tail` to have seen.
-            Ok(true) if !self.tail_noted => {
+            // no partial line for `note_tail` to have seen. The guard is which line
+            // was counted rather than whether anything was, because the discard
+            // itself used to reset a flag and the line was then counted twice.
+            Ok(true) if self.tail_noted_at != Some(ending) => {
                 bump(&mut self.counters.lines.unterminated_final_line);
             }
             Ok(_) => {}
@@ -559,7 +575,7 @@ impl JsonlSource {
         }
         // The framer cleared its carry whatever happened, so the next partial
         // line is a new one and gets its own count.
-        self.tail_noted = false;
+        self.tail_noted_at = None;
         self.absorb_framing();
         produced
     }
@@ -697,10 +713,16 @@ impl JsonlSource {
     /// every poll would report thousands of faults for a file that is merely
     /// being appended to.
     fn note_tail(&mut self) {
+        // An empty carry is not evidence that a line ended: the framer also empties
+        // it when it discards an oversize line, and the line is still in flight
+        // until a terminator arrives. So the latch is keyed on which line it was
+        // taken for, and only a line that actually ends clears it.
         if self.framer.carried() == 0 {
-            self.tail_noted = false;
-        } else if !self.tail_noted {
-            self.tail_noted = true;
+            return;
+        }
+        let line = self.framer.line_no();
+        if self.tail_noted_at != Some(line) {
+            self.tail_noted_at = Some(line);
             bump(&mut self.counters.lines.unterminated_final_line);
         }
     }

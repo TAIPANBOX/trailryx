@@ -477,7 +477,19 @@ fn basis_from(span: &Span, consumed: &mut BTreeSet<&'static str>) -> Basis {
     // The prompt by hash, never the prompt. The content itself is already bound
     // for the payload plane; this is what survives its erasure, and it is what
     // lets two records be shown to be about the same prompt afterwards.
-    if let Some(value) = span.attr("gen_ai.input.messages") {
+    //
+    // `Value::Empty` is refused, and that is the point of the check. It means the
+    // field arrived carrying nothing: an emitter wrote `{}`, or the value was over
+    // `Limits::max_value_bytes` and the decoder dropped it. Hashing that gave every
+    // such record `SHA-384("null")`, measured and identical across unrelated
+    // prompts, in a metadata field that survives erasure and is committed into a
+    // published Merkle root. An auditor comparing two of those hashes would
+    // conclude the records were about the same prompt. We never saw the content, so
+    // we do not commit to a hash of it. An empty string or an empty array is a
+    // different matter and still hashed: those are what the emitter said.
+    if let Some(value) = span.attr("gen_ai.input.messages")
+        && !holds_nothing(value)
+    {
         basis.prompt_hash = Some(Sha384::digest(render(value).as_bytes()));
     }
 
@@ -580,11 +592,15 @@ fn correlation_from(span: &Span) -> Option<Correlation> {
 fn payload_from(span: &Span, scope_name: &str, consumed: &BTreeSet<&str>) -> Vec<PayloadPart> {
     let mut parts = Vec::new();
 
+    // Every occurrence, not the first. OTLP does not forbid a repeated attribute
+    // key and emitters do produce them, and a repeat of a content key is content
+    // as much as the first one is: it cannot go to the leftover text below, which
+    // is `Diagnostic`, without changing what class the store thinks it is.
     for (key, class) in CONTENT {
-        if let Some(value) = span.attr(key) {
+        for attr in span.attributes.iter().filter(|a| a.key == *key) {
             parts.push(PayloadPart::new(
                 *class,
-                format!("{key}\n{}", render(value)).into_bytes(),
+                format!("{key}\n{}", render(&attr.value)).into_bytes(),
             ));
         }
     }
@@ -600,13 +616,35 @@ fn payload_from(span: &Span, scope_name: &str, consumed: &BTreeSet<&str>) -> Vec
     }
 
     let content_keys: BTreeSet<&str> = CONTENT.iter().map(|(k, _)| *k).collect();
+    // Only the FIRST occurrence of a recognised key is accounted for elsewhere,
+    // because `Span::attr` finds the first and the typed extraction above read
+    // exactly that one. Filtering the key rather than the occurrence lost every
+    // later value to neither plane: not to metadata, which holds one, and not to
+    // the payload, which skipped them all. Measured on a span carrying
+    // `gen_ai.request.model` twice, the second model name appeared nowhere at all.
+    //
+    // A repeat of a metadata key is a value nothing mapped, which is precisely
+    // what the leftover text is for. A repeat of a content key went into a content
+    // part of its own above and is skipped here, because the leftover part is
+    // `Diagnostic` and content may not be reclassified on its way through.
+    let mut seen: BTreeSet<&str> = BTreeSet::new();
+    let mut leftovers: Vec<&Attr> = Vec::new();
+    for attr in &span.attributes {
+        let key = attr.key.as_str();
+        let first = seen.insert(key);
+        let accounted = if first {
+            consumed.contains(key) || content_keys.contains(key)
+        } else {
+            content_keys.contains(key)
+        };
+        if !accounted {
+            leftovers.push(attr);
+        }
+    }
     // Sorted, so the same span always renders the same bytes: the payload is
-    // hashed, and a hash that depends on map iteration order is not a hash.
-    let mut leftovers: Vec<&Attr> = span
-        .attributes
-        .iter()
-        .filter(|a| !consumed.contains(a.key.as_str()) && !content_keys.contains(a.key.as_str()))
-        .collect();
+    // hashed, and a hash that depends on map iteration order is not a hash. Stable,
+    // so two values under one key keep the order the emitter sent them in, which is
+    // the only order that means anything.
     leftovers.sort_by(|a, b| a.key.cmp(&b.key));
     for attr in leftovers {
         push_line(&mut rest, &attr.key, &render(&attr.value));
@@ -630,11 +668,22 @@ fn payload_from(span: &Span, scope_name: &str, consumed: &BTreeSet<&str>) -> Vec
 }
 
 fn push_line(into: &mut String, key: &str, value: &str) {
-    into.push_str(key);
+    // Both sides, and the key was the one that was missed. Newlines and tabs make
+    // a field indistinguishable from the next one, which is how an emitter forges
+    // an entry that was never sent, and an attribute key is as much the emitter's
+    // free text as its value is: `{"key":"a\nb\tc","value":..}` is a legal
+    // attribute. These bytes are hashed and the record commits to the hash, so a
+    // forged line is a forged payload.
+    escape_field(into, key);
     into.push('\t');
-    // Newlines and tabs would make a value indistinguishable from the next
-    // field, which is how an emitter forges an entry that was never sent.
-    for ch in value.chars() {
+    escape_field(into, value);
+    into.push('\n');
+}
+
+/// One field of a tab-separated line, with every byte that could act as a
+/// separator turned into something inert.
+fn escape_field(into: &mut String, field: &str) {
+    for ch in field.chars() {
         match ch {
             '\\' => into.push_str("\\\\"),
             '\n' => into.push_str("\\n"),
@@ -643,7 +692,30 @@ fn push_line(into: &mut String, key: &str, value: &str) {
             other => into.push(other),
         }
     }
-    into.push('\n');
+}
+
+/// Whether any part of this value arrived carrying nothing.
+///
+/// Recursive, and the recursion is the point. Refusing a top-level `Value::Empty`
+/// closed half of this: a skeptic measured the collision still live one level
+/// down, in the shape the GenAI conventions actually use, because
+/// `gen_ai.input.messages` is an array of maps and it is a *part* of it that a
+/// value bound drops. Two different prompts whose oversize part was dropped
+/// render identically and hash identically, in a metadata field that survives
+/// erasure and is committed into a published root.
+///
+/// Conservative on purpose. An emitter that genuinely sends an empty `AnyValue`
+/// inside its messages also gets no hash, and that is the right way round: the
+/// field's whole claim is that two records carrying one hash were about one
+/// prompt, so under-claiming costs a comparison and over-claiming asserts
+/// something false about a person's data.
+fn holds_nothing(value: &Value) -> bool {
+    match value {
+        Value::Empty => true,
+        Value::Array(items) => items.iter().any(holds_nothing),
+        Value::Map(fields) => fields.iter().any(|f| holds_nothing(&f.value)),
+        _ => false,
+    }
 }
 
 /// A deterministic rendering of an OTLP value.
