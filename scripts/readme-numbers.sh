@@ -74,9 +74,17 @@ done < <(grep '^| `trailryx-' "$readme")
 if deps=$(cargo tree --offline -p trailryx-sql --prefix none 2>/dev/null |
   awk '{print $1}' | grep -v '^trailryx' | grep -v '^$' | sort -u | wc -l | tr -d ' ') &&
   [ -n "$deps" ] && [ "$deps" -gt 0 ]; then
-  stated=$(grep -o '\*\*[0-9]* third-party crates\*\*' "$readme" | grep -o '[0-9]*')
+  # Host-specific on purpose. Part of any dependency tree is platform-specific, so
+  # the same command counts 294 on Linux and 297 on macOS, and the first version of
+  # this check compared a Linux tree against a number measured on a Mac. Resolving
+  # for all targets would be portable and needs to download crates the build never
+  # uses, which is worse in a gate.
+  case "$(uname -s)" in
+    Darwin) stated=$(grep -o 'and \*\*[0-9]*\*\* on macOS' "$readme" | grep -o '[0-9]*') ;;
+    *) stated=$(grep -o '\*\*[0-9]* third-party crates\*\*' "$readme" | grep -o '[0-9]*') ;;
+  esac
   [ "$stated" = "$deps" ] ||
-    note "the README says $stated crates behind the facade and \`cargo tree\` counts $deps"
+    note "the README says $stated crates behind the facade on $(uname -s) and \`cargo tree\` counts $deps"
 else
   # Said out loud rather than passed silently: a check that cannot run is not a
   # check that passed.

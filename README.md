@@ -304,16 +304,21 @@ and the proof shapes do not change without a version and a migration.
 workspace level.
 
 The one exception is `trailryx-sql`, the SQL facade, which took DataFusion and the
-Postgres wire protocol on 30 July 2026 and brings **297 third-party crates** with it
-(`cargo tree -p trailryx-sql`, counting distinct names). That number is here rather
-than buried: it is what the decision cost.
+Postgres wire protocol on 30 July 2026 and brings **294 third-party crates** with it
+on Linux, and **297** on macOS (`cargo tree -p trailryx-sql`, counting distinct
+names). That number is here rather than buried: it is what the decision cost.
 
-It is written with the command because two honest readings of the same tree differ.
-279 of the 297 are what actually ships (`-e normal`); the rest arrive to build it and
-to test it, and a fourth reading, 293, counts a crate appearing at two versions twice.
-An audit of this page briefly replaced 297 with 279 and said no reading reproduced
-297, which was itself false and sat in the paragraph about being honest with numbers.
-The command settles it, and the gate now checks this figure along with the rest. The gate
+It comes with its command and its platform because every reading of the same tree
+differs, and each difference is real. The three macOS crates are platform-specific
+and never compile elsewhere. 279 of the 297 are what actually ships (`-e normal`); the
+rest arrive to build it and to test it. Count a crate present at two versions twice
+and it is 293. Resolve for every target rather than this host and it is 341.
+
+Both wrong answers this line has given are worth keeping. An audit replaced 297 with
+279 and declared 297 unreproducible, which was false. The gate check written to stop
+that then failed in CI, because it compared a Linux tree against a number measured on
+a Mac: a check for stale numbers, stale on the second machine it ran on. It now
+expects the figure for the host it runs on, and the README states both. The gate
 enforces the boundary in two checks that are worth more than the old single one:
 every other crate still has zero, and **the core builds and passes its tests with
 the facade absent**.
