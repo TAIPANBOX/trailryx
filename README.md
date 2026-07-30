@@ -7,7 +7,7 @@
 ![Stage](https://img.shields.io/badge/stage-9%20of%2013-blue.svg)
 ![Core](https://img.shields.io/badge/core-frozen-success.svg)
 ![Rust](https://img.shields.io/badge/rust-1.85%2B-orange.svg)
-![Tests](https://img.shields.io/badge/tests-681-success.svg)
+![Tests](https://img.shields.io/badge/tests-716-success.svg)
 ![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)
 ![Dependencies](https://img.shields.io/badge/dependencies-0-success.svg)
 ![Unsafe](https://img.shields.io/badge/unsafe-forbidden-success.svg)
@@ -255,7 +255,7 @@ and the proof shapes do not change without a version and a migration.
 | `trailryx-verify` | the offline verifier, including its own ECDSA. Depends on nothing | 20 |
 | `trailryx-projection` | Thrift, a Parquet writer, and columnar projections | 18 |
 | `trailryx-sign` | what gets signed, and what a witness attests to | 4 |
-| `trailryx-ingest` | the OTLP/HTTP server: HTTP/1.1, gzip, all hand-written | 84 |
+| `trailryx-ingest` | the OTLP/HTTP server: HTTP/1.1, gzip, bearer auth, all hand-written | 119 |
 | `trailryx-demo` | the eight acceptance steps, and a reader for a collector's file | - |
 
 **Zero dependencies.** `unsafe` forbidden at the workspace level.
@@ -263,7 +263,7 @@ and the proof shapes do not change without a version and a migration.
 ## Try it
 
 ```bash
-cargo test                                    # 681 tests
+cargo test                                    # 716 tests
 cargo run --bin trailryx-sim-run -- --help
 ```
 
@@ -355,20 +355,36 @@ Point a stock OpenTelemetry SDK at it, or an OpenTelemetry Collector, and record
 arrive.
 
 ```bash
-trailryx-ingest --bind 127.0.0.1:4318
+trailryx-ingest --bind 127.0.0.1:4318 --token-file /etc/trailryx/token
 ```
 
 ```
 listening on 127.0.0.1:4318
-loopback only. there is no TLS and no authentication here.
+loopback only, and a shared secret is required. No TLS.
 ```
 
+Exporters then present `Authorization: Bearer <secret>`, and anything else is
+refused **before a body is read**: 401 for no credential or a wrong one, 403 for a
+credential that is valid for some other tenant, and neither is retryable, so a
+misconfigured exporter stops instead of hammering. That ordering is the part worth
+measuring rather than claiming. Moving the check three lines later in the same
+function, which is where it looks equally correct, makes an unauthenticated caller
+get a **200** on an empty export, because the declared-zero-length arm answers on
+its own. There is a test whose whole job is that one line of ordering.
+
+Dropping `--token-file` leaves the port open to anything that can reach it. That
+is tolerated on loopback, where the port is the trust boundary, and on a routable
+bind the server **refuses to start** rather than opening an unauthenticated write
+path into an audit store. It used to only warn, which meant the operator who most
+needed to notice was the one reading the least.
+
 **What it deliberately is not**, stated in the crate's own docs rather than left
-to be discovered: no TLS, no authentication, no HTTP/2 and so no OTLP over gRPC,
-no chunked bodies, no JSON, no metrics or logs, no pipelining. Anything that can
-reach the port can write records, which is why the default bind is loopback and a
-routable one announces itself at startup. A deployment that needs the network
-puts a proxy in front.
+to be discovered: no TLS, no HTTP/2 and so no OTLP over gRPC, no chunked bodies,
+no JSON, no metrics or logs, no pipelining. The shipped provider is one shared
+secret, which authenticates a fleet and not an agent; a deployment that needs more
+supplies its own behind the same seam. A deployment that needs the network puts a
+proxy in front to terminate TLS, because on a plaintext hop the secret is readable
+on the wire.
 
 That has a consequence worth saying in the same breath, and it is why the parser
 is as strict as it is: a proxy means two HTTP parsers in a row, and any
@@ -987,12 +1003,12 @@ Object storage, federation, and the provable query language that replaces the
 SQL facade.
 
 Four things are deliberately unfinished behind us. Stage 6 has no gRPC transport,
-because gRPC is HTTP/2, which is HPACK and frames and flow control, and no
-authentication: the `AuthProvider` contract and `Action::Ingest` exist and the
-server does not call them. (This paragraph claimed there was no HTTP transport
-either, for as long as it took to notice that the crate table two sections above
-lists the OTLP/HTTP server with 84 tests. A status sentence outlives the work it
-described unless somebody sweeps for it, which is what this note is.) The file
+because gRPC is HTTP/2, which is HPACK and frames and flow control. (This
+paragraph claimed there was no HTTP transport either, for as long as it took to
+notice that the crate table two sections above lists the OTLP/HTTP server. It then
+went on claiming there was no authentication for one commit after the gate landed.
+A status sentence outlives the work it described unless somebody sweeps for it,
+which is what this note is.) The file
 source has no persisted checkpoint, so a restart re-reads from the last
 acknowledged line and the assembler mints a fresh identity, which is why it
 declares at-least-once delivery; it does not follow a rotation, and it refuses a

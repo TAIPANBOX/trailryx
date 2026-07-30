@@ -27,6 +27,7 @@
 //! `accept` never fails, so once bytes go in they are ours to keep. The queue
 //! check therefore happens before the lock and before the call, not after.
 
+use crate::auth::{self, Gate};
 use crate::config::Config;
 use crate::inflate::{self, gunzip};
 use crate::request::{Head, Method};
@@ -49,6 +50,14 @@ pub enum Verdict {
 /// The ingest endpoint: the source, its lock, and the clock it is stamped from.
 pub struct Ingest {
     source: Mutex<OtlpSource>,
+    /// `None` means this server admits any caller that can reach the port.
+    ///
+    /// Tolerated on loopback, where the port is the trust boundary, and refused
+    /// at startup on a routable bind: see [`crate::server::Server::new`]. It is
+    /// an `Option` rather than a null provider so that "no authentication" is a
+    /// state the startup path can see and object to, instead of one that looks
+    /// like a configured provider which happens to say yes.
+    auth: Option<Gate>,
     /// Supplied by the embedding store. This crate never reads a wall clock:
     /// `recorded_at` is the store's own time, and a server that stamped it
     /// would be one process away from a source that stamps it.
@@ -64,6 +73,7 @@ impl std::fmt::Debug for Ingest {
         f.debug_struct("Ingest")
             .field("degraded", &self.degraded.load(Ordering::Relaxed))
             .field("bind", &self.config.bind)
+            .field("auth", &self.auth)
             .finish_non_exhaustive()
     }
 }
@@ -76,14 +86,30 @@ impl Ingest {
     ) -> Self {
         Self {
             source: Mutex::new(source),
+            auth: None,
             clock,
             config,
             degraded: AtomicBool::new(false),
         }
     }
 
+    /// Put an authentication gate in front of the body read.
+    ///
+    /// Consuming rather than a setter: a server that could have its gate
+    /// replaced while running is a server whose authentication can be removed
+    /// while running.
+    pub fn with_auth(mut self, gate: Gate) -> Self {
+        self.auth = Some(gate);
+        self
+    }
+
     pub fn config(&self) -> &Config {
         &self.config
+    }
+
+    /// The gate, if one is configured. `None` is an open port.
+    pub fn auth(&self) -> Option<&Gate> {
+        self.auth.as_ref()
     }
 
     pub fn is_degraded(&self) -> bool {
@@ -144,6 +170,18 @@ impl Ingest {
 
         if self.is_degraded() {
             return Verdict::Answer(self.unavailable("the ingest path is degraded"));
+        }
+
+        // Before the length match below, and that ordering is load-bearing: its
+        // first arm answers a declared zero length with `ReadBody`, so a check
+        // placed after it would let an unauthenticated caller post an empty
+        // export. Before the media type, the size test and the queue look too,
+        // so an unauthorised caller learns nothing about this server's limits
+        // and reserves none of its budget.
+        if let Some(gate) = &self.auth {
+            if let auth::Outcome::Refuse(response) = gate.decide(head.authorization.as_deref()) {
+                return Verdict::Answer(response);
+            }
         }
 
         // Three cases, and they are three because collapsing the first two

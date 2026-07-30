@@ -9,6 +9,7 @@ description = "The OTLP/HTTP ingest server: a hand-written HTTP/1.1 listener wit
 
 [dependencies]
 trailryx-contracts = { path = "../trailryx-contracts" }
+trailryx-crypto = { path = "../trailryx-crypto" }
 trailryx-otlp = { path = "../trailryx-otlp" }
 trailryx-record = { path = "../trailryx-record" }
 

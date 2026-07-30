@@ -77,6 +77,13 @@ pub struct Head {
     pub declared_length: Option<u64>,
     pub content_type: Option<Vec<u8>>,
     pub content_encoding: Option<Vec<u8>>,
+    /// The `Authorization` field value, verbatim and undecoded.
+    ///
+    /// This crate never looks inside it. It is bytes for whatever
+    /// `AuthProvider` the deployment supplied, and keeping it opaque here is
+    /// what stops the HTTP layer growing an opinion about credential formats.
+    /// It is also why nothing in this crate ever logs it.
+    pub authorization: Option<Vec<u8>>,
     pub expect_continue: bool,
     pub close_requested: bool,
 }
@@ -549,6 +556,7 @@ fn parse_head(head: &[u8], config: &Config) -> Result<Head, Reject> {
     let mut content_length: Option<u64> = None;
     let mut content_type: Option<Vec<u8>> = None;
     let mut content_encoding: Option<Vec<u8>> = None;
+    let mut authorization: Option<Vec<u8>> = None;
     let mut expect: Option<Vec<u8>> = None;
     let mut host_seen = 0usize;
     let mut close_requested = false;
@@ -633,6 +641,18 @@ fn parse_head(head: &[u8], config: &Config) -> Result<Head, Reject> {
                 ));
             }
             content_encoding = Some(value.to_vec());
+        } else if name.eq_ignore_ascii_case(b"authorization") {
+            // Two credentials is not a request to pick one. A server that
+            // authenticated the first and ignored the second would decide
+            // access on whichever field the sender happened to write first,
+            // and a proxy that appended its own would silently take over.
+            if authorization.is_some() {
+                return Err(Reject::new(
+                    Status::BadRequest,
+                    "two Authorization fields; this server will not choose between credentials",
+                ));
+            }
+            authorization = Some(value.to_vec());
         } else if name.eq_ignore_ascii_case(b"expect") {
             if expect.is_some() {
                 return Err(Reject::new(Status::ExpectationFailed, "two Expect fields"));
@@ -690,6 +710,7 @@ fn parse_head(head: &[u8], config: &Config) -> Result<Head, Reject> {
         declared_length: content_length,
         content_type,
         content_encoding,
+        authorization,
         expect_continue,
         close_requested,
     })

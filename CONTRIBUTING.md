@@ -68,6 +68,8 @@ green pull request.
 ## Where the open work is
 
 `docs/planning/trailryx-roadmap.md` is the working record, in Ukrainian, and it is
-where each stage says what it did **not** do. The six review findings that are still
-unverified are listed there too, and verifying or refuting one of them is a genuinely
-useful first contribution.
+where each stage says what it did **not** do, stage by stage. Every review finding
+raised so far has been measured and either fixed or refuted, so the open work is now
+the named gaps rather than a candidate list: gRPC, a validated cipher behind the AEAD
+seam, RFC 3161 anchoring, repeated Parquet columns, and the provable query language
+that replaces the SQL facade.

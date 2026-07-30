@@ -76,6 +76,7 @@ name = "trailryx-ingest"
 version = "0.0.1"
 dependencies = [
  "trailryx-contracts",
+ "trailryx-crypto",
  "trailryx-otlp",
  "trailryx-record",
 ]

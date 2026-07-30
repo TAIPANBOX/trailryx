@@ -12,6 +12,8 @@ use std::io::{Read, Write};
 use std::net::{Shutdown, SocketAddr, TcpStream};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
+use trailryx_ingest::auth::Gate;
+use trailryx_ingest::bearer::SharedSecret;
 use trailryx_ingest::config::Config;
 use trailryx_ingest::handler::Ingest;
 use trailryx_ingest::server::{Server, Stopper, silent_log};
@@ -54,12 +56,31 @@ impl Harness {
 
     /// A server whose decoder limits are small enough for a test to reach.
     fn with_limits(config: Config, limits: Limits) -> Self {
+        Self::build(config, limits, None)
+    }
+
+    /// A server that requires `Authorization: Bearer <secret>` on the `acme`
+    /// scope.
+    fn with_secret(config: Config, secret: &str, scope: &str) -> Self {
+        let provider = SharedSecret::new(secret.as_bytes(), scope).expect("a usable secret");
+        Self::build(
+            config,
+            Limits::default(),
+            Some(Gate::new(Box::new(provider), scope)),
+        )
+    }
+
+    fn build(config: Config, limits: Limits, gate: Option<Gate>) -> Self {
         let mapper = MapperConfig::new(TenantId::parse("acme").unwrap(), "acme.example").unwrap();
-        let ingest = Arc::new(Ingest::new(
+        let mut ingest = Ingest::new(
             OtlpSource::with_limits(mapper, limits),
             config,
             Box::new(|| Timestamp(NOW)),
-        ));
+        );
+        if let Some(gate) = gate {
+            ingest = ingest.with_auth(gate);
+        }
+        let ingest = Arc::new(ingest);
         let server = Arc::new(Server::bind(Arc::clone(&ingest)).expect("port zero binds"));
         let address = server.address();
         let stopper = server.stopper();
@@ -960,4 +981,262 @@ fn spans_dropped_at_our_own_limits_are_not_reported_as_full_success() {
     );
     assert_eq!(h.dropped_spans(), 2);
     assert_eq!(h.pending(), 10);
+}
+
+// ---------------------------------------------------------------------------
+// The gate, over the socket
+// ---------------------------------------------------------------------------
+//
+// The property worth measuring here is not the status code, it is *when* the
+// refusal happens. A server that answered 401 after reading the body would pass
+// every status assertion below and still let an unauthenticated caller spend its
+// memory, so each case checks that nothing reached the store and, where it
+// matters, that the answer arrived before the body was sent.
+
+const SECRET: &str = "correct-horse-battery-staple";
+
+fn authorized_export(body: &[u8], credential: &str) -> Vec<u8> {
+    request(
+        "/v1/traces",
+        &[
+            ("Content-Type", "application/x-protobuf"),
+            ("Authorization", credential),
+        ],
+        body,
+    )
+}
+
+#[test]
+fn the_configured_secret_gets_a_record_in() {
+    let h = Harness::with_secret(quick_config(), SECRET, "acme");
+    let response = h.exchange(&authorized_export(
+        &good_batch(),
+        &format!("Bearer {SECRET}"),
+    ));
+    assert_eq!(status_of(&response), 200, "{response}");
+    assert_eq!(h.pending(), 1);
+}
+
+#[test]
+fn an_export_with_no_credential_is_401_and_reaches_no_further() {
+    let h = Harness::with_secret(quick_config(), SECRET, "acme");
+    let response = h.exchange(&export(&good_batch()));
+    assert_eq!(status_of(&response), 401, "{response}");
+    assert!(response.contains("WWW-Authenticate: Bearer"), "{response}");
+    assert_eq!(h.pending(), 0);
+    assert_eq!(h.malformed(), 0, "the body was never decoded");
+}
+
+#[test]
+fn a_wrong_secret_is_401_and_a_right_one_on_the_wrong_scope_is_403() {
+    let wrong_token = Harness::with_secret(quick_config(), SECRET, "acme");
+    let response = wrong_token.exchange(&authorized_export(&good_batch(), "Bearer not-the-secret"));
+    assert_eq!(status_of(&response), 401, "{response}");
+    assert_eq!(wrong_token.pending(), 0);
+
+    // The gate's scope and the provider's disagree, which is what a store
+    // fronting two tenants with one exporter config looks like.
+    let other_tenant = Harness::build(
+        quick_config(),
+        Limits::default(),
+        Some(Gate::new(
+            Box::new(SharedSecret::new(SECRET.as_bytes(), "acme").expect("valid")),
+            "somebody-else",
+        )),
+    );
+    let response = other_tenant.exchange(&authorized_export(
+        &good_batch(),
+        &format!("Bearer {SECRET}"),
+    ));
+    assert_eq!(status_of(&response), 403, "{response}");
+    assert_eq!(other_tenant.pending(), 0);
+}
+
+/// The declared-zero-length arm returns `ReadBody` on its own, so it is the one
+/// path where a check placed later in `inspect` would silently admit a caller.
+/// An empty export is a legal export, and an unauthenticated one is still
+/// refused.
+#[test]
+fn an_empty_export_is_not_a_way_past_the_gate() {
+    let h = Harness::with_secret(quick_config(), SECRET, "acme");
+    for headers in [
+        vec![("Content-Length", "0")],
+        vec![("Content-Type", "application/x-protobuf")],
+    ] {
+        let mut raw = "POST /v1/traces HTTP/1.1\r\nHost: x\r\n".to_owned();
+        for (name, value) in &headers {
+            raw.push_str(&format!("{name}: {value}\r\n"));
+        }
+        raw.push_str("\r\n");
+        let response = h.exchange(raw.as_bytes());
+        assert_eq!(status_of(&response), 401, "{headers:?} got {response}");
+    }
+    assert_eq!(h.pending(), 0);
+}
+
+/// The reason the check is in the pre-body phase. The request declares sixteen
+/// megabytes and sends none of it: the answer must arrive anyway, because the
+/// server never waited for a byte.
+#[test]
+fn an_unauthenticated_caller_is_answered_before_it_sends_a_body() {
+    let h = Harness::with_secret(quick_config(), SECRET, "acme");
+    let head = "POST /v1/traces HTTP/1.1\r\nHost: x\r\n\
+                Content-Type: application/x-protobuf\r\n\
+                Content-Length: 16777216\r\n\r\n";
+    let mut stream = h.connect();
+    stream.write_all(head.as_bytes()).expect("the head is sent");
+    let _ = stream.flush();
+
+    let started = Instant::now();
+    let response = read_all(&mut stream);
+    assert_eq!(status_of(&response), 401, "{response}");
+    assert!(
+        started.elapsed() < quick_config().body_timeout,
+        "the answer waited for a body that was never coming"
+    );
+    assert_eq!(h.pending(), 0);
+}
+
+/// `Expect: 100-continue` is the other way to get the server to invite a body.
+/// The invitation is written inside the `ReadBody` arm, so a gate that ran after
+/// the verdict would send `100 Continue` to a caller it was about to refuse.
+#[test]
+fn an_unauthenticated_caller_is_never_invited_to_continue() {
+    let h = Harness::with_secret(quick_config(), SECRET, "acme");
+    let response = h.exchange(
+        b"POST /v1/traces HTTP/1.1\r\nHost: x\r\n\
+          Content-Type: application/x-protobuf\r\n\
+          Expect: 100-continue\r\nContent-Length: 8\r\n\r\n",
+    );
+    assert!(
+        !response.contains("100 Continue"),
+        "the server invited a body it was going to refuse: {response}"
+    );
+    assert_eq!(status_of(&response), 401, "{response}");
+}
+
+/// Two credentials is not a request to pick one. A proxy that appended its own
+/// `Authorization` to a request that already had one would otherwise decide
+/// access by field order.
+#[test]
+fn two_authorization_fields_are_refused_rather_than_reconciled() {
+    let h = Harness::with_secret(quick_config(), SECRET, "acme");
+    let raw = request(
+        "/v1/traces",
+        &[
+            ("Content-Type", "application/x-protobuf"),
+            ("Authorization", "Bearer not-the-secret"),
+            ("Authorization", &format!("Bearer {SECRET}")),
+        ],
+        &good_batch(),
+    );
+    let response = h.exchange(&raw);
+    assert_eq!(status_of(&response), 400, "{response}");
+    assert_eq!(h.pending(), 0);
+}
+
+/// A refusal ends the connection, so a second request cannot ride in behind an
+/// unauthenticated first one on the same socket.
+#[test]
+fn a_refused_request_does_not_leave_the_connection_open_for_the_next_one() {
+    let h = Harness::with_secret(quick_config(), SECRET, "acme");
+    let mut raw = export(&good_batch());
+    raw.extend_from_slice(&authorized_export(
+        &good_batch(),
+        &format!("Bearer {SECRET}"),
+    ));
+    let response = h.exchange(&raw);
+    assert_eq!(status_of(&response), 401, "{response}");
+    assert_eq!(
+        response.matches("HTTP/1.1").count(),
+        1,
+        "a second response was written: {response}"
+    );
+    assert_eq!(h.pending(), 0, "the trailing request reached the store");
+}
+
+/// The credential must not appear in the response, on any path. A 401 body ends
+/// up in whatever log collects exporter failures.
+#[test]
+fn no_refusal_over_the_wire_echoes_the_credential() {
+    let h = Harness::with_secret(quick_config(), SECRET, "acme");
+    for credential in ["Bearer leaked-token-value", "Basic leaked-token-value", ""] {
+        let response = h.exchange(&authorized_export(&good_batch(), credential));
+        assert!(
+            !response.contains("leaked-token-value"),
+            "{credential:?} was echoed: {response}"
+        );
+    }
+}
+
+/// Nothing changes for a server with no gate, which is the loopback default and
+/// what every other test in this file relies on.
+#[test]
+fn a_server_with_no_gate_ignores_an_authorization_field_entirely() {
+    let h = Harness::start(quick_config());
+    let response = h.exchange(&authorized_export(&good_batch(), "Bearer anything at all"));
+    assert_eq!(status_of(&response), 200, "{response}");
+    assert_eq!(h.pending(), 1);
+}
+
+/// The startup refusal, measured rather than documented: the port must not open
+/// at all. A bind that succeeded and only logged a warning is what this replaced.
+#[test]
+fn a_routable_bind_without_a_gate_refuses_to_start_and_opens_no_port() {
+    let config = Config {
+        // A routable address that is certainly not assigned to this host, so the
+        // test distinguishes "refused by policy" from "could not bind": the
+        // policy check runs first and never reaches the socket.
+        bind: "192.0.2.1:4318".parse().expect("a literal address"),
+        ..quick_config()
+    };
+    let mapper = MapperConfig::new(TenantId::parse("acme").unwrap(), "acme.example").unwrap();
+    let open = Ingest::new(
+        OtlpSource::new(mapper),
+        config.clone(),
+        Box::new(|| Timestamp(NOW)),
+    );
+    let error = Server::bind(Arc::new(open)).expect_err("a routable bind with no gate must refuse");
+    assert_eq!(error.kind(), std::io::ErrorKind::InvalidInput);
+    assert!(
+        error.to_string().contains("AuthProvider"),
+        "the error should say what is missing: {error}"
+    );
+
+    // The same address with a gate gets as far as the socket, and fails there
+    // for the ordinary reason. Which proves the refusal above was the policy and
+    // not the address.
+    let mapper = MapperConfig::new(TenantId::parse("acme").unwrap(), "acme.example").unwrap();
+    let gated = Ingest::new(OtlpSource::new(mapper), config, Box::new(|| Timestamp(NOW)))
+        .with_auth(Gate::new(
+            Box::new(SharedSecret::new(SECRET.as_bytes(), "acme").expect("valid")),
+            "acme",
+        ));
+    let error = Server::bind(Arc::new(gated)).expect_err("192.0.2.1 is not a local address");
+    assert_ne!(
+        error.kind(),
+        std::io::ErrorKind::InvalidInput,
+        "a gated bind must fail at the socket, not at the policy: {error}"
+    );
+}
+
+/// The counters an operator reads to tell a rotated token from a network fault.
+#[test]
+fn refusals_are_counted_by_kind() {
+    let h = Harness::with_secret(quick_config(), SECRET, "acme");
+    h.exchange(&export(&good_batch()));
+    h.exchange(&authorized_export(&good_batch(), "Bearer wrong"));
+    h.exchange(&authorized_export(&good_batch(), "Basic wrong"));
+    h.exchange(&authorized_export(
+        &good_batch(),
+        &format!("Bearer {SECRET}"),
+    ));
+
+    let refusals = h.ingest.auth().expect("a gate is configured").refusals();
+    assert_eq!(refusals.no_credential, 1);
+    assert_eq!(refusals.rejected, 2, "a wrong token and an unknown scheme");
+    assert_eq!(refusals.denied, 0);
+    assert_eq!(refusals.unavailable, 0);
+    assert!(!refusals.poisoned);
+    assert_eq!(h.pending(), 1, "only the authorised export got through");
 }

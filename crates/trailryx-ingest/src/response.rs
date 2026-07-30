@@ -32,6 +32,11 @@ pub enum Status {
     Ok,
     Continue,
     BadRequest,
+    /// No credential, or one the provider refused. Not retryable, and that is the
+    /// point: an exporter with a wrong token must stop rather than hammer.
+    Unauthorized,
+    /// Authenticated, and not permitted to write here.
+    Forbidden,
     NotFound,
     MethodNotAllowed,
     RequestTimeout,
@@ -51,6 +56,8 @@ impl Status {
             Self::Ok => 200,
             Self::Continue => 100,
             Self::BadRequest => 400,
+            Self::Unauthorized => 401,
+            Self::Forbidden => 403,
             Self::NotFound => 404,
             Self::MethodNotAllowed => 405,
             Self::RequestTimeout => 408,
@@ -70,6 +77,8 @@ impl Status {
             Self::Ok => "OK",
             Self::Continue => "Continue",
             Self::BadRequest => "Bad Request",
+            Self::Unauthorized => "Unauthorized",
+            Self::Forbidden => "Forbidden",
             Self::NotFound => "Not Found",
             Self::MethodNotAllowed => "Method Not Allowed",
             Self::RequestTimeout => "Request Timeout",
@@ -97,6 +106,8 @@ impl Status {
     fn rpc_code(self) -> i32 {
         match self {
             Self::BadRequest => 3,          // INVALID_ARGUMENT
+            Self::Unauthorized => 16,       // UNAUTHENTICATED
+            Self::Forbidden => 7,           // PERMISSION_DENIED
             Self::NotFound => 5,            // NOT_FOUND
             Self::RequestTimeout => 4,      // DEADLINE_EXCEEDED
             Self::PayloadTooLarge => 8,     // RESOURCE_EXHAUSTED
@@ -266,6 +277,23 @@ impl Response {
                 encode_rpc_status(status.rpc_code(), &trimmed),
             )
             .closing()
+    }
+
+    /// A 401 with the `WWW-Authenticate` field RFC 9110 requires on one.
+    ///
+    /// Built here rather than at the call site because the name and value are
+    /// constants: this module's single-door property means adding the header
+    /// outside would have to handle an error that cannot occur, and a call site
+    /// with an unreachable error arm is a call site that grows an `unwrap`.
+    ///
+    /// The challenge names the scheme and nothing else. A `realm` would echo
+    /// deployment naming to an unauthenticated caller for no benefit.
+    pub fn unauthorized(message: &str) -> Self {
+        let mut response = Response::error(Status::Unauthorized, message);
+        response
+            .headers
+            .push(("WWW-Authenticate".to_owned(), "Bearer".to_owned()));
+        response
     }
 
     /// Serialise and write. One buffered write, so a response cannot be seen

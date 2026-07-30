@@ -149,7 +149,31 @@ impl Stopper {
 }
 
 impl Server {
+    /// Open the port, unless the configuration is one this server will not serve.
+    ///
+    /// # Why a routable bind without authentication refuses to start
+    ///
+    /// The loopback default removes the untrusted network from the threat model
+    /// rather than mitigating it. Moving the bind puts it back, and without a
+    /// gate there is then nothing at all between the network and a write into an
+    /// audit store. Until this check existed the combination was merely logged,
+    /// which meant the operator who most needed to notice was the one reading
+    /// the least: the log line arrives after the port is already open.
+    ///
+    /// So it is refused, and refused **before** `TcpListener::bind`, so the port
+    /// never opens for the moment between opening it and objecting.
+    ///
+    /// The error is `InvalidInput` rather than a new error type: nothing else on
+    /// this path has one, and a policy refusal is a refusal of the configuration
+    /// it was handed.
     pub fn bind(ingest: Arc<Ingest>) -> io::Result<Self> {
+        if ingest.config().is_routable() && ingest.auth().is_none() {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "this bind is reachable from the network and no AuthProvider is configured; \
+                 supply one with Ingest::with_auth, or bind loopback",
+            ));
+        }
         let listener = TcpListener::bind(ingest.config().bind)?;
         let address = listener.local_addr()?;
         Ok(Self {
@@ -187,8 +211,11 @@ impl Server {
             bytes: 0,
         });
         if self.ingest.config().is_routable() {
-            // Said once, loudly, because the consequence is an unauthenticated
-            // plaintext write path into an audit store.
+            // Said once, loudly. `bind` has already refused the case where there
+            // is no gate at all, so what this now marks is the remaining one: a
+            // gated write path that is still plaintext, over a network that can
+            // read the credential off the wire. TLS is the deployment's job and
+            // this line is where it gets asked for.
             log(Event {
                 kind: EventKind::RoutableBind,
                 status: None,

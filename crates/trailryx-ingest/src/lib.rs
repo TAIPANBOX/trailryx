@@ -13,10 +13,14 @@
 //! - **No TLS.** The standard library has none and adding one is a dependency
 //!   this workspace does not take. The default bind is loopback for that reason,
 //!   and a routable bind announces itself at startup.
-//! - **No authentication.** Anything that can reach the port can write records
-//!   into an audit store. There is an `AuthProvider` contract and an
-//!   `Action::Ingest` for it to authorise, and this server does not call either
-//!   yet: until it does, reaching the port *is* the authorisation.
+//! - **Authentication is enforced, and it is optional in exactly one place.**
+//!   [`auth::Gate`] calls the deployment's `AuthProvider` before the body is
+//!   read, and refuses with 401 or 403. Configuring no gate is tolerated on
+//!   loopback, where the port is the trust boundary; on a routable bind
+//!   [`server::Server::bind`] refuses to start rather than opening an
+//!   unauthenticated write path into an audit store. [`bearer::SharedSecret`] is
+//!   the reference provider: one secret for a fleet, which is not an identity
+//!   system and says so.
 //! - **No HTTP/2, no h2c, and so no OTLP over gRPC.** HTTP/2 is HPACK, frames
 //!   and flow control, a larger surface than the rest of this crate put
 //!   together. OTLP over HTTP is the specification's default protocol and is
@@ -38,8 +42,10 @@
 //! - **No pipelining and no response compression.**
 //!
 //! A deployment that needs the network puts a reverse proxy in front to
-//! terminate TLS and authenticate. That has a consequence worth saying in the
-//! same breath: a proxy means two HTTP parsers in a row, and any disagreement
+//! terminate TLS. Authentication can live there too, and a gate here is still
+//! worth having behind one: it is what makes the store's own answer to "who may
+//! write this" independent of a proxy configuration nobody re-reads. That has a
+//! consequence worth saying in the same breath: a proxy means two HTTP parsers in a row, and any disagreement
 //! between them about where a message ends is request smuggling. It is exactly
 //! why [`request`] refuses to have an opinion about anything ambiguous instead
 //! of resolving it.
@@ -63,8 +69,11 @@
 //! [`request`] for smuggling and header injection, [`inflate`] for
 //! decompression bombs, [`response`] for response splitting, [`server`] for
 //! resource exhaustion, [`handler`] for the difference between an answer a
-//! client retries and one it throws away.
+//! client retries and one it throws away, [`auth`] for a check that runs late
+//! enough to be free.
 
+pub mod auth;
+pub mod bearer;
 pub mod config;
 pub mod handler;
 pub mod inflate;

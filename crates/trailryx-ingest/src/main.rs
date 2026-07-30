@@ -9,6 +9,8 @@
 use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use trailryx_contracts::contracts::Source;
+use trailryx_ingest::auth::Gate;
+use trailryx_ingest::bearer::SharedSecret;
 use trailryx_ingest::config::Config;
 use trailryx_ingest::handler::Ingest;
 use trailryx_ingest::server::{Server, stderr_log};
@@ -19,6 +21,7 @@ fn main() -> std::process::ExitCode {
     let mut config = Config::default();
     let mut tenant = "acme".to_owned();
     let mut trust_domain = "acme.example".to_owned();
+    let mut token_file: Option<String> = None;
 
     let mut args = std::env::args().skip(1);
     while let Some(flag) = args.next() {
@@ -30,13 +33,23 @@ fn main() -> std::process::ExitCode {
             },
             ("--tenant", Some(v)) => tenant = v,
             ("--trust-domain", Some(v)) => trust_domain = v,
+            ("--token-file", Some(v)) => token_file = Some(v),
             ("--help", _) => {
                 println!(
                     "trailryx-ingest [--bind ADDR:PORT] [--tenant NAME] [--trust-domain DOMAIN]\n\
+                     \x20               [--token-file PATH]\n\
                      \n\
-                     Accepts OTLP/HTTP traces. No TLS and no authentication: anything that\n\
-                     can reach the port can write records. Put a proxy in front of a\n\
-                     routable bind."
+                     Accepts OTLP/HTTP traces.\n\
+                     \n\
+                     --token-file names a file holding one shared secret. Exporters then\n\
+                     present it as `Authorization: Bearer <secret>` and anything else is\n\
+                     refused before a body is read. Without it the port is open to whatever\n\
+                     can reach it, which is why a routable --bind requires it and refuses\n\
+                     to start without one.\n\
+                     \n\
+                     There is no TLS here either way. A routable bind belongs behind a\n\
+                     terminating proxy: on a plaintext hop the secret is readable on the\n\
+                     wire by anything between the exporter and this port."
                 );
                 return std::process::ExitCode::SUCCESS;
             }
@@ -60,20 +73,45 @@ fn main() -> std::process::ExitCode {
                 .unwrap_or(0),
         )
     });
-    let ingest = Arc::new(Ingest::new(OtlpSource::new(mapper), config, clock));
+    let mut ingest = Ingest::new(OtlpSource::new(mapper), config, clock);
+    if let Some(path) = &token_file {
+        // Read here and not stored: the file's bytes live in this scope, and
+        // what the gate keeps is a digest of them.
+        let secret = match std::fs::read(path) {
+            Ok(bytes) => bytes,
+            Err(e) => return fail(&format!("cannot read --token-file {path}: {e}")),
+        };
+        let provider = match SharedSecret::new(&secret, tenant.clone()) {
+            Ok(provider) => provider,
+            Err(e) => return fail(&format!("--token-file {path}: {e}")),
+        };
+        ingest = ingest.with_auth(Gate::new(Box::new(provider), tenant.clone()));
+    }
+    let ingest = Arc::new(ingest);
     let server = match Server::bind(Arc::clone(&ingest)) {
         Ok(server) => Arc::new(server),
         Err(e) => return fail(&format!("cannot bind: {e}")),
     };
     println!("listening on {}", server.address());
-    if server.address().ip().is_loopback() {
-        println!("loopback only. there is no TLS and no authentication here.");
-    } else {
-        println!(
-            "WARNING: {} is reachable from the network, and this server has no TLS and no \
-             authentication. Anything that reaches it can write records.",
+    // Said in full, because these are the two questions an operator has about
+    // this port and the answers are independent of each other.
+    match (server.address().ip().is_loopback(), token_file.is_some()) {
+        (true, false) => {
+            println!("loopback only, and no authentication: whatever runs on this host can write.");
+        }
+        (true, true) => println!("loopback only, and a shared secret is required. No TLS."),
+        (false, true) => println!(
+            "WARNING: {} is reachable from the network. A shared secret is required, but there \
+             is no TLS here, so the secret is readable on the wire. Terminate TLS in front of it.",
             server.address()
-        );
+        ),
+        // Unreachable: `Server::bind` refuses this combination and the error
+        // above has already returned. Printed rather than omitted so that if the
+        // refusal is ever weakened, the port still says what it is.
+        (false, false) => println!(
+            "WARNING: {} is reachable from the network with no authentication and no TLS.",
+            server.address()
+        ),
     }
 
     // The embedding store's half: drain, and write down what was lost.
