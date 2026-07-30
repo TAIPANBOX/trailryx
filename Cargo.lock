@@ -3,6 +3,20 @@
 version = 4
 
 [[package]]
+name = "trailryx-anchor"
+version = "0.0.1"
+dependencies = [
+ "trailryx-asn1",
+ "trailryx-contracts",
+ "trailryx-crypto",
+ "trailryx-record",
+]
+
+[[package]]
+name = "trailryx-asn1"
+version = "0.0.1"
+
+[[package]]
 name = "trailryx-assemble"
 version = "0.0.1"
 dependencies = [

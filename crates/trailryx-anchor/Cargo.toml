@@ -1,0 +1,17 @@
+[package]
+name = "trailryx-anchor"
+description = "RFC 3161 timestamping: a root fixed in time by somebody we do not control"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+trailryx-asn1 = { path = "../trailryx-asn1" }
+trailryx-contracts = { path = "../trailryx-contracts" }
+trailryx-crypto = { path = "../trailryx-crypto" }
+trailryx-record = { path = "../trailryx-record" }
+
+[lints]
+workspace = true

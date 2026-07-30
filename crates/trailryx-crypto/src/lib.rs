@@ -5,6 +5,12 @@
 //! production path is **aws-lc-rs**, and this one stays as the fallback for
 //! platforms it does not cover.
 //!
+//! [`Sha256`] sits beside it and is **not** a [`Digest`]. It exists only to
+//! recompute a hash somebody else chose when they signed something, which is what
+//! verifying an RFC 3161 timestamp token requires. Nothing Trailryx writes is
+//! hashed with it, and its own module says why the type system is the thing
+//! keeping it that way rather than a comment.
+//!
 //! The seam exists now, before anything depends on a concrete type, because the
 //! architecture calls for isolating each algorithm separately: they differ in
 //! maturity and they will be replaced at different times. ML-KEM has a
@@ -13,9 +19,11 @@
 //! v1.
 
 pub mod chain;
+pub mod sha256;
 pub mod sha384;
 
 pub use chain::{ChainState, chain_step};
+pub use sha256::{SHA256_BYTES, Sha256};
 pub use sha384::Sha384;
 pub use trailryx_record::{HASH_BYTES, Hash};
 

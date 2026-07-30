@@ -1,0 +1,15 @@
+[package]
+name = "trailryx-asn1"
+description = "A bounded DER reader and a minimal writer, enough for RFC 3161 and nothing more"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+# Depends on nothing, on purpose. This crate parses bytes chosen by a third
+# party, so it is one of the two crates in the workspace an auditor can read
+# without reading anything else first.
+
+[lints]
+workspace = true
