@@ -2,10 +2,11 @@
 #
 # Local gate before anything leaves this machine.
 #
-# There is no CI on purpose: the repository is private, Actions minutes are
-# metered there, and for a project this size a local gate does the same job for
-# nothing. When the repository goes public, Actions become free and this script
-# becomes the CI workflow unchanged.
+# `.github/workflows/ci.yml` runs the same checks. It was written while the
+# repository was private, when Actions minutes were metered and every job was
+# skipped by a condition on the repository being public; the repository went public
+# on 30 July 2026 and the condition released itself. The two must not drift: a
+# green push has to mean a green pull request.
 #
 # Install (once):  git config core.hooksPath .githooks
 # Skip (rarely):   git push --no-verify
@@ -92,6 +93,26 @@ else
   printf '      run 1: %s\n      run 2: %s\n' "$a" "$b"
   fail=$((fail + 1))
 fi
+
+# The published seed corpus: every recorded run must still produce the digest and
+# the violation count written down for it. This is a DETERMINISM check and not a
+# correctness one, and the file says so: a wrong implementation reproduces
+# perfectly. Its value is that a change in behaviour cannot arrive quietly.
+printf '  %-34s' "seed corpus reproduces"
+if corpus=$(cargo run --quiet --release --bin trailryx-sim-run -- \
+              --corpus sim/corpus.tsv 2>&1); then
+  printf 'ok  %s\n' "$(printf '%s' "$corpus" | head -1)"
+  pass=$((pass + 1))
+else
+  printf 'FAIL\n'
+  printf '%s\n' "$corpus" | sed 's/^/      /' | head -14
+  fail=$((fail + 1))
+fi
+
+# The same source must produce the same verifier binary from any directory, or an
+# auditor cannot check the binary they run against the source they read. Stage 8's
+# other exit criterion, and it takes about three seconds.
+step "verifier build is reproducible" ./scripts/reproduce.sh
 
 # A short hunt for a durability violation. Not the long run, which belongs in a
 # nightly sweep: enough to catch a write-path regression before it is pushed.

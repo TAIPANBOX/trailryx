@@ -277,6 +277,27 @@ cargo run --release --bin trailryx-sim-run -- \
   --seed 777 --steps 20000 --shards 4 --crash-ppm 5000 --hostile --honest-disk
 ```
 
+And sixteen of them are published with their digests, so you can check that claim
+rather than take it:
+
+```bash
+cargo run --release --bin trailryx-sim-run -- --corpus sim/corpus.tsv
+./scripts/reproduce.sh          # and the verifier binary, built twice from two paths
+```
+
+`sim/corpus.tsv` says what it proves and what it does not, in its own header: it
+proves this build reproduces those runs byte for byte, and **a wrong implementation
+is perfectly reproducible too**. Two of its rows record a nonzero count of lost
+acked records, on purpose. Both are the fault set where the simulated disk lies
+about flushing, which `docs/durability.md` has always said no software can defend
+against. What was missing was the number, and a change in it now fails the gate. The
+reader also refuses a corpus that records a loss where the disk does **not** lie,
+because the tempting response to a new failure is to paste the new number in.
+
+`docs/reproducing.md` has the recipe, the digest, and the sentence that makes a
+digest worth anything: it is only meaningful published next to a toolchain version
+and a target triple.
+
 ```
 seed=777 steps=20000 digest=42c29db84fa0d604 lines=37394 crashes=95 violations=0
 ```
@@ -1058,12 +1079,13 @@ proves and erases. That is the test of whose engine it is.
 git config core.hooksPath .githooks   # once
 ```
 
-`.githooks/pre-push` runs eight checks and refuses the push if any fails:
+`.githooks/pre-push` runs ten checks and refuses the push if any fails:
 formatting, clippy with warnings as errors, the tests, a standalone build of the
 substrate crate, a zero-dependency check, an `unsafe` check, the determinism
-criterion and a 200-seed durability sweep.
+criterion, the published seed corpus, a reproducible build of the verifier from two
+different paths, and a 200-seed durability sweep. About forty seconds.
 
-`.github/workflows/ci.yml` runs the same eight plus `cargo audit`, so a green push
+`.github/workflows/ci.yml` runs the same ten plus `cargo audit`, so a green push
 is a green pull request. It keeps a guard that skips every job while the repository
 is private, because Actions minutes are metered there and free here. The repository
 went public on 30 July 2026 and the condition released itself, which is why it was
@@ -1089,9 +1111,8 @@ gzipped, zstd-compressed or length-prefixed export by naming the collector setti
 that produced it rather than half-reading it. Stage 7 has no validated cipher behind its
 seam and no KMS-backed key provider, and its hostile erasure suite tries every
 recovery path that exists: caches, projections, exports and backups each arrive
-with their own attempt, or they arrive unchecked. Stage 8 has its RFC 3161 anchor and its
-compliance mapping now; what is left there is reproducible builds with published
-simulator seeds. Stage 9 has no
+with their own attempt, or they arrive unchecked. Stage 8 is done: the RFC 3161 anchor, the
+compliance mapping, and reproducible builds with a published seed corpus. Stage 9 has no
 repeated columns, so lists are comma-joined (safe, because no identifier's
 character set contains a comma), and no storage tiering.
 

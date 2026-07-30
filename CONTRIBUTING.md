@@ -28,12 +28,19 @@ against.
 
 ## Before you push
 
-`.githooks/pre-push` runs eight checks and refuses the push if any fails:
+`.githooks/pre-push` runs ten checks and refuses the push if any fails:
 formatting, clippy with warnings as errors, the whole test suite, a standalone build
 of the substrate crate, the zero-dependency count, an `unsafe` scan, the determinism
-criterion (one seed reproduces a run byte for byte) and a two-hundred-seed durability
-sweep. It is the same script `.github/workflows/ci.yml` runs, so a green push is a
-green pull request.
+criterion (one seed reproduces a run byte for byte), the published seed corpus in
+`sim/corpus.tsv`, a reproducible build of the offline verifier from two directories
+with different names, and a two-hundred-seed durability sweep. About forty seconds.
+It is the same set `.github/workflows/ci.yml` runs, so a green push is a green pull
+request.
+
+If a change moves a digest in `sim/corpus.tsv`, that is either a defect or a
+deliberate change to the store's behaviour, and the pull request has to say which.
+`docs/reproducing.md` covers how to regenerate it and why the diff has to be read
+rather than committed.
 
 ## House style, and why each rule is there
 

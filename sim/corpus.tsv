@@ -1,0 +1,41 @@
+# The published seed corpus.
+#
+# Every row is a full parameter set and the digest of the trace it produces. Run
+# them all with:
+#
+#     cargo run --release --bin trailryx-sim-run -- --corpus sim/corpus.tsv
+#
+# WHAT THIS PROVES: that this build reproduces these runs byte for byte, on this
+# machine or on somebody else's, today or in a year. That is the property the whole
+# DST method stands on, and `docs/planning/trailryx-architecture.md` §1a.2 calls it
+# a requirement on the design rather than on the tests.
+#
+# WHAT IT DOES NOT PROVE: that the runs are correct. A wrong implementation is
+# perfectly reproducible. Correctness is what the 200-seed durability sweep and the
+# rest of the suite are for; this file is about determinism only, and conflating the
+# two is the easiest way to read more into it than it says.
+#
+# A CHANGED DIGEST is either a defect or a deliberate change to the store's
+# behaviour. Regenerating this file without deciding which is how a regression gets
+# blessed. Regenerate with `python3 sim/regenerate.py` and read the diff.
+#
+# Columns, tab separated:
+#   seed  steps  shards  sync_every  crash_ppm  faults  digest
+#
+# faults is one of: plain, hostile, hostile+honest-disk
+1	400	2	8	0	plain	627ef18066387edd	0
+2	400	2	8	0	plain	bb740c3dc909b867	0
+3	1000	1	1	0	plain	e039f0c89be2831e	0
+7	200	3	4	0	plain	d734eb9804845148	0
+42	5000	4	8	0	plain	28117541c595855f	0
+1	400	2	8	3000	hostile	6a94d40791d40d67	0
+2	800	3	4	12000	hostile	18017ed51d21f821	2
+3	800	3	4	12000	hostile+honest-disk	a20a070a6e98393a	0
+17	2000	4	16	5000	hostile	acf4fbc8cb841f19	0
+99	1500	2	2	20000	hostile+honest-disk	fd3383475e495889	0
+20260729	800	3	4	12000	hostile+honest-disk	b9b9663ec65feb8a	0
+20260730	3000	5	8	8000	hostile	9659029db39e2a2f	2
+777	20000	4	8	5000	hostile+honest-disk	42c29db84fa0d604	0
+1000003	600	6	32	1000	hostile	7196396ddb072e70	0
+4294967295	500	2	8	0	plain	4dbd214013721e26	0
+18446744073709551615	500	3	4	9000	hostile	d7a3f6a1e88127f7	0
