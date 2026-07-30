@@ -70,9 +70,17 @@
 //! cited.** What can be said is that the store covers the Article 12 requirements
 //! and is ready to be mapped onto prEN ISO/IEC 24970 when that document settles.
 //!
-//! The obligations bite on **2 August 2026** and the technical standard telling
-//! anybody how to satisfy them does not exist. That gap is the reason this crate
-//! is worth writing, and it is also the reason it must not overstate itself.
+//! The Article 12 obligations were due on 2 August 2026 and the **Digital Omnibus
+//! on AI moved them to 2 December 2027** for stand-alone Annex III systems, and to
+//! 2 August 2028 for AI inside Annex I products. The technical standard telling
+//! anybody how to satisfy them still does not exist. That gap is the reason this
+//! crate is worth writing, and it is also the reason it must not overstate itself.
+//!
+//! The move is why [`MAPPING_VERSION`] is 2 rather than 1. Version 1 carried the
+//! pre-omnibus dates, read from a consolidated text that did not yet include the
+//! amendment, and a statement made under version 1 has to stay distinguishable
+//! from one made now. A mapping that silently corrected itself would rewrite what
+//! it told somebody last quarter.
 
 #![forbid(unsafe_code)]
 
@@ -82,7 +90,7 @@ use trailryx_verify::{Level, Report};
 ///
 /// Bumped when an obligation is added, removed, or read differently. Not bumped
 /// for wording.
-pub const MAPPING_VERSION: u16 = 1;
+pub const MAPPING_VERSION: u16 = 2;
 
 /// When the quoted clause text was last read from its source.
 pub const SOURCES_READ_ON: &str = "2026-07-30";
@@ -326,14 +334,21 @@ pub const OBLIGATIONS: &[Obligation] = &[
     Obligation {
         framework: Framework::EuAiAct,
         reference: "Article 113",
-        requires: "Dates, from Article 113: the Regulation applies from 2 August 2026. Chapters \
-                   I and II apply from 2 February 2025; Chapter III Section 4, Chapter V, \
-                   Chapter VII, Chapter XII and Article 78 from 2 August 2025, except Article \
-                   101; Article 6(1) and its corresponding obligations from 2 August 2027.",
+        requires: "Dates, from Article 113 as amended by the Digital Omnibus on AI, adopted by \
+                   Parliament on 16 June 2026 and by Council on 29 June 2026: the high-risk \
+                   obligations for stand-alone Annex III systems apply from 2 December 2027, and \
+                   for AI embedded in Annex I products from 2 August 2028. The Article 50 \
+                   transparency duties stay on 2 August 2026, with a grace period to 2 December \
+                   2026 for marking content from systems already on the market. Chapters I and \
+                   II have applied since 2 February 2025, and the general-purpose model chapter \
+                   since 2 August 2025.",
         bearing: Bearing::Silent(
             "a date, not an obligation. It is in the mapping because the record-keeping duties \
              above are worth nothing without knowing when they bite, and because a mapping that \
-             omitted it would invite somebody to assume they had longer or less time than they do",
+             omitted it would invite somebody to assume they had longer or less time than they \
+             do. Version 1 of this mapping said 2 August 2026, which was the law when it was \
+             written and was moved by an amendment weeks later: the clearest possible argument \
+             for versioning an interpretation rather than restating it",
         ),
     },
     // -- prEN ISO/IEC 24970 ------------------------------------------------

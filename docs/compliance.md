@@ -21,8 +21,9 @@ The profile document for what this store does is **prEN ISO/IEC 24970, "AI syste
 logging"**: logging of events during an AI system's operation, for traceability and
 post-market surveillance. It is a draft.
 
-So: **the obligations of Article 12 bite on 2 August 2026 and the technical
-standard telling anybody how to satisfy them does not exist yet.** That gap is
+So: **the obligations of Article 12 now bite on 2 December 2027, moved there from
+2 August 2026 by the Digital Omnibus on AI, and the technical standard telling anybody
+how to satisfy them still does not exist.** That gap is
 why this layer is worth building. It is also exactly why it must not overstate
 itself, and the rule is one line:
 

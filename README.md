@@ -183,8 +183,9 @@ something an auditor asks.
 | What did we know in March, before we knew better? | no answer | `as_of` on the time dimension |
 | Delete this person, keep the audit valid | mutually exclusive | crypto-erasure; the erasure is itself a record |
 
-Obligations under EU AI Act Article 12 apply from 2 August 2026. The harmonised
-standards that would say *how* are not cited in the Official Journal yet.
+Obligations under EU AI Act Article 12 were due on 2 August 2026, and the Digital
+Omnibus on AI moved them to 2 December 2027 for stand-alone Annex III systems. The
+harmonised standards that would say *how* are still not cited in the Official Journal.
 
 ## How this compares
 
@@ -1335,8 +1336,10 @@ condemned by an older verifier.
 
 ## Nobody here will tell you that you are compliant
 
-Article 12 of the EU AI Act bites on **2 August 2026** and, as of June 2026, no
-JTC 21 document is cited in the Official Journal. No harmonised standard confers a
+Article 12 of the EU AI Act was due to bite on 2 August 2026 and the Digital Omnibus
+on AI moved it to **2 December 2027** for stand-alone Annex III systems, with AI inside
+Annex I products following on 2 August 2028. As of July 2026 no JTC 21 document is
+cited in the Official Journal. No harmonised standard confers a
 presumption of conformity on anybody, for any product. So the obligation arrives
 before the instruction manual, which is the whole reason there is a layer for this
 and the whole reason it must not overstate itself.
