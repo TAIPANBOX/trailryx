@@ -230,6 +230,15 @@ fn we_agree_with_cpython_and_node_except_where_we_chose_not_to() {
         let mut want: BTreeSet<String> = BTreeSet::new();
         let mut got: BTreeSet<String> = BTreeSet::new();
         for case in &cases {
+            // The same exclusion as above, and it belongs here too. The first fix
+            // for this took it out of the disagreement equality and left it in the
+            // per-oracle one, so CI failed a second time on the same input: a
+            // stack-dependent case cannot be pinned against either oracle, because
+            // whether we differ from an oracle depends on what that oracle's stack
+            // let it do.
+            if stack_dependent.contains(&case.name) {
+                continue;
+            }
             let ours = expectations
                 .get(&case.name)
                 .unwrap_or_else(|| panic!("{} has no row in EXPECTATIONS.tsv", case.name))
