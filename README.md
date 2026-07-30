@@ -4,7 +4,7 @@
 
 **The tamper-evident record database for AI agents.**
 
-![Stage](https://img.shields.io/badge/stage-9%20of%2013-blue.svg)
+![Stage](https://img.shields.io/badge/stage-11%20of%2013-blue.svg)
 ![Core](https://img.shields.io/badge/core-frozen-success.svg)
 ![Rust](https://img.shields.io/badge/rust-1.85%2B-orange.svg)
 ![Tests](https://img.shields.io/badge/tests-971-success.svg)
