@@ -73,6 +73,11 @@ Stated here so nobody spends their time on it:
   `Aead::is_validated()` returns false and `Vault::new` refuses them. A deployment
   is expected to supply a validated implementation behind that seam. Breaking
   `Sha384Ctr` is not a finding; a way to bypass the `is_validated` check is.
+- **A path that gets SQL past `trailryx_sql::gate`.** A statement kind the gate lets
+  through that can name a filesystem path, or a way to reach `SessionContext::sql`
+  without the gate, is arbitrary local file read on the store's host and is the most
+  serious report this crate can receive. `crates/trailryx-sql/src/gate.rs` states what
+  is allowed and why each one is.
 - **The SQL facade has 243 transitive dependencies, and everything else has none.**
   `trailryx-sql` took DataFusion and the Postgres wire protocol on 30 July 2026. A
   vulnerability in one of those crates is a real report and `cargo audit` in CI is

@@ -291,3 +291,103 @@ async fn sql_cannot_write() {
         "the row count moved, so something got through"
     );
 }
+
+// ---------------------------------------------------------------------------
+// The gate, through the only entry point there is
+// ---------------------------------------------------------------------------
+
+use trailryx_sql::{QueryError, Session};
+
+/// The whole reason `gate` exists, end to end. A bare `SessionContext` reads the file;
+/// a `Session` refuses before the engine is asked.
+#[tokio::test]
+async fn a_session_cannot_be_talked_into_reading_a_local_file() {
+    let dir = std::env::temp_dir().join("trailryx-sql-gate");
+    std::fs::create_dir_all(&dir).unwrap();
+    let secret = dir.join("secret.csv");
+    std::fs::write(&secret, "a,b\n1,hunter2\n").unwrap();
+
+    let session = Session::new(vec![segment()]);
+    let attempt = session
+        .query(&format!(
+            "CREATE EXTERNAL TABLE leak (a INT, b VARCHAR) STORED AS CSV LOCATION '{}'",
+            secret.display()
+        ))
+        .await;
+
+    let Err(QueryError::Refused(refusal)) = attempt else {
+        panic!("a session read, or tried to read, a path a client named: {attempt:?}");
+    };
+    assert!(
+        refusal.to_string().contains("arbitrary local file read"),
+        "{refusal}"
+    );
+
+    // And the table was never created, so a follow-up cannot find it either.
+    assert!(session.query("SELECT * FROM leak").await.is_err());
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// The same protection against the shape that hides a second statement behind a
+/// harmless first one.
+#[tokio::test]
+async fn a_second_statement_cannot_ride_in_behind_a_select() {
+    let session = Session::new(vec![segment()]);
+    let attempt = session
+        .query("SELECT 1; CREATE EXTERNAL TABLE leak (a INT) STORED AS CSV LOCATION '/etc/passwd'")
+        .await;
+    assert!(
+        matches!(attempt, Err(QueryError::Refused(_))),
+        "{attempt:?}"
+    );
+}
+
+/// A session still answers the queries it is for, and still reports provability
+/// through the same entry point.
+#[tokio::test]
+async fn a_session_answers_a_query_and_reports_its_proof() {
+    let session = Session::new(vec![segment()]);
+    let rows: usize = session
+        .query("SELECT * FROM records WHERE run_id = 'run-b'")
+        .await
+        .expect("a select is served")
+        .iter()
+        .map(|b| b.num_rows())
+        .sum();
+    assert_eq!(rows, 2);
+    assert_eq!(session.last_proof(), Some(Provability::Full));
+
+    let rows: usize = session
+        .query("SELECT * FROM records WHERE severity = 'error'")
+        .await
+        .expect("a select is served")
+        .iter()
+        .map(|b| b.num_rows())
+        .sum();
+    assert_eq!(rows, 3);
+    assert!(matches!(
+        session.last_proof(),
+        Some(Provability::Partial(_))
+    ));
+}
+
+/// Writing through a session is refused by the gate rather than by the engine, so the
+/// refusal names the statement instead of being a planning failure.
+#[tokio::test]
+async fn writing_through_a_session_is_refused_by_name() {
+    let session = Session::new(vec![segment()]);
+    for (sql, expected) in [
+        (
+            "INSERT INTO records VALUES (1)",
+            "records arrive through a Source",
+        ),
+        ("DELETE FROM records", "append-only"),
+        ("UPDATE records SET run_id = 'x'", "append-only"),
+        ("DROP TABLE records", "nothing served here"),
+    ] {
+        let Err(QueryError::Refused(refusal)) = session.query(sql).await else {
+            panic!("{sql} was not refused by the gate");
+        };
+        assert!(refusal.to_string().contains(expected), "{sql}: {refusal}");
+    }
+}

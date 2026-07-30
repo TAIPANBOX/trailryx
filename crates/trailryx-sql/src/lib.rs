@@ -46,5 +46,104 @@
 //! there is nothing here that could perform one: records arrive through a `Source`
 //! and nowhere else.
 
+pub mod gate;
 pub mod pushdown;
 pub mod table;
+
+use std::sync::Arc;
+
+use datafusion::arrow::record_batch::RecordBatch;
+use datafusion::prelude::SessionContext;
+use trailryx_index::segment::Segment;
+
+pub use gate::Refusal;
+pub use table::{Provability, RecordTable};
+
+/// A read-only session over sealed segments.
+///
+/// # Why this exists rather than a bare `SessionContext`
+///
+/// So the statement gate cannot be forgotten. A bare `SessionContext` accepts
+/// `CREATE EXTERNAL TABLE ... LOCATION '/etc/passwd'` and returns the file, which
+/// makes any server that forwards SQL to one an arbitrary local file read on the
+/// store's host. That is measured, not supposed: `gate`'s first test is the statement
+/// that did it.
+///
+/// A server author who reached for `SessionContext::sql` directly would reintroduce
+/// that with no warning, so there is one entry point here and it gates first. The
+/// context is deliberately **not** exposed.
+pub struct Session {
+    context: SessionContext,
+    table: Arc<RecordTable>,
+}
+
+impl std::fmt::Debug for Session {
+    /// Hand-written because `SessionContext` has no `Debug`, and the workspace lint
+    /// warns on a type without one. Prints what a reader would want anyway: the last
+    /// answer's provability, not the engine's internals.
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Session")
+            .field("last_proof", &self.table.last_proof())
+            .finish_non_exhaustive()
+    }
+}
+
+impl Session {
+    /// Register the sealed segments as `records` and nothing else.
+    ///
+    /// One table, no catalog of the operator's choosing, no external locations. The
+    /// tables a session can see are the ones the store registered.
+    pub fn new(segments: Vec<Segment>) -> Self {
+        let table = Arc::new(RecordTable::new(segments));
+        let context = SessionContext::new();
+        context
+            .register_table("records", Arc::clone(&table) as Arc<_>)
+            .expect("a fresh context has no `records` table to collide with");
+        Self { context, table }
+    }
+
+    /// Run one statement, if it is one this facade serves.
+    ///
+    /// The gate runs **before** the engine sees the text, and its refusal is returned
+    /// rather than turned into a generic error, because a caller who tried `COPY`
+    /// should learn it was refused deliberately.
+    pub async fn query(&self, sql: &str) -> Result<Vec<RecordBatch>, QueryError> {
+        gate::allow(sql).map_err(QueryError::Refused)?;
+        let frame = self
+            .context
+            .sql(sql)
+            .await
+            .map_err(|e| QueryError::Engine(e.to_string()))?;
+        frame
+            .collect()
+            .await
+            .map_err(|e| QueryError::Engine(e.to_string()))
+    }
+
+    /// How provable the last answer was.
+    ///
+    /// A stopgap until the dialect carries `WITH PROOF`; see [`table`] for what that
+    /// costs and why it is not a lie in the meantime.
+    pub fn last_proof(&self) -> Option<Provability> {
+        self.table.last_proof()
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum QueryError {
+    /// The gate refused it, with the reason.
+    Refused(Refusal),
+    /// It got past the gate and the engine could not run it.
+    Engine(String),
+}
+
+impl std::fmt::Display for QueryError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Refused(r) => write!(f, "refused: {r}"),
+            Self::Engine(e) => write!(f, "{e}"),
+        }
+    }
+}
+
+impl std::error::Error for QueryError {}

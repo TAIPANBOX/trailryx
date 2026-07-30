@@ -7,7 +7,7 @@
 ![Stage](https://img.shields.io/badge/stage-9%20of%2013-blue.svg)
 ![Core](https://img.shields.io/badge/core-frozen-success.svg)
 ![Rust](https://img.shields.io/badge/rust-1.85%2B-orange.svg)
-![Tests](https://img.shields.io/badge/tests-870-success.svg)
+![Tests](https://img.shields.io/badge/tests-882-success.svg)
 ![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)
 ![Dependencies](https://img.shields.io/badge/deps-0%20in%20the%20core-success.svg)
 ![Unsafe](https://img.shields.io/badge/unsafe-forbidden-success.svg)
@@ -259,7 +259,7 @@ and the proof shapes do not change without a version and a migration.
 | `trailryx-anchor` | RFC 3161 timestamping: TSP, the CMS subset, and RSA over Montgomery arithmetic | 52 |
 | `trailryx-ingest` | the OTLP/HTTP server: HTTP/1.1, gzip, bearer auth, all hand-written | 119 |
 | `trailryx-compliance` | a versioned map from what is proved to what a framework asks, and what it does not | 12 |
-| `trailryx-sql` | the SQL facade: DataFusion over the projections, predicates pushed into the index. **The one crate with third-party dependencies** | 17 |
+| `trailryx-sql` | the SQL facade: DataFusion over the projections, predicates pushed into the index, statements gated. **The one crate with third-party dependencies** | 29 |
 | `trailryx-demo` | the eight acceptance steps, and a reader for a collector's file | - |
 
 **Zero third-party dependencies in every crate above.** `unsafe` forbidden at the
@@ -285,7 +285,7 @@ thing an auditor reads.
 ## Try it
 
 ```bash
-cargo test                                    # 870 tests
+cargo test                                    # 882 tests
 cargo run --bin trailryx-sim-run -- --help
 ```
 
@@ -357,6 +357,39 @@ no proof at all.
 **completes**. DataFusion plans the statement happily; the refusal comes at execution.
 An earlier version of that test checked only that planning failed and was itself
 wrong.
+
+### A Postgres port that forwards SQL is arbitrary file read
+
+Measured before anything was built on top of it. A plain DataFusion session accepts
+this, plans it, runs it, and returns the file:
+
+```sql
+CREATE EXTERNAL TABLE leak (a INT, b VARCHAR) STORED AS CSV LOCATION '/etc/passwd';
+SELECT * FROM leak;
+```
+
+So a facade that hands arbitrary SQL to a session is **arbitrary local file read on
+the host running the store**, and following the wiring without thinking about
+statement kinds ships exactly that. For a store whose whole value is being believed
+by somebody who does not trust the operator, that is worse than anything the write
+surface could do: ingest can only add a record, and this exfiltrates everything else
+on the machine.
+
+The gate decides on the **parsed statement**, using the engine's own parser, because
+prefix matching on text is defeated by a comment, by whitespace, by case and by a
+semicolon. Two parsers disagreeing about where a statement ends is the same defect
+class as request smuggling, and using the engine's own removes it. Two statements in
+one request are refused rather than split, since a gate that checks the first and runs
+the rest is the shape of every SQL injection ever written.
+
+It is an **allowlist**: queries, `EXPLAIN`, and the session chatter every client sends
+on connect. A denylist would be a list somebody has to keep complete as `sqlparser`
+grows a variant, and the update would be somebody remembering.
+
+And the gate cannot be forgotten, because there is no way round it: `Session` owns the
+context, does not expose it, and gates before the engine is asked. A server author
+reaching for `SessionContext::sql` would reintroduce the hole with no warning, so that
+door is not there.
 
 ## Two verifiers, so the format is what is proved
 
@@ -1008,7 +1041,7 @@ that is the part an auditor cannot do without the pack. It then says out loud th
 it did not check the authority's signature, and prints the command that does:
 
 ```
-[note]  anchor: "digicert" stamped this root at 1785421800, token 738 bytes, nonce 870344827
+[note]  anchor: "digicert" stamped this root at 1785421800, token 738 bytes, nonce 882344827
 [weak]  anchor-signature: this verifier checked that "digicert"'s token is over this
         root and did not check the authority's signature; verify it with
         `openssl ts -verify` against their published certificate
