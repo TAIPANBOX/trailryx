@@ -4,7 +4,7 @@
 
 **The tamper-evident record database for AI agents.**
 
-![Stage](https://img.shields.io/badge/stage-10%20of%2013-blue.svg)
+![Stage](https://img.shields.io/badge/stage-9%20of%2013-blue.svg)
 ![Core](https://img.shields.io/badge/core-frozen-success.svg)
 ![Rust](https://img.shields.io/badge/rust-1.85%2B-orange.svg)
 ![Tests](https://img.shields.io/badge/tests-674-success.svg)
@@ -243,7 +243,8 @@ and the proof shapes do not change without a version and a migration.
 | `trailryx-sim` | injectable clock, rng, io and bus; a crash model and fault injection | 18 |
 | `trailryx-record` | the canonical record, its schema, and the plane boundary | 26 |
 | `trailryx-crypto` | SHA-384 and the hash chain | 14 |
-| `trailryx-contracts` | eight adapter traits and a conformance suite | 19 |
+| `trailryx-core` | the simulated store the determinism criterion runs against | 15 |
+| `trailryx-contracts` | eight adapter traits and a conformance suite | 21 |
 | `trailryx-journal` | wire format, append-only write path, recovery | 26 |
 | `trailryx-index` | Merkle history tree, completeness proofs, segment composition | 54 |
 | `trailryx-store` | sealing, the read surface, causal reconstruction | 58 |
@@ -931,9 +932,16 @@ each other, and the plane boundary holds end to end.
 | Crypto | hybrid X25519 + ML-KEM-768 key wrapping from day one, because crypto-erasure lasts only as long as its KEM |
 | Licence | Apache-2.0 |
 
-Full documents in [`docs/planning/`](docs/planning/), written in Ukrainian. The
-durability contract is [`docs/durability.md`](docs/durability.md); what erasure
-cannot reach is [`docs/identifiers.md`](docs/identifiers.md).
+The two documents worth reading are in English and are referenced from the code
+that implements them: the durability contract is
+[`docs/durability.md`](docs/durability.md), and what erasure cannot reach is
+[`docs/identifiers.md`](docs/identifiers.md).
+
+[`docs/planning/`](docs/planning/) is the project's own working record, in
+Ukrainian, and nothing here depends on reading it. It is kept in the open rather
+than tidied away because it is where each stage says what it did **not** do, and
+where the six review findings still unverified are written down. A repository whose
+history only records its successes is a repository whose claims cannot be checked.
 
 ## What is ours and what is borrowed
 
@@ -954,12 +962,16 @@ proves and erases. That is the test of whose engine it is.
 git config core.hooksPath .githooks   # once
 ```
 
-No CI while the repository is private, because Actions minutes are metered
-there and a local gate does the same work for nothing. `.githooks/pre-push` runs
+`.githooks/pre-push` runs eight checks and refuses the push if any fails:
 formatting, clippy with warnings as errors, the tests, a standalone build of the
 substrate crate, a zero-dependency check, an `unsafe` check, the determinism
-criterion and a 200-seed durability sweep. When the repository goes public,
-Actions become free and that script becomes the workflow unchanged.
+criterion and a 200-seed durability sweep.
+
+`.github/workflows/ci.yml` is the same eight, so a green push is a green pull
+request. It carries a deliberate guard: Actions minutes are metered on a private
+repository and free on a public one, so every job is skipped while
+`github.event.repository.private` is true. Removing that line is a billing decision
+rather than a tidy-up, and the file says so where somebody would find it.
 
 ## Next
 

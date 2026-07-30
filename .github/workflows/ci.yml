@@ -1,0 +1,84 @@
+name: ci
+
+# The same eight checks `.githooks/pre-push` runs, so a green push is a green pull
+# request and neither can drift from the other.
+#
+# THE GUARD ON `if:` IS NOT DECORATION. Actions minutes are metered on a private
+# repository and free on a public one, and this file was written while the
+# repository was still private. `github.event.repository.private` is false only
+# once the repository is public, so until then every job is skipped and consumes
+# nothing. Deleting that condition turns this file into a billable one, which is a
+# decision for whoever owns the account and not a tidy-up.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  gate:
+    if: github.event.repository.private == false
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: toolchain
+        run: |
+          rustup toolchain install stable --profile minimal --component rustfmt,clippy
+          rustup default stable
+          rustc --version && cargo --version
+
+      # Warnings are failures: a warning nobody fixes is a warning everybody stops
+      # reading.
+      - name: cargo fmt --check
+        run: cargo fmt --all --check
+
+      - name: cargo clippy -D warnings
+        run: cargo clippy --all-targets --quiet -- -D warnings
+
+      - name: cargo test
+        run: cargo test --workspace --quiet
+
+      # The substrate must stand on its own. Trivially true today, and the day it
+      # would stop being true, it breaks here.
+      - name: sim crate builds standalone
+        run: cargo test -p trailryx-sim --quiet
+
+      # Not an aesthetic: the offline verifier has to be small enough for an auditor
+      # to read, and every crate pulled in is a crate somebody has to trust.
+      - name: zero third-party deps
+        run: |
+          deps=$(cargo tree --workspace --prefix none --no-dedupe 2>/dev/null \
+                 | grep -v '^trailryx' | grep -c . || true)
+          if [ "$deps" -ne 0 ]; then
+            cargo tree --workspace --prefix none | grep -v '^trailryx' | head -20
+            echo "::error::$deps third-party dependencies"
+            exit 1
+          fi
+
+      # The workspace lint forbids it, so this is a second pair of eyes on the lint.
+      - name: no unsafe
+        run: |
+          if grep -rIn --include='*.rs' -E '^\s*unsafe\b|[^a-z_]unsafe\s*\{' crates; then
+            echo "::error::unsafe found"
+            exit 1
+          fi
+
+      # The exit criterion of stage 0, checked on every push rather than once. If a
+      # seed stops reproducing a run, every guarantee built on the simulator stops
+      # meaning anything.
+      - name: determinism, same seed twice
+        run: |
+          run() { cargo run --quiet --bin trailryx-sim-run -- \
+                    --seed 20260729 --steps 800 --shards 3 --sync-every 4 \
+                    --crash-ppm 12000 --hostile --honest-disk; }
+          a=$(run); b=$(run)
+          [ -n "$a" ] && [ "$a" = "$b" ] || { printf 'run 1: %s\nrun 2: %s\n' "$a" "$b"; exit 1; }
+          echo "$a"
+
+      # Enough to catch a write-path regression. The long sweep belongs in a nightly.
+      - name: durability sweep, 200 seeds
+        run: |
+          cargo run --quiet --release --bin trailryx-sim-run -- \
+            --seed 1 --sweep 200 --steps 300 --shards 3 --sync-every 4 \
+            --crash-ppm 15000 --hostile --honest-disk
