@@ -3690,6 +3690,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "trailryx-publish"
+version = "0.0.1"
+dependencies = [
+ "trailryx-contracts",
+ "trailryx-crypto",
+ "trailryx-record",
+ "trailryx-sim",
+]
+
+[[package]]
 name = "trailryx-record"
 version = "0.0.1"
 
