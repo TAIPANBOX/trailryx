@@ -1,0 +1,175 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="-18 -18 996 512" width="996" height="512" role="img" aria-label="One span arrives and the mapper splits it into typed metadata and an encrypted payload; the metadata becomes a link in a hash chain, the chain is sealed into a Merkle tree, the root is signed and witnessed and checked by a verifier with no dependencies, and then the payload key is destroyed while the verdict still stands">
+  <title>Watch one record become evidence: in, split, chained, sealed, signed, verified, and then erased without breaking any of it</title>
+
+  <rect x="-18" y="-18" width="996" height="512" rx="16" fill="#0A0E13"/>
+  <rect x="-17.5" y="-17.5" width="995" height="511" rx="15.5" fill="none" stroke="rgba(255,255,255,.09)"/>
+
+  <defs>
+    <marker id="fa" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="6" markerHeight="6" orient="auto"><path d="M0 0 L8 4 L0 8 z" fill="#3A4553"/></marker>
+    <path id="pIn"   d="M138 74 L214 74"/>
+    <path id="pMeta" d="M340 62 C 380 62 392 48 428 48"/>
+    <path id="pPay"  d="M340 86 C 380 86 392 104 428 104"/>
+    <path id="pDown" d="M494 130 C 494 158 300 150 262 176"/>
+  </defs>
+
+  <g fill="none" stroke="#222B37" stroke-width="1.2">
+    <use href="#pIn"/><use href="#pMeta"/><use href="#pPay"/><use href="#pDown"/>
+  </g>
+
+  <g font-family="ui-monospace,Menlo" text-anchor="middle">
+
+    <text x="480" y="20" fill="#E9EFF6" font-size="13" font-weight="700">one span, from the wire to something an auditor can check</text>
+
+    <rect x="14" y="50" width="124" height="48" rx="11" fill="#141C27" stroke="#2a3547"/>
+    <text x="76" y="70" fill="#E9EFF6" font-size="10.5" font-weight="700">an agent</text>
+    <text x="76" y="86" fill="#8A97A6" font-size="10.5">emits a span</text>
+
+    <rect x="214" y="46" width="126" height="56" rx="11" fill="#141C27" stroke="#E4626F">
+      <animate attributeName="stroke-width" dur="16s" repeatCount="indefinite" values="1;1;2.6;1;1" keyTimes="0;0.11;0.15;0.21;1"/>
+    </rect>
+    <text x="277" y="68" fill="#E9EFF6" font-size="10.5" font-weight="700">the mapper</text>
+    <text x="277" y="85" fill="#8A97A6" font-size="10.5">splits it in two</text>
+
+    <rect x="428" y="28" width="132" height="42" rx="10" fill="#141C27" stroke="#93A8C4"/>
+    <text x="494" y="45" fill="#93A8C4" font-size="10.5" font-weight="700">metadata</text>
+    <text x="494" y="60" fill="#8A97A6" font-size="10.5">typed, kept, provable</text>
+
+    <rect x="428" y="84" width="132" height="46" rx="10" fill="#141C27" stroke="#E4626F"/>
+    <text x="494" y="102" fill="#E4626F" font-size="10.5" font-weight="700">payload</text>
+    <text x="494" y="118" fill="#8A97A6" font-size="10.5">sealed, own key</text>
+
+    <g>
+      <animate attributeName="opacity" dur="16s" repeatCount="indefinite" values="0;0;1;1;0;0" keyTimes="0;0.20;0.24;0.84;0.89;1"/>
+      <circle cx="600" cy="100" r="7" fill="none" stroke="#F4B23E" stroke-width="2"/>
+      <path d="M607 100 L624 100 M618 100 L618 107 M624 100 L624 108" stroke="#F4B23E" stroke-width="2" fill="none"/>
+      <text x="640" y="104" fill="#F4B23E" font-size="10.5" text-anchor="start">its key, held apart</text>
+    </g>
+    <g>
+      <animate attributeName="opacity" dur="16s" repeatCount="indefinite" values="0;0;1;1" keyTimes="0;0.89;0.93;1"/>
+      <path d="M593 93 L607 107 M607 93 L593 107" stroke="#E4626F" stroke-width="2.4" stroke-linecap="round"/>
+      <text x="640" y="104" fill="#E4626F" font-size="10.5" text-anchor="start">its key, destroyed</text>
+    </g>
+
+    <text x="150" y="170" fill="#8A97A6" font-size="10.5" font-weight="700" text-anchor="start">the journal: one chain per shard</text>
+
+    <g>
+      <g>
+        <animate attributeName="opacity" dur="16s" repeatCount="indefinite" values="0;0;1;1" keyTimes="0;0.24;0.28;1"/>
+        <rect x="150" y="176" width="66" height="34" rx="8" fill="#141C27" stroke="#93A8C4"/>
+        <text x="183" y="198" fill="#93A8C4" font-size="10.5">seq 1</text>
+      </g>
+      <g>
+        <animate attributeName="opacity" dur="16s" repeatCount="indefinite" values="0;0;1;1" keyTimes="0;0.29;0.33;1"/>
+        <line x1="216" y1="193" x2="234" y2="193" stroke="#3A4553" stroke-width="1.5" marker-end="url(#fa)"/>
+        <rect x="234" y="176" width="66" height="34" rx="8" fill="#141C27" stroke="#93A8C4"/>
+        <text x="267" y="198" fill="#93A8C4" font-size="10.5">seq 2</text>
+      </g>
+      <g>
+        <animate attributeName="opacity" dur="16s" repeatCount="indefinite" values="0;0;1;1" keyTimes="0;0.34;0.38;1"/>
+        <line x1="300" y1="193" x2="318" y2="193" stroke="#3A4553" stroke-width="1.5" marker-end="url(#fa)"/>
+        <rect x="318" y="176" width="66" height="34" rx="8" fill="#141C27" stroke="#93A8C4"/>
+        <text x="351" y="198" fill="#93A8C4" font-size="10.5">seq 3</text>
+      </g>
+      <g>
+        <animate attributeName="opacity" dur="16s" repeatCount="indefinite" values="0;0;1;1" keyTimes="0;0.39;0.43;1"/>
+        <line x1="384" y1="193" x2="402" y2="193" stroke="#3A4553" stroke-width="1.5" marker-end="url(#fa)"/>
+        <rect x="402" y="176" width="66" height="34" rx="8" fill="#141C27" stroke="#93A8C4"/>
+        <text x="435" y="198" fill="#93A8C4" font-size="10.5">seq 4</text>
+      </g>
+    </g>
+    <text x="510" y="188" fill="#8A97A6" font-size="10.5" text-anchor="start">each link covers the one before it,</text>
+    <text x="510" y="204" fill="#5A6675" font-size="10.5" text-anchor="start">so a rewrite moves every link after it</text>
+
+    <text x="150" y="252" fill="#8A97A6" font-size="10.5" font-weight="700" text-anchor="start">sealed: a Merkle history over the chain links</text>
+
+    <g>
+      <animate attributeName="opacity" dur="16s" repeatCount="indefinite" values="0;0;1;1" keyTimes="0;0.46;0.51;1"/>
+      <rect x="150" y="262" width="66" height="24" rx="6" fill="#10161F" stroke="#2a3547"/>
+      <text x="183" y="278" fill="#5A6675" font-size="10.5">h1</text>
+      <rect x="234" y="262" width="66" height="24" rx="6" fill="#10161F" stroke="#2a3547"/>
+      <text x="267" y="278" fill="#5A6675" font-size="10.5">h2</text>
+      <rect x="318" y="262" width="66" height="24" rx="6" fill="#10161F" stroke="#2a3547"/>
+      <text x="351" y="278" fill="#5A6675" font-size="10.5">h3</text>
+      <rect x="402" y="262" width="66" height="24" rx="6" fill="#10161F" stroke="#2a3547"/>
+      <text x="435" y="278" fill="#5A6675" font-size="10.5">h4</text>
+    </g>
+
+    <g stroke="#2a3547" stroke-width="1.4" fill="none">
+      <animate attributeName="opacity" dur="16s" repeatCount="indefinite" values="0;0;1;1" keyTimes="0;0.52;0.57;1"/>
+      <path d="M183 286 L225 308 M267 286 L225 308 M351 286 L393 308 M435 286 L393 308"/>
+    </g>
+    <g>
+      <animate attributeName="opacity" dur="16s" repeatCount="indefinite" values="0;0;1;1" keyTimes="0;0.54;0.59;1"/>
+      <rect x="192" y="308" width="66" height="24" rx="6" fill="#10161F" stroke="#2a3547"/>
+      <text x="225" y="324" fill="#5A6675" font-size="10.5">h12</text>
+      <rect x="360" y="308" width="66" height="24" rx="6" fill="#10161F" stroke="#2a3547"/>
+      <text x="393" y="324" fill="#5A6675" font-size="10.5">h34</text>
+    </g>
+
+    <g stroke="#2a3547" stroke-width="1.4" fill="none">
+      <animate attributeName="opacity" dur="16s" repeatCount="indefinite" values="0;0;1;1" keyTimes="0;0.60;0.64;1"/>
+      <path d="M225 332 L293 354 M393 332 L325 354"/>
+    </g>
+    <g>
+      <animate attributeName="opacity" dur="16s" repeatCount="indefinite" values="0;0;1;1" keyTimes="0;0.62;0.67;1"/>
+      <rect x="270" y="354" width="78" height="26" rx="7" fill="#141C27" stroke="#E4626F"/>
+      <text x="309" y="371" fill="#E4626F" font-size="10.5" font-weight="700">root</text>
+    </g>
+
+    <text x="510" y="272" fill="#8A97A6" font-size="10.5" text-anchor="start">five sorted indexes go with it,</text>
+    <text x="510" y="288" fill="#5A6675" font-size="10.5" text-anchor="start">one per provable dimension, so an</text>
+    <text x="510" y="304" fill="#5A6675" font-size="10.5" text-anchor="start">answer can carry the boundary</text>
+    <text x="510" y="320" fill="#5A6675" font-size="10.5" text-anchor="start">either side of itself</text>
+
+    <g>
+      <animate attributeName="opacity" dur="16s" repeatCount="indefinite" values="0;0;1;1" keyTimes="0;0.67;0.72;1"/>
+      <line x1="348" y1="367" x2="392" y2="367" stroke="#3A4553" stroke-width="1.5" marker-end="url(#fa)"/>
+      <rect x="392" y="350" width="164" height="34" rx="9" fill="#141C27" stroke="#93A8C4"/>
+      <text x="474" y="371" fill="#93A8C4" font-size="10.5" font-weight="700">signed, witnessed</text>
+    </g>
+
+    <g>
+      <animate attributeName="opacity" dur="16s" repeatCount="indefinite" values="0;0;1;1" keyTimes="0;0.74;0.79;1"/>
+      <line x1="556" y1="367" x2="600" y2="367" stroke="#3A4553" stroke-width="1.5" marker-end="url(#fa)"/>
+      <rect x="600" y="342" width="346" height="50" rx="10" fill="#10161F" stroke="#34D399"/>
+      <path d="M622 366 L628 373 L640 358" stroke="#34D399" stroke-width="2.4" fill="none" stroke-linecap="round"/>
+      <text x="795" y="362" fill="#34D399" font-size="10.5" font-weight="700">a verifier that depends on nothing</text>
+      <text x="795" y="378" fill="#8A97A6" font-size="10.5">recomputes every root from the record bytes</text>
+    </g>
+
+    <g>
+      <animate attributeName="opacity" dur="16s" repeatCount="indefinite" values="0;0;1;1" keyTimes="0;0.90;0.94;1"/>
+      <rect x="14" y="408" width="932" height="60" rx="11" fill="#10161F" stroke="#34D399"/>
+      <path d="M40 436 L47 444 L61 427" stroke="#34D399" stroke-width="2.4" fill="none" stroke-linecap="round"/>
+      <text x="500" y="432" fill="#34D399" font-size="11" font-weight="700">the key is gone, and the tick still stands</text>
+      <text x="500" y="452" fill="#8A97A6" font-size="10.5">the record commits to the payload's hash, size, class and key id, and destroying a key moves none of the four</text>
+    </g>
+  </g>
+
+  <g>
+    <circle r="5" fill="#E4626F">
+      <animate attributeName="opacity" dur="16s" repeatCount="indefinite" values="0;1;1;0;0" keyTimes="0;0.02;0.13;0.16;1"/>
+      <animateMotion dur="16s" repeatCount="indefinite" keyPoints="0;0;1;1" keyTimes="0;0.02;0.13;1" calcMode="linear">
+        <mpath href="#pIn"/>
+      </animateMotion>
+    </circle>
+    <circle r="4.5" fill="#93A8C4">
+      <animate attributeName="opacity" dur="16s" repeatCount="indefinite" values="0;0;1;1;0;0" keyTimes="0;0.16;0.18;0.22;0.24;1"/>
+      <animateMotion dur="16s" repeatCount="indefinite" keyPoints="0;0;1;1" keyTimes="0;0.16;0.22;1" calcMode="linear">
+        <mpath href="#pMeta"/>
+      </animateMotion>
+    </circle>
+    <circle r="4.5" fill="#E4626F">
+      <animate attributeName="opacity" dur="16s" repeatCount="indefinite" values="0;0;1;1;0;0" keyTimes="0;0.16;0.18;0.22;0.24;1"/>
+      <animateMotion dur="16s" repeatCount="indefinite" keyPoints="0;0;1;1" keyTimes="0;0.16;0.22;1" calcMode="linear">
+        <mpath href="#pPay"/>
+      </animateMotion>
+    </circle>
+    <circle r="4.5" fill="#93A8C4">
+      <animate attributeName="opacity" dur="16s" repeatCount="indefinite" values="0;0;1;1;0;0" keyTimes="0;0.215;0.235;0.27;0.29;1"/>
+      <animateMotion dur="16s" repeatCount="indefinite" keyPoints="0;0;1;1" keyTimes="0;0.215;0.27;1" calcMode="linear">
+        <mpath href="#pDown"/>
+      </animateMotion>
+    </circle>
+  </g>
+</svg>
