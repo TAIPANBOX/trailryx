@@ -2,7 +2,7 @@
 
 # Trailryx
 
-**The tamper-evident record database for AI agents.**
+**A record of what your AI agents did that nobody can quietly change or shorten.**
 
 ![Stage](https://img.shields.io/badge/stage-11%20of%2013-blue.svg)
 ![Core](https://img.shields.io/badge/core-frozen-success.svg)
