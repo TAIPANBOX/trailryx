@@ -142,6 +142,12 @@ step "two verifiers agree" cargo test -p trailryx-store --test two_verifiers --q
 # other exit criterion, and it takes about three seconds.
 step "verifier build is reproducible" ./scripts/reproduce.sh
 
+# Every number the README states about this repository, against the repository.
+# Added after an audit found six drifted crate counts, a dependency figure no reading
+# of the tree reproduced, and a line off by a factor of two. None of them was a lie
+# when written, which is exactly why a person cannot be the check.
+step "README numbers are true" ./scripts/readme-numbers.sh
+
 # A short hunt for a durability violation. Not the long run, which belongs in a
 # nightly sweep: enough to catch a write-path regression before it is pushed.
 printf '  %-34s' "durability sweep (200 seeds)"

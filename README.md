@@ -1489,15 +1489,25 @@ proves and erases. That is the test of whose engine it is.
 git config core.hooksPath .githooks   # once
 ```
 
-`.githooks/pre-push` runs twelve checks and refuses the push if any fails:
+`.githooks/pre-push` runs thirteen checks and refuses the push if any fails:
 formatting, clippy with warnings as errors, the tests, a standalone build of the
 substrate crate, a zero-dependency check on every crate outside the SQL facade, a
 build and test of the core with the facade absent, an `unsafe` check, the determinism
 criterion, the published seed corpus, the two verifiers agreeing on the same packs, a
-reproducible build of the verifier from two different paths, and a 200-seed durability
-sweep. About a minute and a half, most of it the facade's dependency tree.
+reproducible build of the verifier from two different paths, every number this README
+states about the repository, and a 200-seed durability sweep. About a minute and a
+half, most of it the facade's dependency tree.
 
-`.github/workflows/ci.yml` runs the same twelve plus `cargo audit`, which stopped being trivially green the day the facade arrived and is now a real check with real work behind it,, so a green push
+The thirteenth is the newest and the least glamorous. An audit of this page on 30
+July 2026 found six crate test counts that had drifted as tests were added, a
+dependency figure behind the facade that no reading of the tree reproduced, and a
+description of the verifier's token reader that was off by a factor of two. None of
+them was false when it was written, which is the whole problem: a number in a README
+is a claim with no owner. So the badge, the totals and every row of the crate table
+are now checked against what the suite actually runs, and the push fails when they
+disagree.
+
+`.github/workflows/ci.yml` runs the same thirteen plus `cargo audit`, which stopped being trivially green the day the facade arrived and is now a real check with real work behind it, so a green push
 is a green pull request. It keeps a guard that skips every job while the repository
 is private, because Actions minutes are metered there and free here. The repository
 went public on 30 July 2026 and the condition released itself, which is why it was

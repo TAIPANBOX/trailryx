@@ -1,6 +1,6 @@
 name: ci
 
-# The same twelve checks `.githooks/pre-push` runs, so a green push is a green pull
+# The same thirteen checks `.githooks/pre-push` runs, so a green push is a green pull
 # request and neither can drift from the other.
 #
 # THE GUARD ON `if:` STAYS, and it is not decoration. Actions minutes are metered on
@@ -116,6 +116,13 @@ jobs:
       # an auditor cannot check the binary they run against the source they read.
       - name: verifier build is reproducible
         run: ./scripts/reproduce.sh
+
+      # Every number the README states about this repository, against the repository.
+      # A README number is a claim with no owner, and an audit on 30 July 2026 found
+      # six crate counts drifted, a dependency figure no reading of the tree
+      # reproduced, and a line off by a factor of two. None was a lie when written.
+      - name: README numbers are true
+        run: ./scripts/readme-numbers.sh
 
       # Enough to catch a write-path regression. The long sweep belongs in a nightly.
       - name: durability sweep, 200 seeds
