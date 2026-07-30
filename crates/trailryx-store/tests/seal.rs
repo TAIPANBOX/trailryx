@@ -7,7 +7,7 @@
 use trailryx_crypto::Sha384;
 use trailryx_index::completeness::Dimension;
 use trailryx_journal::journal::ChainStart;
-use trailryx_journal::journal::{Appended, Journal};
+use trailryx_journal::journal::{Appended, Journal, JournalError};
 use trailryx_record::{
     AgentId, Algorithms, Basis, EventType, Hash, MapperVersion, Outcome, Record, RecordId, RunId,
     SegmentId, Severity, ShardIx, TenantId, Timestamp, Untrusted, Verdict,
@@ -281,7 +281,15 @@ fn a_file_cannot_be_re_pointed_at_a_different_predecessor() {
     j.sync(&mut io).unwrap();
     drop(j);
 
-    let (reopened, recovered) = Journal::open(
+    // The file used to be truncated here: the record failed the chain check
+    // against the preferred head, and recovery discarded it and carried on. That
+    // meant re-pointing a file both failed *and* emptied it, so the attempt
+    // destroyed the evidence of itself. A well-formed frame whose chain does not
+    // follow is not something a crash produces, so recovery now refuses and
+    // leaves every byte in place.
+    let file = io.create("s0-2.journal").unwrap();
+    let before = io.read_all(file).unwrap().len();
+    let err = Journal::open(
         ShardIx(0),
         SegmentId(2),
         "s0-2.journal",
@@ -290,14 +298,15 @@ fn a_file_cannot_be_re_pointed_at_a_different_predecessor() {
         &mut io,
         &clock,
     )
-    .unwrap();
-    assert_eq!(
-        recovered.records, 0,
-        "a record chained from another head must not be adopted"
-    );
+    .map(|_| ())
+    .expect_err("a record chained from another head must not be adopted");
     assert!(
-        recovered.discarded_bytes > 0,
-        "and the bytes must be cut off"
+        matches!(err, JournalError::CorruptMidFile { .. }),
+        "expected a refusal naming the corruption, got {err:?}"
     );
-    let _ = reopened;
+    assert_eq!(
+        io.read_all(file).unwrap().len(),
+        before,
+        "the record was deleted by the attempt to re-point the file"
+    );
 }

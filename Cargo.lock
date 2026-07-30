@@ -93,9 +93,11 @@ dependencies = [
 name = "trailryx-otlp"
 version = "0.0.1"
 dependencies = [
+ "trailryx-assemble",
  "trailryx-contracts",
  "trailryx-crypto",
  "trailryx-record",
+ "trailryx-sim",
 ]
 
 [[package]]

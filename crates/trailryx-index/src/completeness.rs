@@ -280,6 +280,14 @@ pub enum ProofFailure {
     },
     /// An empty answer was offered for an index that is not empty.
     EmptyAnswerAgainstNonEmptyIndex,
+    /// An index with nothing in it answered with something in it.
+    ///
+    /// The `size == 0` branch validates the root and then has nothing left to
+    /// compare an entry against, because an empty tree has no positions. So the
+    /// entries have to be refused outright rather than checked: an answer that
+    /// declares `size: 0` and carries four entries copied from another segment
+    /// verified against the empty root and reported four matches.
+    EntriesAgainstEmptyIndex,
     CountMismatch,
     /// An entry is not in the tree the root describes.
     EntryNotInTree {
@@ -370,11 +378,25 @@ impl CompletenessProof {
         if self.size == 0 {
             // An empty index has exactly one honest root, so an empty answer is
             // still an answer about something.
-            return if digests_equal(&root, &crate::merkle::empty_root()) {
-                Ok(())
-            } else {
-                Err(ProofFailure::EmptyAnswerAgainstNonEmptyIndex)
-            };
+            if !digests_equal(&root, &crate::merkle::empty_root()) {
+                return Err(ProofFailure::EmptyAnswerAgainstNonEmptyIndex);
+            }
+            // And then the answer itself has to be empty. Pinning the root was
+            // the first half of this fix and left the second half undone: every
+            // loop below is skipped for `size == 0`, so entries copied out of
+            // another segment were never compared against anything and
+            // `matched()` reported them. That is the file's own rule broken at
+            // the one place it is easiest to break: a verifier learned the shape
+            // of the answer from the answer.
+            if !self.entries.is_empty()
+                || !self.entry_proofs.is_empty()
+                || self.first_index != 0
+                || self.left_boundary.is_some()
+                || self.right_boundary.is_some()
+            {
+                return Err(ProofFailure::EntriesAgainstEmptyIndex);
+            }
+            return Ok(());
         }
 
         for (k, (entry, proof)) in self.entries.iter().zip(&self.entry_proofs).enumerate() {

@@ -35,5 +35,6 @@ pub use aead::{Aead, Dek, KeySource, PredictableKeys, Sha384Ctr};
 pub use envelope::{Envelope, EnvelopeError, associated_data};
 pub use subject::{KeyLedger, SubjectHandle, kek_for_record, kek_for_subject};
 pub use vault::{
-    Forgotten, Vault, VaultError, decode_manifest, decode_parts, encode_parts, manifest_entry,
+    Forgotten, Vault, VaultError, decode_manifest, decode_parts, encode_parts, erasure_tag,
+    manifest_entry,
 };

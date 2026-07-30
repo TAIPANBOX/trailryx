@@ -7,7 +7,7 @@
 ![Stage](https://img.shields.io/badge/stage-10%20of%2013-blue.svg)
 ![Core](https://img.shields.io/badge/core-frozen-success.svg)
 ![Rust](https://img.shields.io/badge/rust-1.85%2B-orange.svg)
-![Tests](https://img.shields.io/badge/tests-450-success.svg)
+![Tests](https://img.shields.io/badge/tests-468-success.svg)
 ![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)
 ![Dependencies](https://img.shields.io/badge/dependencies-0-success.svg)
 ![Unsafe](https://img.shields.io/badge/unsafe-forbidden-success.svg)
@@ -155,12 +155,12 @@ and the proof shapes do not change without a version and a migration.
 | `trailryx-record` | the canonical record, its schema, and the plane boundary | 26 |
 | `trailryx-crypto` | SHA-384 and the hash chain | 14 |
 | `trailryx-contracts` | eight adapter traits and a conformance suite | 19 |
-| `trailryx-journal` | wire format, append-only write path, recovery | 24 |
-| `trailryx-index` | Merkle history tree, completeness proofs, segment composition | 53 |
-| `trailryx-store` | sealing, the read surface, causal reconstruction | 27 |
-| `trailryx-otlp` | protobuf reader, OTLP decode, the GenAI semconv mapper | 46 |
-| `trailryx-assemble` | what a source handed over, made into records | 24 |
-| `trailryx-erasure` | payload envelopes, the key hierarchy, erasure | 32 |
+| `trailryx-journal` | wire format, append-only write path, recovery | 26 |
+| `trailryx-index` | Merkle history tree, completeness proofs, segment composition | 54 |
+| `trailryx-store` | sealing, the read surface, causal reconstruction | 58 |
+| `trailryx-otlp` | protobuf reader, OTLP decode, the GenAI semconv mapper | 48 |
+| `trailryx-assemble` | what a source handed over, made into records | 27 |
+| `trailryx-erasure` | payload envelopes, the key hierarchy, erasure | 35 |
 | `trailryx-verify` | the offline verifier, including its own ECDSA. Depends on nothing | 20 |
 | `trailryx-projection` | Thrift, a Parquet writer, and columnar projections | 18 |
 | `trailryx-sign` | what gets signed, and what a witness attests to | 4 |
@@ -172,7 +172,7 @@ and the proof shapes do not change without a version and a migration.
 ## Try it
 
 ```bash
-cargo test                                    # 450 tests
+cargo test                                    # 468 tests
 cargo run --bin trailryx-sim-run -- --help
 ```
 
@@ -344,6 +344,107 @@ definition, apart from an incomplete code read off the wire.
 
 A single reviewer had looked at this crate before and found four things, none of
 them these.
+
+## What the same review found in the core
+
+The transport got that treatment because it was the newest and most exposed code.
+The core had never had it: nine lenses this time, one per claim the store makes
+out loud, every finding handed to three skeptics told to refute it. A hundred and
+forty agents, sixteen million tokens, forty-seven candidates, twenty-five refuted.
+Sixteen survived. Five were critical, and each of the five had a comment beside it
+promising the opposite.
+
+**One flipped bit in a twenty-byte header deleted an entire journal.** Recovery
+treated a header that failed its CRC the same as one cut short by a crash, and then
+truncated the file to zero. Measured: five acked records, one bit flipped in the
+last CRC byte, and the file went from 1,095 bytes to 20 while the report said
+`records: 0, discarded_bytes: 0, durability_violation: None` and
+`is_suspicious()` was false. Nothing said a record had ever existed. Fifteen of the
+twenty header bytes did it. The distinction the code was missing is that a crash
+keeps a *prefix*, so a header that never finished landing has nothing behind it: a
+file longer than a header cannot have got that way by crashing. It now refuses and
+leaves the bytes for an operator. The same reasoning closed a second one: a bad
+checksum in an early frame used to take every valid record after it, reported as
+the routine `TornTail`. A frame that still parses past the stopping point proves
+this was not a tail, so recovery stops rather than deleting evidence.
+
+**A completeness proof declaring zero entries could carry any number of them.**
+Pinning the empty root closed half of this attack a stage earlier and left the
+other half: every check below the branch is skipped for `size == 0`, so entries
+copied out of another segment were compared against nothing, and `matched()`
+counted them. The route to using it is ordinary operations, not a compromise: seal
+one empty segment per shard before the root is signed and witnessed (an idle shard
+is normal; the sealer calls it `NothingDurable`), then attach fabricated records to
+that slot in any later query. The offline verifier saw nothing either, because a
+zero-record segment passes record-count, history-root and chain-across-segments
+cleanly. This is the seventh hole in the same function, and the file's own rule
+names it: a verifier must never learn the shape of an answer from the answer.
+
+**The erasure record published the subject's key, which relinked a forgotten
+person to their records from metadata alone.** A manifest entry is a hash of the
+subject key and a destroyed key id; the destroyed key id is `payload.key_id`,
+cleartext on every record. Putting the subject key in `basis.memory_ref`, also
+cleartext, made both inputs public, so a for-loop over the store read off exactly
+which records had been that person's. The comment above the entry function said
+that was the thing it prevented. Worse, a payload sealed when the subject was
+already known went under the *subject's* key, so `payload.key_id` was identical
+across all of them and the store grouped by subject without the manifest at all.
+Now every payload is sealed under a per-record key, and the record carries a
+one-way tag over the subject key rather than the key: a handle holder still
+verifies their own erasure, and nobody else can compute a single entry. The demo
+asserts it, over the real store.
+
+**`forget` dropped the subject's ledger row before destroying any key.** The
+ledger's own doc comment forbids that order in those words. One `Unavailable` from
+a KMS partway through the loop and the row was already gone, so the retry every
+erasure job performs found nothing, recorded `NotApplicable` ("we hold nothing
+about this person"), and three of four payloads stayed readable with no key id left
+anywhere to say they had to die. Destroy first, drop the row only when every
+destroy succeeded; `destroy` is already idempotent, which is what makes the retry
+correct rather than merely possible.
+
+**A segment naming a shard the pack did not list was verified by nothing.** The
+verifier walks down from `pack.shards`, and nothing asserted that every section
+parsed had been reached, so appending two sections to a *signed* pack put a whole
+fabricated shard inside it and the report came back byte-identical, signature and
+all: the signature covers the store root, and the store root is derived from the
+shard list alone. An intermediary who cannot forge a root could still add shards of
+exculpatory records to one. The traversal is now complete in both directions, and
+duplicate sections are refused at the parser, because `records_for` returned the
+first match and a second record set for a real segment was never decoded at all.
+
+Then, in the same pack: a segment claiming zero records was never made to declare
+`chain_after == chain_before`, so every segment slot was a free splice point and
+three records could be excised from the middle of a shard with every root
+recomputing. The sequence was checked for increase and not for contiguity, so
+deleting the seq-2 record of a three-record segment left no finding. Witness names
+are arbitrary UTF-8 chosen by the audited party and were printed raw, one finding
+per line, so a name holding newlines wrote extra findings into the auditor's
+report, including a `root-signature` note naming a key on a pack that had no
+signature; the signer now refuses anything but a bounded token and the verifier
+escapes what it prints. And the publisher could be its own witness: independence
+was compared between witnesses and never against the signing key, so the same key
+id printed twice with nothing said, while the "nothing independent saw this root"
+finding was silenced by a witness list that was merely non-empty.
+
+Outside the store: the correlation window's stated premise was backwards for the
+only source that exists. "A parent arrives before its child by construction" is
+false for OpenTelemetry, where a span is exported when it *ends* and a child ends
+inside its parent, so a batch arrives children first and resolution in arrival
+order found nothing. Measured through the real wire path: one parent, one child,
+one batch, and both records came out with no edges. The causal graph was empty for
+every OTLP-sourced trace. `adopt_batch` mints every id and remembers every name
+before resolving any of them. An all-zero span id, which OTLP defines as invalid
+and emitters write out anyway, was accepted as a real name, so unrelated roots were
+given a parent they never claimed and reclassified as delegations; that is now
+absent, exactly as an all-zero trace id already was, and the mapper version moved
+to 2 to say so. An unresolvable parent is counted now rather than dropped in
+silence.
+
+All sixteen are fixed, each with a regression test. Two fixes made the store
+*stricter about itself* and broke fixtures that had encoded the old behaviour: a
+hand-built segment numbering its records 4 and 5, which no journal produces, and a
+test asserting that a re-pointed journal file was emptied rather than refused.
 
 ## Erasing one person without breaking the audit trail
 
@@ -615,6 +716,20 @@ with their own attempt, or they arrive unchecked. Stage 8 signs nothing yet, so
 its compliance mapping and RFC 3161 anchor are still to come. Stage 9 has no
 repeated columns, so lists are comma-joined (safe, because no identifier's
 character set contains a comma), and no storage tiering.
+
+Two debts the core review named and left open, both because closing them means
+changing the record schema, which is frozen. A record cannot yet say "this event
+named a parent we could not resolve", so a reconstruction missing that edge cannot
+downgrade its own proof; the assembler counts the loss instead. And a journal's
+acked watermark lives only in memory, so after a restart nothing can report a
+durability violation against what a previous process had promised; the destructive
+paths that made this matter are closed, and the watermark itself wants persisting.
+
+One deliberate availability trade-off, also from that review. A journal whose
+middle was corrupted or edited now refuses to open rather than repairing itself by
+truncation, so the store does not start until an operator looks at it. For an
+audit store that is the right way round: the previous behaviour started cleanly
+and had deleted the evidence.
 
 Two known costs, both deferred deliberately. A range answer currently carries an
 inclusion proof per entry, so a full range is O(n²) hashing; the fix is a

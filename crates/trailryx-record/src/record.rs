@@ -360,6 +360,15 @@ impl Default for Algorithms {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default)]
 pub struct MapperVersion(pub u16);
 
+impl MapperVersion {
+    /// A record no mapper produced: one the store wrote about itself.
+    ///
+    /// Zero rather than one, because "the first version of the GenAI mapper" and
+    /// "not mapped at all" are different facts and a reader years from now cannot
+    /// recover the difference from a field that conflated them.
+    pub const UNMAPPED: Self = Self(0);
+}
+
 /// The canonical record.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Record {

@@ -4,7 +4,7 @@
 //! path and the real recovery, and the same crash model is pointed at them.
 
 use trailryx_crypto::{ChainState, Sha384};
-use trailryx_journal::journal::{Appended, ChainStart, Journal, StoppedBecause};
+use trailryx_journal::journal::{Appended, ChainStart, Journal, JournalError, StoppedBecause};
 use trailryx_journal::wire::{decode_frame, decode_record, encode_record};
 use trailryx_record::{
     AgentId, Algorithms, Basis, ErrorCode, EventType, Hash, MapperVersion, ModelId, Outcome,
@@ -294,9 +294,16 @@ fn j_file(io: &mut SimIo) -> trailryx_sim::FileId {
 }
 
 #[test]
-fn a_rewritten_record_is_reported_as_suspicious() {
+fn a_rewritten_record_mid_file_refuses_rather_than_deleting_the_rest() {
     // Distinguishing a crash from an edit matters: one is a restart, the other
     // is an incident, and an operator should not have to guess which.
+    //
+    // This test used to assert that recovery truncated and reported itself
+    // suspicious. An adversarial review measured what truncating actually did:
+    // one flipped byte early in a twenty-record file deleted all twenty, and
+    // called it `TornTail`, the routine crash shape. A frame that still parses
+    // after the stopping point is proof this was not a torn tail, so recovery
+    // now refuses and leaves every byte where it was.
     let mut io = SimIo::new(6, IoFaults::NONE);
     let mut j = open(&mut io);
     for n in 1..=4u128 {
@@ -305,18 +312,115 @@ fn a_rewritten_record_is_reported_as_suspicious() {
     j.sync(&mut io).unwrap();
 
     let file = j_file(&mut io);
-    let mut bytes = io.read_all(file).unwrap();
-    // Flip a byte inside the third record's body and repair its CRC, so the
-    // frame reads cleanly and only the chain notices.
+    let before = io.read_all(file).unwrap();
+    let mut bytes = before.clone();
     let pos = bytes.len() / 2;
     bytes[pos] ^= 0x01;
     io.truncate(file, 0).unwrap();
     io.append(file, &bytes).unwrap();
     io.fsync(file).unwrap();
 
-    let rep = j.recover(&mut io).unwrap();
-    assert!(rep.max_seq < 4);
-    assert!(rep.discarded_bytes > 0);
+    let err = j
+        .recover(&mut io)
+        .expect_err("mid-file corruption must not be repaired silently");
+    match err {
+        JournalError::CorruptMidFile {
+            at_offset,
+            next_good_frame,
+            ..
+        } => assert!(
+            next_good_frame > at_offset,
+            "the refusal has to name a frame that still parses"
+        ),
+        other => panic!("expected CorruptMidFile, got {other:?}"),
+    }
+
+    assert_eq!(
+        io.read_all(file).unwrap().len(),
+        before.len(),
+        "recovery must not have deleted the records after the edit"
+    );
+}
+
+#[test]
+fn a_bad_header_over_a_full_journal_refuses_rather_than_erasing_it() {
+    // The worst of the defects the core review found. `ensure_header` treated a
+    // header that failed its CRC the same as one cut short by a crash, and then
+    // truncated the file to zero unconditionally. One flipped bit anywhere in
+    // the twenty-byte header therefore deleted every acked record and reported
+    // `records: 0, discarded_bytes: 0, durability_violation: None`, so
+    // `is_suspicious()` was false and nothing said a record had ever existed.
+    //
+    // A crash cannot produce this: it keeps a prefix, so a header that did not
+    // finish landing has nothing behind it. That is what the length test is.
+    let mut io = SimIo::new(31, IoFaults::NONE);
+    let mut j = open(&mut io);
+    for n in 1..=5u128 {
+        j.append(&minimal(n), &mut io).unwrap();
+    }
+    assert_eq!(j.sync(&mut io).unwrap(), 5);
+
+    let file = j_file(&mut io);
+    let before = io.read_all(file).unwrap();
+    assert!(before.len() > 32, "the file has records behind its header");
+
+    // Every byte of the header, one bit each. The magic and the version are
+    // refused as `NotAJournal`; the rest used to be a silent erasure.
+    for at in 0..20usize {
+        let mut bytes = before.clone();
+        bytes[at] ^= 0x01;
+        io.truncate(file, 0).unwrap();
+        io.append(file, &bytes).unwrap();
+        io.fsync(file).unwrap();
+
+        let clock = SimClock::new(1_800_000_000_000_000_000);
+        let err = Journal::open(
+            ShardIx(0),
+            SegmentId(1),
+            "s0.journal",
+            4,
+            ChainStart::First,
+            &mut io,
+            &clock,
+        )
+        .map(|_| ())
+        .expect_err("a corrupt header must never be repaired by deletion");
+        assert!(
+            matches!(
+                err,
+                JournalError::CorruptHeader { .. } | JournalError::NotAJournal(_)
+            ),
+            "byte {at} gave {err:?}"
+        );
+        assert_eq!(
+            io.read_all(file).unwrap().len(),
+            before.len(),
+            "byte {at}: the records were deleted"
+        );
+    }
+}
+
+#[test]
+fn good_bytes_is_the_offset_past_the_last_record() {
+    // It used to count only the frames one instance had appended: it omitted the
+    // header, and a restart reset it to zero while the file kept growing, so a
+    // caller using it for size-based rollover would never roll.
+    let mut io = SimIo::new(33, IoFaults::NONE);
+    let mut j = open(&mut io);
+    let file = j_file(&mut io);
+    assert_eq!(j.good_bytes(), io.size(file).unwrap(), "header only");
+
+    for n in 1..=5u128 {
+        j.append(&minimal(n), &mut io).unwrap();
+    }
+    j.sync(&mut io).unwrap();
+    assert_eq!(j.good_bytes(), io.size(file).unwrap());
+
+    // And across a restart, where it used to report zero.
+    let mut reopened = open(&mut io);
+    let rep = reopened.recover(&mut io).unwrap();
+    assert_eq!(reopened.good_bytes(), io.size(file).unwrap());
+    assert_eq!(reopened.good_bytes(), rep.good_bytes);
 }
 
 #[test]

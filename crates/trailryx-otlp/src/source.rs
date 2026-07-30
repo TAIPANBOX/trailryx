@@ -233,6 +233,7 @@ impl OtlpSource {
 
         Some(Ingest {
             meta: MetaDraft {
+                mapper: crate::semconv::MAPPER_VERSION,
                 tenant: self.cfg.tenant().clone(),
                 agent_id,
                 run_id,

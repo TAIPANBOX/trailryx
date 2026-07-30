@@ -42,6 +42,16 @@ pub const FORMAT_VERSION: u16 = 1;
 /// a gigabyte allocation before the CRC ever gets a chance to reject it.
 pub const MAX_BODY_BYTES: usize = 4 << 20;
 
+/// The longest segment header this format can produce.
+///
+/// Four magic bytes, then four varints (format version, shard, segment,
+/// created_at) at their widest, then four CRC bytes. Written down because
+/// recovery needs to answer a question the header alone cannot: is this file
+/// short enough that a header which failed to decode is the *only* thing in it?
+/// A file longer than this has records behind the header, and a header that
+/// fails to decode is then corruption rather than a crash.
+pub const MAX_SEGMENT_HEADER_LEN: usize = 4 + 3 + 3 + 10 + 10 + 4;
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum WireError {
     Truncated,

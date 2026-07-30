@@ -184,9 +184,28 @@ impl Span {
             .map(|a| &a.value)
     }
 
+    /// Whether this span names a parent.
+    ///
+    /// All-zero counts as absent, exactly as it does for a trace id. The OTLP
+    /// specification defines an all-zero span id as invalid, and emitters do
+    /// write the field out as zeros rather than omitting it. Treating those eight
+    /// bytes as a real name manufactured causal edges: two unrelated roots, each
+    /// naming the invalid parent, became children of whichever span had claimed
+    /// the all-zero id, and `event_type` flipped from a request arriving to one
+    /// agent delegating to another, which is the edge an auditor follows.
     pub fn has_parent(&self) -> bool {
-        !self.parent_span_id.is_empty()
+        !is_absent(&self.parent_span_id)
     }
+
+    /// This span's own name, or nothing if it did not give a valid one.
+    pub fn own_id(&self) -> Option<&[u8]> {
+        (!is_absent(&self.span_id)).then_some(self.span_id.as_slice())
+    }
+}
+
+/// Empty, or all zeros, which OTLP defines as an invalid trace or span id.
+fn is_absent(id: &[u8]) -> bool {
+    id.is_empty() || id.iter().all(|b| *b == 0)
 }
 
 #[derive(Debug, Clone, PartialEq)]

@@ -27,6 +27,33 @@ pub enum JournalError {
         file_shard: ShardIx,
         file_segment: SegmentId,
     },
+    /// The header did not decode on a file too long to be only a header.
+    ///
+    /// A crash can leave a torn header, and a torn header means an empty
+    /// journal: the crash model keeps a prefix, so bytes after the header
+    /// cannot exist if the header never finished landing. A header that fails
+    /// to decode on a file with records behind it is therefore something else
+    /// entirely, and an adversarial review measured what the old code did with
+    /// it: one flipped bit in the twenty-byte header, and recovery truncated
+    /// five acked records to nothing and reported an empty, unsuspicious file.
+    /// Refusing leaves the bytes for an operator to salvage.
+    CorruptHeader {
+        why: WireError,
+        file_bytes: u64,
+    },
+    /// The walk stopped, but bytes that still parse as records follow.
+    ///
+    /// Recovery truncates whatever follows the last good record, which is
+    /// correct for a crash and destructive for corruption: a bad checksum in an
+    /// early frame would take every valid record after it, and report the
+    /// routine `TornTail` while doing so. A decodable frame past the stopping
+    /// point is proof this was not a torn tail, so recovery stops instead of
+    /// deleting evidence.
+    CorruptMidFile {
+        at_offset: u64,
+        why: StoppedBecause,
+        next_good_frame: u64,
+    },
 }
 
 impl From<IoError> for JournalError {
@@ -45,6 +72,21 @@ impl std::fmt::Display for JournalError {
                 file_shard,
                 file_segment,
             } => write!(f, "journal belongs to {file_shard} {file_segment}"),
+            Self::CorruptHeader { why, file_bytes } => write!(
+                f,
+                "header of a {file_bytes}-byte journal did not decode ({why}), \
+                 so the file has records behind a header a crash cannot explain"
+            ),
+            Self::CorruptMidFile {
+                at_offset,
+                why,
+                next_good_frame,
+            } => write!(
+                f,
+                "journal stopped at byte {at_offset} ({why:?}) but a frame at \
+                 byte {next_good_frame} still parses, so this is corruption \
+                 rather than a torn tail"
+            ),
         }
     }
 }
@@ -318,8 +360,20 @@ impl Journal {
             }
             // A new file. Nothing to protect, everything to initialise.
             Err(_) if bytes.is_empty() => {}
-            // Empty, or ours but torn: start the segment clean.
-            Err(WireError::Truncated) | Err(WireError::BadCrc) => {}
+            // Ours but torn: start the segment clean. Only when the file is
+            // short enough that the header is all it could hold, because the
+            // truncation below is unconditional and a crash cannot produce a
+            // bad header with records behind it. Without the length test, one
+            // flipped bit in the header deleted the whole journal and recovery
+            // reported it empty and unremarkable.
+            Err(WireError::Truncated) | Err(WireError::BadCrc)
+                if bytes.len() <= wire::MAX_SEGMENT_HEADER_LEN => {}
+            Err(e @ (WireError::Truncated | WireError::BadCrc)) => {
+                return Err(JournalError::CorruptHeader {
+                    why: e,
+                    file_bytes: bytes.len() as u64,
+                });
+            }
             // Not ours, or a version we do not read. Truncating here would
             // destroy somebody else's file because a path was mistyped, or
             // destroy our own because a newer build wrote it. Refuse instead:
@@ -400,6 +454,32 @@ impl Journal {
         }
     }
 
+    /// The first offset at or after `from` where a whole frame parses.
+    ///
+    /// The discriminator between a crash and corruption. A crash keeps a prefix
+    /// of what was written, so the bytes after the last good record are at worst
+    /// an unfinished frame and nothing complete can follow them. Anything that
+    /// does parse was written deliberately, whether by us before something
+    /// mangled an earlier frame or by somebody editing the file.
+    ///
+    /// The frame's CRC does the work; the record decode after it is belt and
+    /// braces, because a stray `FRAME_MAGIC` inside a record body is common and
+    /// a stray byte sequence that also satisfies a CRC32 is not.
+    fn next_parsable_frame(bytes: &[u8], from: usize) -> Option<usize> {
+        let mut at = from;
+        while at < bytes.len() {
+            if bytes[at] == wire::FRAME_MAGIC {
+                if let Ok(frame) = decode_frame(&bytes[at..]) {
+                    if decode_record(frame.body).is_ok() {
+                        return Some(at);
+                    }
+                }
+            }
+            at += 1;
+        }
+        None
+    }
+
     /// Where this file's chain started.
     ///
     /// Kept so a caller sealing the first segment of a file can ask rather than
@@ -447,7 +527,19 @@ impl Journal {
         let walked = Self::walk(&bytes, &header, genesis);
         let discarded = bytes.len() as u64 - walked.good_bytes;
 
+        // Truncation is how a crash is repaired, and the only justification for
+        // it is that nothing of value follows. A frame that still parses past
+        // the stopping point says the opposite: this is corruption, or somebody
+        // rewrote a frame in the middle, and the records after it are evidence.
+        // The old code deleted them and called it `TornTail`.
         if discarded > 0 {
+            if let Some(at) = Self::next_parsable_frame(&bytes, walked.good_bytes as usize) {
+                return Err(JournalError::CorruptMidFile {
+                    at_offset: walked.good_bytes,
+                    why: walked.stopped_because,
+                    next_good_frame: at as u64,
+                });
+            }
             io.truncate(self.file, walked.good_bytes)?;
         }
 
@@ -468,6 +560,12 @@ impl Journal {
         self.since_sync = 0;
         self.pending = None;
         self.degraded = false;
+        // The field means "offset just past the last complete record", and it
+        // only ever counted frames this instance appended: it omitted the header
+        // on a fresh file and stayed at zero across a restart, so a caller using
+        // it for size-based rollover would never roll. `Walked::good_bytes` is
+        // the true offset and already includes the header.
+        self.good_bytes = walked.good_bytes;
 
         Ok(Recovered {
             records: walked.records.len() as u64,
@@ -612,6 +710,10 @@ impl Journal {
         self.shard
     }
 
+    /// Offset just past the last complete record, header included.
+    ///
+    /// The same number [`Recovered::good_bytes`] reports, so a caller sizing a
+    /// segment for rollover measures the file rather than its own appends.
     pub fn good_bytes(&self) -> u64 {
         self.good_bytes
     }

@@ -60,7 +60,13 @@ use trailryx_record::{
 /// Bumped whenever a mapping decision changes, never silently. The value lives
 /// on the record so a future reader can tell what a field meant when it was
 /// written, which matters most for conventions that are still moving.
-pub const MAPPER_VERSION: MapperVersion = MapperVersion(1);
+///
+/// Version 2 stopped treating an all-zero `span_id` or `parent_span_id` as a
+/// name. OTLP defines those as invalid and emitters do write them out rather than
+/// omitting the field, so version 1 manufactured causal edges from them and
+/// reclassified unrelated roots as delegations. A record stamped 1 may carry an
+/// edge that was never named.
+pub const MAPPER_VERSION: MapperVersion = MapperVersion(2);
 
 // ---------------------------------------------------------------------------
 // Configuration
@@ -344,6 +350,7 @@ pub fn map_span(
     let (tokens_in, tokens_out) = tokens_from(span, &mut consumed);
 
     let meta = MetaDraft {
+        mapper: MAPPER_VERSION,
         tenant: cfg.tenant.clone(),
         agent_id,
         run_id,
@@ -550,9 +557,17 @@ fn latency_micros(span: &Span) -> Option<u64> {
 }
 
 fn correlation_from(span: &Span) -> Option<Correlation> {
+    // An invalid id is not a name. `run_id_from` has always applied this rule to
+    // the trace id and these two fields did not, so eight zero bytes were a
+    // perfectly good correlation key: unrelated spans that wrote the invalid
+    // parent id as zeros were handed a parent they never named, and were
+    // reclassified as delegations because of it.
     Some(Correlation {
-        id: SourceKey::new(&span.span_id)?,
-        parent: SourceKey::new(&span.parent_span_id),
+        id: SourceKey::new(span.own_id()?)?,
+        parent: span
+            .has_parent()
+            .then(|| SourceKey::new(&span.parent_span_id))
+            .flatten(),
     })
 }
 

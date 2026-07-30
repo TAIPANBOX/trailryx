@@ -6,7 +6,7 @@
 //! that does not bound, or reusing a proof for a different range.
 
 use trailryx_crypto::Sha384;
-use trailryx_index::completeness::{Dimension, ProofFailure, SortedIndex};
+use trailryx_index::completeness::{Dimension, Entry, ProofFailure, SortedIndex};
 use trailryx_record::{
     AgentId, Algorithms, Basis, EventType, Hash, MapperVersion, Outcome, Record, RecordId, RunId,
     SegmentId, Severity, ShardIx, TenantId, Timestamp, Untrusted,
@@ -468,6 +468,70 @@ fn an_honestly_empty_index_still_answers() {
     assert_eq!(proof.matched(), 0);
     assert_eq!(
         proof.verify(Dimension::RecordedAt, &lo, &hi, idx.root(), 0),
+        Ok(())
+    );
+}
+
+#[test]
+fn an_empty_index_cannot_answer_with_entries() {
+    // The seventh hole, found by the core review. Pinning the root closed the
+    // first half of the `size: 0` attack and left the second half open: every
+    // check below the branch is skipped, so an answer could declare itself empty
+    // and still carry entries, and `matched()` counted them.
+    //
+    // What that buys an operator: seal one empty segment per shard before the
+    // store root is signed and witnessed (an idle shard is normal, the sealer
+    // calls it `NothingDurable`), and afterwards attach any number of fabricated
+    // records to that slot in any query. The offline verifier sees nothing
+    // either, because a zero-record segment passes record-count, history-root
+    // and chain-across-segments cleanly.
+    let empty = SortedIndex::build(Dimension::RecordedAt, &[]);
+    let full = SortedIndex::build(Dimension::RecordedAt, &corpus());
+    let lo = Dimension::time_key(0);
+    let hi = Dimension::time_key(u64::MAX);
+    let borrowed = full.range(&lo, &hi);
+    assert!(borrowed.matched() > 0, "there is something to borrow");
+
+    let forged = trailryx_index::completeness::CompletenessProof {
+        dimension: Dimension::RecordedAt,
+        size: 0,
+        first_index: 0,
+        entries: borrowed.entries.clone(),
+        entry_proofs: borrowed.entry_proofs.clone(),
+        left_boundary: None,
+        right_boundary: None,
+    };
+    assert_eq!(
+        forged.verify(Dimension::RecordedAt, &lo, &hi, empty.root(), 0),
+        Err(ProofFailure::EntriesAgainstEmptyIndex),
+        "an empty index answered with twelve entries"
+    );
+
+    // Entries that are not even real, which is the cheaper version of the same
+    // attack: no inclusion proof has to hold for a branch that checks none.
+    let invented = trailryx_index::completeness::CompletenessProof {
+        dimension: Dimension::RecordedAt,
+        size: 0,
+        first_index: 7,
+        entries: vec![Entry {
+            key: Dimension::time_key(1_234),
+            seq: 99,
+            record_link: Sha384::digest(b"a record that never existed"),
+        }],
+        entry_proofs: borrowed.entry_proofs[..1].to_vec(),
+        left_boundary: None,
+        right_boundary: None,
+    };
+    assert_eq!(
+        invented.verify(Dimension::RecordedAt, &lo, &hi, empty.root(), 0),
+        Err(ProofFailure::EntriesAgainstEmptyIndex)
+    );
+
+    // And the honest empty answer still verifies, which is the whole reason the
+    // branch exists.
+    let honest = empty.range(&lo, &hi);
+    assert_eq!(
+        honest.verify(Dimension::RecordedAt, &lo, &hi, empty.root(), 0),
         Ok(())
     );
 }

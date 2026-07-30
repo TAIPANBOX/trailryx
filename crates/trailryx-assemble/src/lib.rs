@@ -45,13 +45,16 @@ use trailryx_erasure::aead::{Aead, KeySource};
 use trailryx_erasure::subject::SubjectHandle;
 use trailryx_erasure::vault::{Vault, VaultError};
 use trailryx_record::{
-    Algorithms, Hash, MapperVersion, Outcome, PayloadRef, Record, RecordId, SegmentId, ShardIx,
-    Timestamp, assess_skew,
+    Algorithms, Hash, Outcome, PayloadRef, Record, RecordId, SegmentId, ShardIx, Timestamp,
+    assess_skew,
 };
 use trailryx_sim::rng::Rng;
 
-/// How many source names to keep. A parent arrives before its child within
-/// milliseconds, so this is generous by orders of magnitude.
+/// How many source names to keep.
+///
+/// A parent and its child are milliseconds apart in a trace, so this covers the
+/// real distance by orders of magnitude. It does not cover arrival *order*, which
+/// is a separate problem with a separate fix: see [`Assembler::adopt_batch`].
 pub const DEFAULT_CORRELATION_WINDOW: usize = 65_536;
 
 /// A record, and the payload parts that still have to go behind a key.
@@ -106,6 +109,7 @@ pub struct Assembler<R> {
     shard: ShardIx,
     ids: Ids<R>,
     correlation: Correlation,
+    unresolved_parents: u64,
 }
 
 impl<R: Rng> Assembler<R> {
@@ -118,6 +122,7 @@ impl<R: Rng> Assembler<R> {
             shard,
             ids: Ids::new(rng),
             correlation: Correlation::new(window),
+            unresolved_parents: 0,
         }
     }
 
@@ -127,6 +132,18 @@ impl<R: Rng> Assembler<R> {
 
     pub fn correlation(&self) -> &Correlation {
         &self.correlation
+    }
+
+    /// How many events named a parent that could not be resolved into an edge.
+    ///
+    /// Counted because it was not. An unresolvable parent produced no edge, no
+    /// counter and no marker, so the missing edge was indistinguishable from an
+    /// event that genuinely had no parent, and a reconstruction over such records
+    /// reported itself complete. Downgrading the *proof* for it needs a field on
+    /// the record and the record schema is frozen, so this is the honest half that
+    /// can be had now: an operator can see that edges were lost, and how many.
+    pub fn unresolved_parents(&self) -> u64 {
+        self.unresolved_parents
     }
 
     /// A record from the store's own envelope, where the caller knows the edges.
@@ -144,24 +161,69 @@ impl<R: Rng> Assembler<R> {
         }
     }
 
-    /// A record from what a source handed over.
+    /// A whole batch from a source, resolved after every unit in it has a name.
     ///
-    /// The source's name for this event is remembered so a later child can point
-    /// at it, and its name for the parent is resolved into an edge. A parent that
-    /// has fallen out of the window yields no edge, which is not a guess and is
-    /// not silence either: a reconstruction missing an edge reports itself
-    /// incomplete.
+    /// **This is the method an adapter should call.** Resolving in arrival order
+    /// cannot work for OpenTelemetry, and OpenTelemetry is the only source in the
+    /// tree: a span is exported when it *ends*, and a child ends inside its
+    /// parent, so a batch arrives children first. [`Self::adopt`] resolves a
+    /// parent before remembering the current event, so a parent that arrives after
+    /// its child could never be found, whatever the window size. Measured through
+    /// the real wire path: two spans, one parent and one child, one batch, in the
+    /// order an SDK produces them, and both records came out with no edges at all.
+    /// The causal graph, which the contracts crate calls half of what the store is
+    /// for, was empty for every OTLP-sourced trace.
+    ///
+    /// So: mint every id and remember every name first, then resolve. An edge
+    /// within a batch is found regardless of the order the batch is in, and the
+    /// window still carries parents from earlier batches.
+    pub fn adopt_batch(&mut self, batch: Vec<Ingest>, recorded_at: Timestamp) -> Vec<Assembled> {
+        let minted: Vec<(Ingest, RecordId)> = batch
+            .into_iter()
+            .map(|ingest| {
+                let id = self.ids.mint(recorded_at);
+                if let Some(correlation) = ingest.correlation {
+                    self.correlation.remember(correlation.id, id);
+                }
+                (ingest, id)
+            })
+            .collect();
+
+        minted
+            .into_iter()
+            .map(|(ingest, id)| self.finish(ingest, id, recorded_at))
+            .collect()
+    }
+
+    /// One event, where nothing later in the same batch can be its parent.
+    ///
+    /// Correct for a source that emits parents before children and for a caller
+    /// handing over a single event. For a batch use [`Self::adopt_batch`], which
+    /// is the only thing that works when the batch is ordered children first.
     pub fn adopt(&mut self, ingest: Ingest, recorded_at: Timestamp) -> Assembled {
         let id = self.ids.mint(recorded_at);
-
-        let caused_by = ingest
-            .correlation
-            .and_then(|c| c.parent)
-            .and_then(|parent| self.correlation.resolve(&parent))
-            .map(|parent| vec![parent])
-            .unwrap_or_default();
         if let Some(correlation) = ingest.correlation {
             self.correlation.remember(correlation.id, id);
+        }
+        self.finish(ingest, id, recorded_at)
+    }
+
+    /// Resolve the edge and build the record. The id is already minted and this
+    /// event's own name is already remembered.
+    fn finish(&mut self, ingest: Ingest, id: RecordId, recorded_at: Timestamp) -> Assembled {
+        let mut caused_by = Vec::new();
+        if let Some(parent) = ingest.correlation.and_then(|c| c.parent) {
+            match self.correlation.resolve(&parent) {
+                // A span naming itself as its own parent. Not a guess to make:
+                // an edge from a record to itself is a cycle of length one, and
+                // remembering this event's name before resolving is what makes it
+                // reachable at all.
+                Some(found) if found == id => self.unresolved_parents += 1,
+                Some(found) => caused_by.push(found),
+                // Out of the window, or in another shard's assembler. No edge,
+                // and counted rather than dropped in silence.
+                None => self.unresolved_parents += 1,
+            }
         }
 
         Assembled {
@@ -218,7 +280,11 @@ fn assemble(
         prev_hash: Hash::ZERO,
         segment_id: SegmentId(0),
         algorithms: Algorithms::default(),
-        mapper: MapperVersion(1),
+        // The source's, not ours. A literal 1 here made every record in the store
+        // claim to have come from the first version of the GenAI mapper, including
+        // the ones the store wrote about itself and the ones a later mapper had
+        // produced. See `MetaDraft::mapper`.
+        mapper: draft.mapper,
     }
 }
 

@@ -47,6 +47,18 @@ pub enum PackError {
     NotUtf8(&'static str),
     SectionOverrun(&'static str),
     Missing(&'static str),
+    /// The pack spells one thing twice.
+    ///
+    /// A format with no two spellings of anything has to enforce that, and this
+    /// one did not: `records_for` takes the first match, so a second record set
+    /// for a segment already described was parsed into a public field, never
+    /// checked, never chained, and carried the authority of a pack the verifier
+    /// had called VERIFIED.
+    Duplicate {
+        what: &'static str,
+        shard: u16,
+        segment: u64,
+    },
 }
 
 impl std::fmt::Display for PackError {
@@ -60,6 +72,11 @@ impl std::fmt::Display for PackError {
             Self::NotUtf8(what) => write!(f, "{what} is not valid UTF-8"),
             Self::SectionOverrun(what) => write!(f, "{what} reads past its own section"),
             Self::Missing(what) => write!(f, "the pack has no {what}"),
+            Self::Duplicate {
+                what,
+                shard,
+                segment,
+            } => write!(f, "two {what} for shard {shard} segment {segment}"),
         }
     }
 }
@@ -252,9 +269,45 @@ impl Pack {
 
             match kind {
                 SECTION_HEADER => header = Some(parse_header(&mut s)?),
-                SECTION_SHARD => shards.push(parse_shard(&mut s)?),
-                SECTION_SEGMENT => segments.push(parse_segment(&mut s)?),
-                SECTION_RECORDS => record_sets.push(parse_records(&mut s)?),
+                SECTION_SHARD => {
+                    let shard = parse_shard(&mut s)?;
+                    if shards.iter().any(|d: &Shard| d.shard == shard.shard) {
+                        return Err(PackError::Duplicate {
+                            what: "shard manifests",
+                            shard: shard.shard,
+                            segment: 0,
+                        });
+                    }
+                    shards.push(shard);
+                }
+                SECTION_SEGMENT => {
+                    let segment = parse_segment(&mut s)?;
+                    if segments
+                        .iter()
+                        .any(|d: &Segment| d.shard == segment.shard && d.segment == segment.segment)
+                    {
+                        return Err(PackError::Duplicate {
+                            what: "segment manifests",
+                            shard: segment.shard,
+                            segment: segment.segment,
+                        });
+                    }
+                    segments.push(segment);
+                }
+                SECTION_RECORDS => {
+                    let set = parse_records(&mut s)?;
+                    if record_sets
+                        .iter()
+                        .any(|d: &RecordSet| d.shard == set.shard && d.segment == set.segment)
+                    {
+                        return Err(PackError::Duplicate {
+                            what: "record sets",
+                            shard: set.shard,
+                            segment: set.segment,
+                        });
+                    }
+                    record_sets.push(set);
+                }
                 SECTION_SIGNATURE => signature = Some(parse_signature(&mut s)?),
                 SECTION_WITNESS => witnesses.push(parse_witness(&mut s)?),
                 // Not skipped. A verifier that ignored a section it did not

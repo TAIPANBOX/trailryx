@@ -29,7 +29,10 @@ use trailryx_record::{Hash, PrincipalId, Record, Timestamp};
 // ---------------------------------------------------------------------------
 
 /// Correct: refuses to overwrite.
-#[derive(Debug, Default)]
+///
+/// `Clone` so a test can hand the same objects to a second vault, which is how
+/// "a restart, or another node" is written without a filesystem.
+#[derive(Debug, Default, Clone)]
 pub struct MemoryObjectStore {
     objects: BTreeMap<String, Vec<u8>>,
 }

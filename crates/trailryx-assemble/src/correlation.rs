@@ -13,11 +13,22 @@
 //! months and would accumulate every span id it had ever seen. That is a leak
 //! whose symptom is a store that gets slower and then stops.
 //!
-//! A window is the right shape rather than a compromise. A parent arrives before
-//! its child by construction in a trace, usually within milliseconds, and a
-//! parent that fell out of the window is not something to guess about: the edge
-//! is simply absent, and an absent edge costs a reconstruction its completeness,
-//! which the reconstruction says out loud.
+//! A window is the right shape rather than a compromise: a parent and its child
+//! are milliseconds apart in a trace, so a window of tens of thousands of names
+//! covers the real distance by orders of magnitude.
+//!
+//! What the window does **not** fix is arrival order, and the first version of
+//! this claimed it did. "A parent arrives before its child by construction" is
+//! false for OpenTelemetry, the only source in the tree: a span is exported when
+//! it ends, and a child ends inside its parent, so a batch arrives children
+//! first. No window size helps with that, because resolution happened before the
+//! current event was remembered. [`super::Assembler::adopt_batch`] is the fix:
+//! remember every name in a batch, then resolve.
+//!
+//! A parent genuinely out of the window is still not something to guess about.
+//! The edge is absent, and [`super::Assembler::unresolved_parents`] counts it, so
+//! an absent edge is visible rather than indistinguishable from an event that
+//! never had a parent.
 
 use std::collections::{BTreeMap, VecDeque};
 use trailryx_contracts::ingest::SourceKey;

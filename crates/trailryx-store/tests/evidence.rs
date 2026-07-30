@@ -16,7 +16,7 @@ use trailryx_crypto::{Sha384, chain_step};
 fn genesis() -> Hash {
     Sha384::digest(b"trailryx-test/segment-genesis")
 }
-use trailryx_index::segment::{Segment, ShardTree, StoreTree};
+use trailryx_index::segment::{Segment, SegmentManifest, ShardTree, StoreTree};
 use trailryx_journal::wire::encode_record;
 use trailryx_record::{
     AgentId, Algorithms, Basis, EventType, Hash, MapperVersion, Outcome, Record, RecordId, RunId,
@@ -85,13 +85,19 @@ fn store() -> Store {
             record(3, 0, 3, "agent://acme.example/support", "run-b", 1_020),
         ],
     );
+    // Segment two numbers its records from one, because one segment is one
+    // journal file and a journal numbers each file from one. This fixture used
+    // to say 4 and 5, continuing shard 0's count across the file boundary, and
+    // no writer in the tree produces that. The offline verifier now checks the
+    // sequence for contiguity rather than merely for increase, and a fixture
+    // that cannot occur is a fixture that tests nothing.
     let b = seal(
         2,
         0,
         a.manifest().chain_after,
         &[
-            record(4, 0, 4, "agent://acme.example/support", "run-b", 1_030),
-            record(5, 0, 5, "agent://acme.example/billing", "run-c", 1_040),
+            record(4, 0, 1, "agent://acme.example/support", "run-b", 1_030),
+            record(5, 0, 2, "agent://acme.example/billing", "run-c", 1_040),
         ],
     );
     let c = seal(
@@ -422,4 +428,306 @@ fn what_the_pack_cannot_prove_about_its_own_beginning_is_said_out_loud() {
         .expect("the verifier should say so");
     assert_eq!(finding.level, Level::Note);
     assert!(finding.detail.contains("does not prove"), "{finding}");
+}
+
+/// A segment section and a records section for a shard the pack does not list.
+///
+/// Written by hand, in the pack's own wire format, because that is exactly what
+/// an intermediary who cannot forge the store root would do.
+fn append_segment_for(bytes: &mut Vec<u8>, shard: u16, segment: u64, records: &[&[u8]]) {
+    assert_eq!(bytes.pop(), Some(0), "the pack ends with the end marker");
+
+    let mut manifest = Vec::new();
+    manifest.extend_from_slice(&1u16.to_be_bytes()); // format version
+    manifest.extend_from_slice(&segment.to_be_bytes());
+    manifest.extend_from_slice(&shard.to_be_bytes());
+    manifest.extend_from_slice(&(records.len() as u64).to_be_bytes());
+    manifest.extend_from_slice(Sha384::digest(b"a history root").as_bytes());
+    manifest.extend_from_slice(&[0u8; 48]); // chain_before
+    manifest.extend_from_slice(Sha384::digest(b"a chain after").as_bytes());
+    manifest.extend_from_slice(&0u64.to_be_bytes()); // no index roots
+    manifest.extend_from_slice(&0u64.to_be_bytes()); // first_recorded_at
+    manifest.extend_from_slice(&0u64.to_be_bytes()); // last_recorded_at
+    manifest.extend_from_slice(&[1u8, 1, 1]); // the header's own algorithms
+    bytes.push(3);
+    bytes.extend_from_slice(&(manifest.len() as u64).to_be_bytes());
+    bytes.extend_from_slice(&manifest);
+
+    let mut set = Vec::new();
+    set.extend_from_slice(&shard.to_be_bytes());
+    set.extend_from_slice(&segment.to_be_bytes());
+    set.extend_from_slice(&(records.len() as u64).to_be_bytes());
+    for record in records {
+        set.extend_from_slice(&(record.len() as u32).to_be_bytes());
+        set.extend_from_slice(record);
+    }
+    bytes.push(4);
+    bytes.extend_from_slice(&(set.len() as u64).to_be_bytes());
+    bytes.extend_from_slice(&set);
+
+    bytes.push(0);
+}
+
+#[test]
+fn a_segment_for_a_shard_the_pack_does_not_list_is_caught() {
+    // The worst of the verifier defects the core review found. Verification was a
+    // strictly top-down walk from `pack.shards`, and nothing asserted that every
+    // section parsed had been reached. A segment naming shard 7, where the header
+    // lists no shard 7, was therefore checked by nothing: not `record-decodes`,
+    // not `chain-within-segment`, not `history-root`, not even the explicit
+    // "begins at a zero chain head, which no journal produces" check.
+    //
+    // The records hanging off it rode inside the pack unparsed, and because the
+    // signature covers the store root and the store root is derived from
+    // `pack.shards` alone, a signed pack stayed signed. An intermediary who
+    // cannot forge a root could still add whole shards of exculpatory or
+    // incriminating records to one.
+    let mut bytes = pack_of(&store());
+    assert!(verify(&bytes).unwrap().verified());
+
+    append_segment_for(
+        &mut bytes,
+        7,
+        1,
+        &[b"total garbage", b"not a record at all"],
+    );
+
+    let checks = broken(&bytes);
+    assert!(
+        checks.contains(&"orphan-segment".to_owned()),
+        "a fabricated shard rode along unchecked: {checks:?}"
+    );
+}
+
+#[test]
+fn a_second_record_set_for_a_real_segment_is_refused_at_the_parser() {
+    // `records_for` returns the first match, so a second set for a segment the
+    // pack already describes was never decoded, chained, indexed or counted,
+    // while `orphan-records` passed because a segment does describe it. The pack
+    // format has no two spellings of anything, and now says so.
+    let mut bytes = pack_of(&store());
+    assert_eq!(bytes.pop(), Some(0));
+
+    let mut set = Vec::new();
+    set.extend_from_slice(&0u16.to_be_bytes()); // shard 0
+    set.extend_from_slice(&1u64.to_be_bytes()); // segment 1, which exists
+    set.extend_from_slice(&1u64.to_be_bytes());
+    set.extend_from_slice(&31u32.to_be_bytes());
+    set.extend_from_slice(b"a second set for a real segment");
+    bytes.push(4);
+    bytes.extend_from_slice(&(set.len() as u64).to_be_bytes());
+    bytes.extend_from_slice(&set);
+    bytes.push(0);
+
+    let err = verify(&bytes).expect_err("a duplicate section must not parse");
+    assert!(
+        format!("{err}").contains("two record sets"),
+        "unexpected error: {err}"
+    );
+}
+
+/// One shard's index, root, and the manifests and record bytes under it.
+type ShardParts = (u16, Hash, Vec<(SegmentManifest, Vec<Vec<u8>>)>);
+
+/// Write a pack from manifests and record bytes directly.
+///
+/// `PackBuilder` takes sealed `Segment`s, and a sealed segment computes its own
+/// manifest, so it cannot express a manifest that disagrees with its records.
+/// The party that seals is the party being audited, so that is exactly what the
+/// verifier has to be tested against.
+fn hand_built_pack(shards: &[ShardParts], store_root: Hash) -> Vec<u8> {
+    fn put_bytes(out: &mut Vec<u8>, b: &[u8]) {
+        out.extend_from_slice(&(b.len() as u32).to_be_bytes());
+        out.extend_from_slice(b);
+    }
+    fn section(out: &mut Vec<u8>, kind: u8, body: &[u8]) {
+        out.push(kind);
+        out.extend_from_slice(&(body.len() as u64).to_be_bytes());
+        out.extend_from_slice(body);
+    }
+    /// The three bytes the manifest root commits to. Derived rather than typed
+    /// out: a literal here silently stops matching the moment an algorithm
+    /// default changes, and the symptom is a `shard-root` finding in a test that
+    /// is about something else entirely.
+    fn codes(a: Algorithms) -> [u8; 3] {
+        use trailryx_record::{HashAlg, KemAlg};
+        [
+            match a.hash {
+                HashAlg::Sha384 => 1,
+            },
+            match a.signature {
+                SigAlg::Es256 => 1,
+                SigAlg::MlDsa65 => 2,
+                SigAlg::SlhDsa => 3,
+                SigAlg::Es384 => 4,
+            },
+            match a.kem {
+                KemAlg::X25519MlKem768 => 1,
+            },
+        ]
+    }
+
+    let mut out = trailryx_store::evidence::MAGIC.to_vec();
+    out.push(2);
+
+    let mut header = Vec::new();
+    put_bytes(&mut header, b"acme");
+    header.extend_from_slice(&1_700_000_000u64.to_be_bytes());
+    header.extend_from_slice(store_root.as_bytes());
+    header.extend_from_slice(&(shards.len() as u32).to_be_bytes());
+    let algorithms = shards
+        .first()
+        .and_then(|(_, _, segments)| segments.first())
+        .map(|(m, _)| codes(m.algorithms))
+        .unwrap_or([1, 1, 1]);
+    header.extend_from_slice(&algorithms);
+    section(&mut out, 1, &header);
+
+    for (shard, root, segments) in shards {
+        let mut body = Vec::new();
+        body.extend_from_slice(&shard.to_be_bytes());
+        body.extend_from_slice(&(segments.len() as u32).to_be_bytes());
+        body.extend_from_slice(root.as_bytes());
+        section(&mut out, 2, &body);
+    }
+
+    for (_, _, segments) in shards {
+        for (m, records) in segments {
+            let mut body = Vec::new();
+            body.extend_from_slice(&m.format_version.to_be_bytes());
+            body.extend_from_slice(&m.segment.0.to_be_bytes());
+            body.extend_from_slice(&m.shard.0.to_be_bytes());
+            body.extend_from_slice(&m.records.to_be_bytes());
+            body.extend_from_slice(m.history_root.as_bytes());
+            body.extend_from_slice(m.chain_before.as_bytes());
+            body.extend_from_slice(m.chain_after.as_bytes());
+            body.extend_from_slice(&(m.index_roots.len() as u64).to_be_bytes());
+            for (dimension, root) in &m.index_roots {
+                put_bytes(&mut body, dimension.as_str().as_bytes());
+                body.extend_from_slice(root.as_bytes());
+            }
+            body.extend_from_slice(&m.first_recorded_at.as_nanos().to_be_bytes());
+            body.extend_from_slice(&m.last_recorded_at.as_nanos().to_be_bytes());
+            body.extend_from_slice(&codes(m.algorithms));
+            section(&mut out, 3, &body);
+
+            let mut set = Vec::new();
+            set.extend_from_slice(&m.shard.0.to_be_bytes());
+            set.extend_from_slice(&m.segment.0.to_be_bytes());
+            set.extend_from_slice(&(records.len() as u64).to_be_bytes());
+            for record in records {
+                put_bytes(&mut set, record);
+            }
+            section(&mut out, 4, &set);
+        }
+    }
+
+    out.push(0);
+    out
+}
+
+#[test]
+fn a_segment_hollowed_out_to_zero_records_cannot_splice_the_chain() {
+    // Every segment slot used to be a free splice point. `chain-within-segment`
+    // was guarded by `!parsed.is_empty()`, so a segment claiming zero records was
+    // never made to satisfy `chain_after == chain_before`; every other check on
+    // an empty segment is trivially satisfiable by the sealer, because
+    // history_root and all five index roots collapse to the empty root.
+    //
+    // So: replace segment 1 of shard 0 with an empty manifest that keeps its
+    // original `chain_after`, and recompute the shard and store roots over it, as
+    // the operator who holds the signing key can. Three records vanish from the
+    // middle of a shard, and `chain-across-segments` sees the same head on both
+    // sides and is satisfied.
+    let honest = store();
+    let empty = Segment::seal(SegmentId(1), ShardIx(0), genesis(), &[]).unwrap();
+
+    let mut hollow = empty.manifest().clone();
+    hollow.chain_after = honest.shard0[0].manifest().chain_after;
+
+    let mut t0 = ShardTree::new(ShardIx(0));
+    t0.push(hollow.clone());
+    t0.push(honest.shard0[1].manifest().clone());
+    let mut t1 = ShardTree::new(ShardIx(1));
+    t1.push(honest.shard1[0].manifest().clone());
+    let tree = StoreTree::from_shards(&[t0.clone(), t1.clone()]);
+
+    let encoded = |segment: &Segment| -> Vec<Vec<u8>> {
+        segment.records().iter().map(encode_record).collect()
+    };
+    let bytes = hand_built_pack(
+        &[
+            (
+                0,
+                t0.root(),
+                vec![
+                    (hollow, Vec::new()),
+                    (
+                        honest.shard0[1].manifest().clone(),
+                        encoded(&honest.shard0[1]),
+                    ),
+                ],
+            ),
+            (
+                1,
+                t1.root(),
+                vec![(
+                    honest.shard1[0].manifest().clone(),
+                    encoded(&honest.shard1[0]),
+                )],
+            ),
+        ],
+        tree.root(),
+    );
+
+    let checks = broken(&bytes);
+    assert!(
+        checks.contains(&"chain-within-segment".to_owned()),
+        "three records were excised and the verifier reported a clean bill: {checks:?}"
+    );
+    // And nothing else: the roots all recompute, which is what made this work.
+    assert_eq!(checks.len(), 1, "{checks:?}");
+}
+
+#[test]
+fn a_gap_in_the_sequence_is_caught() {
+    // Deleting one record from a segment and re-sealing everything above it left
+    // no finding at all: the sequence was checked for increase, so 1, 3 read as
+    // fine. One segment is one journal file and a journal numbers each file from
+    // one, so the whole sequence is known and every number in it has to be there.
+    let honest = seal(
+        1,
+        0,
+        genesis(),
+        &[
+            record(1, 0, 1, "agent://acme.example/billing", "run-a", 1_000),
+            record(2, 0, 2, "agent://acme.example/billing", "run-a", 1_010),
+            record(3, 0, 3, "agent://acme.example/support", "run-b", 1_020),
+        ],
+    );
+    let doctored = seal(
+        1,
+        0,
+        genesis(),
+        &[
+            record(1, 0, 1, "agent://acme.example/billing", "run-a", 1_000),
+            record(3, 0, 3, "agent://acme.example/support", "run-b", 1_020),
+        ],
+    );
+
+    let pack = |segment: &Segment| {
+        let mut t = ShardTree::new(ShardIx(0));
+        t.push(segment.manifest().clone());
+        let tree = StoreTree::from_shards(&[t.clone()]);
+        PackBuilder::new(TenantId::parse("acme").unwrap(), Timestamp(1_700_000_000))
+            .shard(&t, &[segment])
+            .build(&tree)
+    };
+
+    assert!(verify(&pack(&honest)).unwrap().verified());
+    let checks = broken(&pack(&doctored));
+    assert!(
+        checks.contains(&"sequence-contiguous".to_owned()),
+        "the seq-2 record was deleted and nothing said so: {checks:?}"
+    );
 }

@@ -11,8 +11,8 @@ use trailryx_erasure::subject::SubjectHandle;
 use trailryx_erasure::vault::Vault;
 use trailryx_erasure::{PredictableKeys, Sha384Ctr};
 use trailryx_record::{
-    AgentId, Basis, EventType, Hash, PayloadClass, RunId, SegmentId, Severity, ShardIx, TenantId,
-    Timestamp, Untrusted,
+    AgentId, Basis, EventType, Hash, MapperVersion, PayloadClass, RunId, SegmentId, Severity,
+    ShardIx, TenantId, Timestamp, Untrusted,
 };
 use trailryx_sim::rng::SimRng;
 
@@ -37,6 +37,7 @@ fn vault() -> Vaults {
 
 fn draft(claimed: u64) -> MetaDraft {
     MetaDraft {
+        mapper: MapperVersion(7),
         tenant: TenantId::parse("acme").unwrap(),
         agent_id: AgentId::parse("agent://acme.example/billing").unwrap(),
         run_id: RunId::parse("run-a").unwrap(),
@@ -284,4 +285,69 @@ fn the_default_window_is_large_enough_to_be_uninteresting() {
         "a window this small would make edges depend on timing"
     );
     assert!(a.correlation().is_empty());
+}
+
+#[test]
+fn a_batch_ordered_children_first_still_gets_its_edges() {
+    // The premise the window was justified with was backwards for the only source
+    // in the tree. "A parent arrives before its child by construction in a trace"
+    // is false for OpenTelemetry: a span is exported when it *ends*, and a child
+    // ends inside its parent, so a batch is ordered children first. `adopt`
+    // resolved the parent before remembering the current event, so a parent that
+    // arrived after its child could never be found, whatever the window size, and
+    // the causal graph was empty for every OTLP-sourced trace.
+    let mut a = assembler();
+    let assembled = a.adopt_batch(
+        vec![
+            ingest(2, Some(1), Vec::new()), // the child, exported first
+            ingest(1, None, Vec::new()),    // its parent
+        ],
+        NOW,
+    );
+
+    let child = &assembled[0].record;
+    let parent = &assembled[1].record;
+    assert_eq!(
+        child.caused_by,
+        vec![parent.id],
+        "a child exported before its parent got no edge"
+    );
+    assert!(parent.caused_by.is_empty());
+    assert_eq!(a.unresolved_parents(), 0);
+
+    // The ids still increase in the order the batch arrived, so the child's id is
+    // lower than its parent's. That is a property of when things were recorded and
+    // not of what caused what, and the edge is what carries causation.
+    assert!(child.id.0 < parent.id.0);
+}
+
+#[test]
+fn an_unresolvable_parent_is_counted_rather_than_dropped_in_silence() {
+    // The edge vanished with no counter, no marker and no event, so a reconstruction
+    // over the records could not tell "this event named a parent we lost" from
+    // "this event had no parent", and reported itself complete either way.
+    let mut a = Assembler::with_window(ShardIx(3), SimRng::new(5), 2);
+    a.adopt(ingest(1, None, Vec::new()), NOW);
+    a.adopt(ingest(8, None, Vec::new()), NOW);
+    a.adopt(ingest(9, None, Vec::new()), NOW); // evicts name 1
+    assert_eq!(a.unresolved_parents(), 0);
+
+    let orphan = a.adopt(ingest(2, Some(1), Vec::new()), NOW).record;
+    assert!(orphan.caused_by.is_empty());
+    assert_eq!(a.unresolved_parents(), 1, "the lost edge was not counted");
+
+    // A parent nobody ever named counts too.
+    a.adopt(ingest(3, Some(77), Vec::new()), NOW);
+    assert_eq!(a.unresolved_parents(), 2);
+}
+
+#[test]
+fn a_span_naming_itself_as_its_own_parent_gets_no_edge() {
+    // Resolving after remembering makes this reachable, so it has to be refused
+    // here: an edge from a record to itself is a cycle of length one, and a false
+    // edge is worse than an absent one.
+    let mut a = assembler();
+    let assembled = a.adopt_batch(vec![ingest(1, Some(1), Vec::new())], NOW);
+    assert!(assembled[0].record.caused_by.is_empty());
+    assert_eq!(a.unresolved_parents(), 1);
 }

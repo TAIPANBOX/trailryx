@@ -13,8 +13,8 @@
 //! [`PayloadPart`], behind a key.
 
 use trailryx_record::{
-    AgentId, Basis, ErrorCode, EventType, PayloadClass, PrincipalId, RunId, Severity, TenantId,
-    Timestamp, Untrusted, Verdict,
+    AgentId, Basis, ErrorCode, EventType, MapperVersion, PayloadClass, PrincipalId, RunId,
+    Severity, TenantId, Timestamp, Untrusted, Verdict,
 };
 
 /// Metadata as a source may propose it.
@@ -23,6 +23,17 @@ use trailryx_record::{
 /// that could be content lives there.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MetaDraft {
+    /// Which reading of a source's conventions produced this draft.
+    ///
+    /// Carried here rather than decided by whoever assembles the record. The
+    /// assembler used to stamp a literal 1 on everything, so every record in the
+    /// store claimed to have been produced by the first version of a mapper,
+    /// including records no mapper had touched and records a later mapper had.
+    /// A field whose whole purpose is to say what a value meant when it was
+    /// written cannot be filled in by the one component that does not know.
+    ///
+    /// [`MapperVersion::UNMAPPED`] for a record the store wrote about itself.
+    pub mapper: MapperVersion,
     pub tenant: TenantId,
     pub agent_id: AgentId,
     pub run_id: RunId,

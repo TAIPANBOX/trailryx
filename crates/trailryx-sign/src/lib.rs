@@ -47,6 +47,15 @@ pub enum SignError {
     Unvalidated(&'static str),
     /// The signature came back the wrong size for its algorithm.
     BadLength { expected: usize, got: usize },
+    /// A witness name that is not a bounded token.
+    ///
+    /// The name travels inside the pack and ends up on a line of the offline
+    /// verifier's report. Free text there was a forgery channel: a name holding
+    /// newlines wrote whole extra findings into an auditor's output, including a
+    /// `[note] root-signature: es384 by key ...` line on a pack with no
+    /// signature at all. The verifier escapes what it prints, and this stops us
+    /// producing one in the first place.
+    BadWitnessName(&'static str),
 }
 
 impl std::fmt::Display for SignError {
@@ -54,6 +63,7 @@ impl std::fmt::Display for SignError {
         match self {
             Self::Unavailable(why) => write!(f, "the key store said: {why}"),
             Self::Unvalidated(what) => write!(f, "{what} is not a validated signer"),
+            Self::BadWitnessName(why) => write!(f, "a witness name {why}"),
             Self::BadLength { expected, got } => {
                 write!(
                     f,
@@ -232,6 +242,7 @@ pub fn attest(
     store_root: Hash,
     seen_at: Timestamp,
 ) -> Result<WitnessAttestation, SignError> {
+    check_witness_name(witness)?;
     let algorithm = signer.algorithm();
     let public_key = signer.public_key();
     let statement = witness_statement(witness, store_root, seen_at, algorithm, &public_key);
@@ -244,6 +255,29 @@ pub fn attest(
         public_key,
         signature,
     })
+}
+
+/// The same charset every other identifier in the store uses, for the same
+/// reason: this is a token in the metadata plane, and free text there is a hole
+/// through which anything at all arrives.
+pub const MAX_WITNESS_NAME: usize = 64;
+
+fn check_witness_name(witness: &str) -> Result<(), SignError> {
+    if witness.is_empty() {
+        return Err(SignError::BadWitnessName("is empty"));
+    }
+    if witness.len() > MAX_WITNESS_NAME {
+        return Err(SignError::BadWitnessName("is longer than 64 bytes"));
+    }
+    if !witness
+        .chars()
+        .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || matches!(c, '.' | '_' | '-'))
+    {
+        return Err(SignError::BadWitnessName(
+            "holds something outside [a-z0-9._-]",
+        ));
+    }
+    Ok(())
 }
 
 fn check_length(algorithm: SigAlg, signature: &[u8]) -> Result<(), SignError> {

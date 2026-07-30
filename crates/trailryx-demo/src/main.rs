@@ -400,12 +400,19 @@ fn walk(dir: &Path) -> Result<(), Failure> {
     // point is that nothing is re-encrypted: the key simply joins the subject's
     // set. Re-wrapping would leave the old envelope in storage that cannot be
     // deleted, and the old key would still open it.
+    // Whoever the ledger does not already know about. It used to ask whether a
+    // payload's key id was the subject's own key, which stopped meaning anything
+    // when sealing moved to a per-record key for every payload: a shared key id
+    // put the subject into `payload.key_id`, a cleartext field, so every record
+    // about one person carried one identical value and the store grouped by
+    // subject for anybody who could read metadata.
+    let known = vault.ledger().keys_of(&subject);
     let unattributed: Vec<&Record> = written
         .iter()
         .filter(|r| {
             r.payload
                 .as_ref()
-                .is_some_and(|p| p.key_id != trailryx_erasure::kek_for_subject(&tenant, &subject).0)
+                .is_some_and(|p| !known.contains(&trailryx_contracts::contracts::KeyId(p.key_id)))
         })
         .collect();
     for record in &unattributed {
@@ -460,6 +467,47 @@ fn walk(dir: &Path) -> Result<(), Failure> {
     note(&format!(
         "whoever holds the handle can recompute key {} and confirm it died",
         short(&forgotten.subject_key.0)
+    ));
+
+    // And nobody without it can. The erasure record used to publish the subject
+    // key in `basis.memory_ref`, which is cleartext metadata: indexed, projected,
+    // committed into Merkle roots and shipped inside this very pack. Since a
+    // manifest entry is a hash of the subject key and a destroyed key id, and the
+    // destroyed key id is `payload.key_id`, both inputs were public and a for-loop
+    // read off exactly which records had been that person's.
+    let published = erasure
+        .basis
+        .memory_ref
+        .ok_or("the erasure record points at nothing")?;
+    if published == forgotten.subject_key.0 {
+        return Err("the erasure record publishes the subject key".into());
+    }
+    let manifest_bytes = vault
+        .store_mut()
+        .get(&format!("erasure/{}", forgotten.manifest.to_hex()))
+        .map_err(|e| format!("reading the manifest: {e}"))?
+        .ok_or("the manifest is not in the object store")?;
+    let entries = trailryx_erasure::decode_manifest(&manifest_bytes)
+        .map_err(|e| format!("decoding the manifest: {e}"))?;
+    let relinked = written
+        .iter()
+        .filter(|r| {
+            r.payload.as_ref().is_some_and(|p| {
+                entries.contains(&trailryx_erasure::manifest_entry(
+                    trailryx_contracts::contracts::KeyId(published),
+                    trailryx_contracts::contracts::KeyId(p.key_id),
+                ))
+            })
+        })
+        .count();
+    if relinked > 0 {
+        return Err(format!(
+            "{relinked} records were relinked to the forgotten subject from metadata alone"
+        ));
+    }
+    note(&format!(
+        "and nobody else can: the {} manifest entries are unrecomputable from metadata",
+        entries.len()
     ));
 
     // ---------------------------------------------------------------
@@ -604,6 +652,8 @@ struct Step {
 
 fn draft(event_type: EventType, severity: Severity, basis: Basis) -> MetaDraft {
     MetaDraft {
+        // The demo's own envelope, not something a mapper read off a wire.
+        mapper: trailryx_record::MapperVersion::UNMAPPED,
         tenant: TenantId::parse(TENANT).expect("a constant tenant parses"),
         agent_id: AgentId::parse(AGENT).expect("a constant agent parses"),
         run_id: RunId::parse(RUN).expect("a constant run parses"),

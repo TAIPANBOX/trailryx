@@ -12,7 +12,7 @@
 //! not is that each arrives with its own attempt in this file. A path added
 //! without one is a path nobody checked.
 
-use trailryx_contracts::contracts::{KeyProvider, ObjectStore};
+use trailryx_contracts::contracts::{KeyId, KeyProvider, ObjectStore};
 use trailryx_contracts::fakes::{MemoryKeyProvider, MemoryObjectStore};
 use trailryx_contracts::ingest::PayloadPart;
 use trailryx_crypto::Sha384;
@@ -111,8 +111,13 @@ fn an_erased_payload_does_not_come_back_by_any_path_we_have() {
     assert!(!contains(&after, b"Ivan"), "plaintext in the object store");
     assert!(!contains(&after, b"12 UAH"));
 
-    // 4. The key provider, asked directly.
-    let kek = kek_for_subject(&TenantId::parse("acme").unwrap(), &subject);
+    // 4. The key provider, asked directly. The record's own key, because a
+    //    payload is always sealed under one of those now: sealing under the
+    //    subject's key put the subject into `payload.key_id`, which is cleartext
+    //    metadata, so every record about one person carried one identical value
+    //    and the store grouped by subject for anybody who could read metadata.
+    let kek = kek_for_record(&TenantId::parse("acme").unwrap(), RecordId(1));
+    assert_eq!(reference.key_id, kek.0);
     assert!(!v.provider_mut().exists(kek));
     assert!(v.provider_mut().unwrap(kek, b"anything").is_err());
 
@@ -226,11 +231,14 @@ fn the_manifest_is_verifiable_by_whoever_holds_the_handle() {
     v.attribute(&reference, &handle);
 
     let forgotten = v.forget(&handle, NOW).unwrap();
+    // Named by its own content. A per-process counter named it before, so a
+    // second vault started at one again and its manifest was silently never
+    // written while its record committed to the hash of it.
     let manifest = v
         .store_mut()
-        .get("erasure/0000000000000001")
+        .get(&format!("erasure/{}", forgotten.manifest.to_hex()))
         .unwrap()
-        .unwrap();
+        .expect("the manifest is stored under its own hash");
     let entries = decode_manifest(&manifest).unwrap();
     assert_eq!(entries.len(), 1);
 
@@ -422,5 +430,244 @@ fn record(id: u128, payload: PayloadRef) -> Record {
         segment_id: SegmentId(1),
         algorithms: Algorithms::default(),
         mapper: MapperVersion(1),
+    }
+}
+
+#[test]
+fn the_metadata_plane_cannot_relink_a_forgotten_subject_to_their_records() {
+    // The worst defect the core review found, and it needed no keys, no
+    // ciphertext and no privileged access: only the metadata plane and the
+    // manifest, both of which an evidence pack hands over on purpose.
+    //
+    // The erasure record used to publish `subject_key` in `basis.memory_ref`, a
+    // cleartext field. `manifest_entry` is a hash of `subject_key` and the
+    // destroyed key id, and the destroyed key id is `payload.key_id`, also
+    // cleartext. So both inputs were public, every entry was recomputable by
+    // anybody, and a for-loop over the store read off precisely which records
+    // had belonged to the person who asked to be forgotten. The comment above
+    // `manifest_entry` said that was the thing it prevented.
+    let tenant = TenantId::parse("acme").unwrap();
+    let mut v = vault();
+    let handle = subject("u-8f3a91");
+
+    let theirs: Vec<(RecordId, PayloadRef)> = [11u128, 22]
+        .iter()
+        .map(|n| {
+            let r = RecordId(*n);
+            (r, v.seal(r, &parts(), None).unwrap())
+        })
+        .collect();
+    let somebody_else = RecordId(33);
+    let other_ref = v.seal(somebody_else, &parts(), None).unwrap();
+    for (_, reference) in &theirs {
+        assert!(v.attribute(reference, &handle));
+    }
+
+    let forgotten = v.forget(&handle, NOW).unwrap();
+    let manifest = v
+        .store_mut()
+        .get(&format!("erasure/{}", forgotten.manifest.to_hex()))
+        .unwrap()
+        .unwrap();
+    let entries = decode_manifest(&manifest).unwrap();
+    assert_eq!(entries.len(), 2);
+
+    // The attacker's whole toolkit: the erasure record's metadata and every
+    // record's `payload.key_id`. No handle.
+    let published = forgotten
+        .draft
+        .basis
+        .memory_ref
+        .expect("the record still points at its erasure");
+    let all = [
+        (theirs[0].0, theirs[0].1.key_id),
+        (theirs[1].0, theirs[1].1.key_id),
+        (somebody_else, other_ref.key_id),
+    ];
+    let linked: Vec<RecordId> = all
+        .iter()
+        .filter(|(_, key_id)| entries.contains(&manifest_entry(KeyId(published), KeyId(*key_id))))
+        .map(|(id, _)| *id)
+        .collect();
+    assert!(
+        linked.is_empty(),
+        "the metadata plane relinked {linked:?} to a forgotten subject"
+    );
+
+    // And the published value is not a subject key by any other route either:
+    // not the key itself, and not equal to any record's key id (which is what
+    // sealing under a subject key used to make it).
+    assert_ne!(published, forgotten.subject_key.0);
+    for (_, key_id) in &all {
+        assert_ne!(
+            published, *key_id,
+            "a record's key id equals the erasure record's, so the store groups by subject"
+        );
+    }
+
+    // Whoever does hold the handle still verifies their own erasure, which is
+    // the asymmetry the design claims and the reason it is not simply removed.
+    let subject_key = kek_for_subject(&tenant, &handle);
+    assert_eq!(published, trailryx_erasure::vault::erasure_tag(subject_key));
+    let found: Vec<RecordId> = all
+        .iter()
+        .filter(|(_, key_id)| entries.contains(&manifest_entry(subject_key, KeyId(*key_id))))
+        .map(|(id, _)| *id)
+        .collect();
+    assert_eq!(found, vec![theirs[0].0, theirs[1].0]);
+}
+
+#[test]
+fn a_kms_failure_halfway_leaves_the_row_for_the_retry() {
+    // `forget` dropped the ledger row before destroying anything, which is the
+    // exact order `KeyLedger::drop_subject` documents as forbidden: "a row
+    // dropped first would leave keys nobody knows to destroy, which is the
+    // failure mode where a system believes it erased somebody and did not".
+    //
+    // One `Unavailable` from a KMS is all it took. The row was already gone, so
+    // the controller's retry found nothing, returned `NotApplicable` ("we hold
+    // nothing about this person"), and the surviving payloads stayed readable
+    // with no key id left anywhere to say they had to die.
+    let mut v = Vault::unvalidated(
+        TenantId::parse("acme").unwrap(),
+        "acme.example",
+        MemoryObjectStore::default(),
+        FailsOnceOnDestroy::default(),
+        Sha384Ctr,
+        PredictableKeys::new(),
+    );
+    let handle = subject("s-1");
+    let mut refs = Vec::new();
+    for n in 1..=4u128 {
+        let r = RecordId(n);
+        let reference = v.seal(r, &parts(), None).unwrap();
+        v.attribute(&reference, &handle);
+        refs.push((r, reference));
+    }
+
+    let first = v.forget(&handle, NOW);
+    assert!(first.is_err(), "a failing destroy has to be reported");
+
+    // The retry, which is what any erasure job does. It must find work to do.
+    let second = v.forget(&handle, NOW).expect("the retry completes");
+    assert_eq!(
+        second.keys_destroyed + second.keys_already_gone,
+        4,
+        "the retry saw {} of 4 keys",
+        second.keys_destroyed + second.keys_already_gone
+    );
+    assert_eq!(
+        second.draft.verdict,
+        Some(trailryx_record::Verdict::Allowed)
+    );
+
+    for (record, reference) in &refs {
+        assert_eq!(
+            v.open(*record, reference),
+            Err(VaultError::Erased),
+            "record {record:?} is still readable after an erasure said it was done"
+        );
+    }
+}
+
+/// A KMS that drops one request, which is the ordinary thing a KMS does.
+#[derive(Debug, Default)]
+struct FailsOnceOnDestroy {
+    inner: MemoryKeyProvider,
+    destroys: u32,
+}
+
+impl KeyProvider for FailsOnceOnDestroy {
+    fn wrap(
+        &mut self,
+        kek: trailryx_contracts::contracts::KeyId,
+        dek: &[u8],
+    ) -> trailryx_contracts::contracts::AdapterResult<Vec<u8>> {
+        self.inner.wrap(kek, dek)
+    }
+
+    fn unwrap(
+        &mut self,
+        kek: trailryx_contracts::contracts::KeyId,
+        wrapped: &[u8],
+    ) -> trailryx_contracts::contracts::AdapterResult<Vec<u8>> {
+        self.inner.unwrap(kek, wrapped)
+    }
+
+    fn destroy(
+        &mut self,
+        kek: trailryx_contracts::contracts::KeyId,
+    ) -> trailryx_contracts::contracts::AdapterResult<trailryx_contracts::contracts::Destroyed>
+    {
+        self.destroys += 1;
+        if self.destroys == 2 {
+            return Err(trailryx_contracts::contracts::AdapterError::Unavailable(
+                "kms timeout",
+            ));
+        }
+        self.inner.destroy(kek)
+    }
+
+    fn exists(&self, kek: trailryx_contracts::contracts::KeyId) -> bool {
+        self.inner.exists(kek)
+    }
+}
+
+#[test]
+fn two_vaults_erasing_do_not_write_over_each_others_evidence() {
+    // The manifest object key was a per-process counter, so a restart or a
+    // second node began at one again and wrote to a name that already existed.
+    // `put_if_absent` reported `AlreadyExists` exactly as its contract promises;
+    // the outcome was discarded, so the second erasure's manifest existed
+    // nowhere while its record committed to the hash of it. The two erasures
+    // also shared a run id.
+    let tenant = TenantId::parse("acme").unwrap();
+    let shared = MemoryObjectStore::default();
+
+    let mut first = Vault::unvalidated(
+        tenant.clone(),
+        "acme.example",
+        shared.clone(),
+        MemoryKeyProvider::default(),
+        Sha384Ctr,
+        PredictableKeys::new(),
+    );
+    let a = subject("s-a");
+    let ref_a = first.seal(RecordId(1), &parts(), Some(&a)).unwrap();
+    assert!(!ref_a.key_id.is_zero());
+    let one = first.forget(&a, NOW).unwrap();
+
+    // A second vault over the same store: a restart, or another node.
+    let mut second = Vault::unvalidated(
+        tenant,
+        "acme.example",
+        first.store_mut().clone(),
+        MemoryKeyProvider::default(),
+        Sha384Ctr,
+        PredictableKeys::new(),
+    );
+    let b = subject("s-b");
+    second.seal(RecordId(2), &parts(), Some(&b)).unwrap();
+    let two = second.forget(&b, NOW).unwrap();
+
+    assert_ne!(
+        one.manifest, two.manifest,
+        "different erasures, one manifest"
+    );
+    assert_ne!(
+        one.draft.run_id, two.draft.run_id,
+        "two erasures shared a run id"
+    );
+    for f in [&one, &two] {
+        let stored = second
+            .store_mut()
+            .get(&format!("erasure/{}", f.manifest.to_hex()))
+            .unwrap()
+            .expect("both manifests are stored");
+        assert_eq!(
+            Sha384::digest(&stored),
+            f.manifest,
+            "a record commits to evidence bytes the store does not hold"
+        );
     }
 }

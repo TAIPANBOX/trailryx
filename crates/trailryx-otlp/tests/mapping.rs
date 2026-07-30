@@ -265,3 +265,111 @@ fn the_same_bytes_always_produce_the_same_record() {
     b.accept(&batch, NOW);
     assert_eq!(a.poll(10).unwrap(), b.poll(10).unwrap());
 }
+
+#[test]
+fn a_batch_exported_children_first_still_produces_the_causal_edges() {
+    // The end-to-end version, through the real wire path, of the defect the core
+    // review measured. A span is exported when it *ends*, and a child ends inside
+    // the parent that contains it, so a `BatchSpanProcessor` produces batches in
+    // exactly this order. Resolution in arrival order therefore found no parents
+    // at all, and the causal graph was empty for every OTLP-sourced trace.
+    let mut src = source();
+    let child = SpanBuilder::new("delegate")
+        .span_id(vec![0x22; 8])
+        .parent(vec![0x11; 8])
+        .str_attr("gen_ai.operation.name", "invoke_agent");
+    let parent = SpanBuilder::new("root")
+        .span_id(vec![0x11; 8])
+        .str_attr("gen_ai.operation.name", "invoke_agent");
+
+    assert_eq!(
+        src.accept(
+            &request(&service("a"), "scope", &[child, parent]),
+            Timestamp(1_700_000_000_000_000_000)
+        ),
+        2
+    );
+    let batch = src.poll(16).unwrap();
+    assert_eq!(batch.len(), 2);
+
+    let mut assembler = trailryx_assemble::Assembler::new(
+        trailryx_record::ShardIx(0),
+        trailryx_sim::rng::SimRng::new(1),
+    );
+    let records = assembler.adopt_batch(batch, Timestamp(1_700_000_000_000_000_000));
+
+    let kid = &records[0].record;
+    let root = &records[1].record;
+    assert_eq!(
+        kid.caused_by,
+        vec![root.id],
+        "the child was exported first and lost its edge"
+    );
+    assert!(root.caused_by.is_empty());
+    assert_eq!(assembler.unresolved_parents(), 0);
+}
+
+#[test]
+fn an_all_zero_parent_span_id_is_not_a_parent() {
+    // OTLP defines an all-zero span id as invalid, and emitters write the field
+    // out as zeros rather than omitting it. Treating those eight bytes as a name
+    // manufactured edges: two unrelated roots, each naming the invalid parent,
+    // became children of whichever span had claimed the all-zero id, and
+    // `event_type` flipped from a request arriving to one agent delegating to
+    // another, which is the edge an auditor follows.
+    let mut src = source();
+    let spans = [
+        SpanBuilder::new("zero-named")
+            .span_id(vec![0x00; 8])
+            .str_attr("gen_ai.operation.name", "invoke_agent"),
+        SpanBuilder::new("root-a")
+            .span_id(vec![0x55; 8])
+            .parent(vec![0x00; 8])
+            .str_attr("gen_ai.operation.name", "invoke_agent"),
+        SpanBuilder::new("root-b")
+            .span_id(vec![0x66; 8])
+            .parent(vec![0x00; 8])
+            .str_attr("gen_ai.operation.name", "invoke_agent"),
+    ];
+    assert_eq!(
+        src.accept(
+            &request(&service("a"), "scope", &spans),
+            Timestamp(1_700_000_000_000_000_000)
+        ),
+        3
+    );
+    let batch = src.poll(16).unwrap();
+
+    // The span that named itself with zeros has no correlation at all, so it
+    // cannot be pointed at, and neither root claims a parent.
+    assert!(
+        batch[0].correlation.is_none(),
+        "an invalid id is not a name"
+    );
+    for unit in &batch[1..] {
+        assert!(
+            unit.correlation
+                .as_ref()
+                .is_some_and(|c| c.parent.is_none()),
+            "an all-zero parent id became a parent"
+        );
+        assert_eq!(
+            unit.meta.event_type,
+            EventType::RequestReceived,
+            "an invalid parent id reclassified a root as a delegation"
+        );
+    }
+
+    let mut assembler = trailryx_assemble::Assembler::new(
+        trailryx_record::ShardIx(0),
+        trailryx_sim::rng::SimRng::new(2),
+    );
+    for assembled in assembler.adopt_batch(batch, Timestamp(1_700_000_000_000_000_000)) {
+        assert!(assembled.record.caused_by.is_empty());
+    }
+    assert_eq!(
+        assembler.unresolved_parents(),
+        0,
+        "nothing was even claimed"
+    );
+}

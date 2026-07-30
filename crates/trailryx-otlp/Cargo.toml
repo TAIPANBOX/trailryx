@@ -12,5 +12,12 @@ trailryx-record = { path = "../trailryx-record" }
 trailryx-crypto = { path = "../trailryx-crypto" }
 trailryx-contracts = { path = "../trailryx-contracts" }
 
+[dev-dependencies]
+# The mapper's output only means something once it becomes records, and the
+# child-before-parent defect lived exactly in that seam: each crate's own tests
+# passed while the pair of them lost every causal edge.
+trailryx-assemble = { path = "../trailryx-assemble" }
+trailryx-sim = { path = "../trailryx-sim" }
+
 [lints]
 workspace = true

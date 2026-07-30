@@ -26,12 +26,14 @@
 use crate::aead::{Aead, KeySource};
 use crate::envelope::{Envelope, EnvelopeError, associated_data};
 use crate::subject::{KeyLedger, SubjectHandle, kek_for_record, kek_for_subject};
-use trailryx_contracts::contracts::{AdapterError, Destroyed, KeyId, KeyProvider, ObjectStore};
+use trailryx_contracts::contracts::{
+    AdapterError, Destroyed, KeyId, KeyProvider, ObjectStore, PutOutcome,
+};
 use trailryx_contracts::ingest::{MetaDraft, PayloadPart};
 use trailryx_crypto::Sha384;
 use trailryx_record::{
-    AgentId, Basis, EventType, Hash, PayloadClass, PayloadRef, RecordId, RunId, Severity, TenantId,
-    Timestamp, Untrusted, Verdict,
+    AgentId, Basis, EventType, Hash, MapperVersion, PayloadClass, PayloadRef, RecordId, RunId,
+    Severity, TenantId, Timestamp, Untrusted, Verdict,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -50,6 +52,10 @@ pub enum VaultError {
     WrongContent,
     /// The key is gone. This is what a successful erasure looks like from here.
     Erased,
+    /// A manifest already exists under its own content hash and does not hash to
+    /// it. Either the store is not content-addressing what we asked it to, or
+    /// something replaced the evidence.
+    ManifestMismatch,
     Malformed(&'static str),
 }
 
@@ -62,6 +68,9 @@ impl std::fmt::Display for VaultError {
             Self::Missing => write!(f, "no envelope stored"),
             Self::WrongKey => write!(f, "the envelope belongs to a different record"),
             Self::WrongContent => write!(f, "the payload is not what the record commits to"),
+            Self::ManifestMismatch => {
+                write!(f, "a stored erasure manifest does not hash to its own name")
+            }
             Self::Erased => write!(f, "the key was destroyed"),
             Self::Malformed(what) => write!(f, "malformed payload blob: {what}"),
         }
@@ -169,7 +178,13 @@ pub struct Forgotten {
     pub manifest_size: u64,
     /// The subject's own key id, which is what an auditor holding the handle
     /// recomputes to check this erasure was the one they asked for.
+    ///
+    /// Returned to the caller, who already holds the handle, and never written
+    /// into a record: see the note on `memory_ref` in `erasure_draft`.
     pub subject_key: KeyId,
+    /// What the erasure record carries instead: a hash of `subject_key`, so the
+    /// record is findable by a handle holder and useless to everybody else.
+    pub tag: Hash,
     pub draft: MetaDraft,
 }
 
@@ -243,9 +258,16 @@ impl<O: ObjectStore, K: KeyProvider, A: Aead, S: KeySource> Vault<O, K, A, S> {
 
     /// Encrypt a record's payload and store it.
     ///
-    /// With a subject, the payload goes under that subject's key. Without one,
-    /// it goes under a key belonging to this record and nobody, which
-    /// attribution can later hand to a subject without rewriting anything.
+    /// Always under a key belonging to this record and to nobody. A subject, if
+    /// one is known now, gets that key added to their set, which is the same
+    /// thing attribution does later.
+    ///
+    /// It used to seal under the subject's own key when the subject was known at
+    /// write time, and that put the subject into the metadata plane: `key_id` is
+    /// a cleartext field on every record, so every record about one person
+    /// carried one identical value and the whole store grouped by subject for
+    /// anybody who could read metadata. A per-record key cannot do that, and it
+    /// costs nothing, because forgetting works off the ledger row either way.
     pub fn seal(
         &mut self,
         record: RecordId,
@@ -260,16 +282,12 @@ impl<O: ObjectStore, K: KeyProvider, A: Aead, S: KeySource> Vault<O, K, A, S> {
             .min_by_key(|c| restrictiveness(*c))
             .unwrap_or(PayloadClass::Diagnostic);
 
-        let kek = match subject {
-            Some(s) => {
-                let kek = kek_for_subject(&self.tenant, s);
-                // Registered at seal time, not at erasure time. A key nobody
-                // recorded is a key nobody destroys.
-                self.ledger.attribute(s, kek);
-                kek
-            }
-            None => kek_for_record(&self.tenant, record),
-        };
+        let kek = kek_for_record(&self.tenant, record);
+        if let Some(s) = subject {
+            // Registered at seal time, not at erasure time. A key nobody
+            // recorded is a key nobody destroys.
+            self.ledger.attribute(s, kek);
+        }
 
         let dek = self.keys.fresh_dek();
         let nonce = self.keys.fresh_nonce();
@@ -362,7 +380,14 @@ impl<O: ObjectStore, K: KeyProvider, A: Aead, S: KeySource> Vault<O, K, A, S> {
         recorded_at: Timestamp,
     ) -> Result<Forgotten, VaultError> {
         let subject_key = kek_for_subject(&self.tenant, subject);
-        let keys = self.ledger.drop_subject(subject);
+        // Read the row; do not drop it yet. `KeyLedger::drop_subject` documents
+        // the rule verbatim, and this function used to break it: the row went
+        // first, then the destroy loop, so one `Unavailable` from a KMS halfway
+        // through left the surviving keys with nothing anywhere recording that
+        // they must die. The retry every erasure job performs then found an
+        // empty row and wrote "we hold nothing about this person" while three of
+        // four payloads were still readable.
+        let keys = self.ledger.keys_of(subject);
 
         let mut destroyed = 0u32;
         let mut already = 0u32;
@@ -374,17 +399,38 @@ impl<O: ObjectStore, K: KeyProvider, A: Aead, S: KeySource> Vault<O, K, A, S> {
             }
             entries.push(manifest_entry(subject_key, *key));
         }
+        // Every key is gone, so the row is safe to forget. `destroy` is
+        // idempotent, which is what makes the retry after a partial failure
+        // correct rather than merely possible.
+        self.ledger.drop_subject(subject);
+
         // Sorted, so the manifest does not leak the order keys were created in,
         // which is the order the records were written in.
         entries.sort();
 
         let manifest = encode_manifest(&entries);
         let manifest_hash = Sha384::digest(&manifest);
+        let tag = erasure_tag(subject_key);
         self.erasures += 1;
-        self.store
-            .put_if_absent(&format!("erasure/{:016x}", self.erasures), &manifest)?;
 
-        let draft = self.erasure_draft(recorded_at, subject_key, destroyed + already)?;
+        // Named by its own content. A per-process counter named it before, so a
+        // restart or a second node began at one again and wrote to a key that
+        // already existed: `put_if_absent` reported `AlreadyExists` exactly as
+        // its contract promises, the outcome was discarded with `?`, and the
+        // second erasure's manifest was never stored anywhere while its record
+        // committed to the hash of it.
+        let object_key = format!("erasure/{}", manifest_hash.to_hex());
+        if self.store.put_if_absent(&object_key, &manifest)? == PutOutcome::AlreadyExists {
+            // Content-addressed, so this is the same bytes by construction
+            // unless the store handed back something else, and that is worth
+            // finding out about rather than assuming.
+            match self.store.get(&object_key)? {
+                Some(bytes) if Sha384::digest(&bytes) == manifest_hash => {}
+                _ => return Err(VaultError::ManifestMismatch),
+            }
+        }
+
+        let draft = self.erasure_draft(recorded_at, tag, manifest_hash, destroyed + already)?;
 
         Ok(Forgotten {
             keys_destroyed: destroyed,
@@ -392,6 +438,7 @@ impl<O: ObjectStore, K: KeyProvider, A: Aead, S: KeySource> Vault<O, K, A, S> {
             manifest: manifest_hash,
             manifest_size: manifest.len() as u64,
             subject_key,
+            tag,
             draft,
         })
     }
@@ -400,16 +447,27 @@ impl<O: ObjectStore, K: KeyProvider, A: Aead, S: KeySource> Vault<O, K, A, S> {
     fn erasure_draft(
         &self,
         recorded_at: Timestamp,
-        subject_key: KeyId,
+        tag: Hash,
+        manifest_hash: Hash,
         keys: u32,
     ) -> Result<MetaDraft, VaultError> {
         let agent_id =
             AgentId::parse_strict(format!("agent://{}/trailryx.erasure", self.trust_domain))
                 .map_err(|_| VaultError::Malformed("trust domain"))?;
-        let run_id = RunId::parse(format!("erasure-{:016x}", self.erasures))
+        // From the erasure's own content and subject rather than from a counter,
+        // for the same reason as the manifest key: two vaults each starting at
+        // one gave two different erasures the same run id.
+        let mut seed = Vec::with_capacity(112);
+        seed.extend_from_slice(b"trailryx.erasure.run.v1");
+        seed.extend_from_slice(tag.as_bytes());
+        seed.extend_from_slice(manifest_hash.as_bytes());
+        let run = Sha384::digest(&seed).to_hex();
+        let run_id = RunId::parse(format!("erasure-{}", &run[..32]))
             .map_err(|_| VaultError::Malformed("run id"))?;
 
         Ok(MetaDraft {
+            // The store speaking about itself, so no mapper was involved.
+            mapper: MapperVersion::UNMAPPED,
             tenant: self.tenant.clone(),
             agent_id,
             run_id,
@@ -421,11 +479,27 @@ impl<O: ObjectStore, K: KeyProvider, A: Aead, S: KeySource> Vault<O, K, A, S> {
             event_type: EventType::Erasure,
             severity: Severity::Notice,
             basis: Basis {
-                // The subject's key id, which is a hash of a pseudonym. Somebody
-                // holding the handle can recompute it and confirm this erasure
-                // was theirs; somebody without it learns nothing. An erasure
-                // nobody can verify is an erasure nobody has to perform.
-                memory_ref: Some(subject_key.0),
+                // A tag over the subject's key id, not the key id itself.
+                //
+                // This field held `subject_key` and that was the single worst
+                // privacy defect in the store. `memory_ref` is cleartext
+                // metadata: indexed, projected into Parquet, committed into
+                // Merkle roots and shipped inside evidence packs. Publishing the
+                // subject key there handed everybody the one input the erasure
+                // manifest's entries were supposed to require, so anybody with
+                // metadata access could recompute
+                // `manifest_entry(subject_key, record.payload.key_id)` for every
+                // record and read off exactly which records had belonged to the
+                // person who asked to be forgotten. A for-loop undid the
+                // erasure's whole purpose.
+                //
+                // One more hash fixes it and keeps what the field was for: a
+                // handle holder derives `subject_key`, tags it, and matches this
+                // record; nobody can go the other way, so the manifest stays
+                // unrecomputable without the handle. What still carries the rest
+                // is the pseudonym's entropy, which is why `SubjectHandle` is a
+                // token and `docs/identifiers.md` says it must not be guessable.
+                memory_ref: Some(tag),
                 ..Basis::default()
             },
             // Nothing to erase is a real answer and a different one from having
@@ -470,6 +544,20 @@ impl<O: ObjectStore, K: KeyProvider, A: Aead, S: KeySource> Vault<O, K, A, S> {
     }
 }
 
+/// What the erasure record carries in place of the subject's key id.
+///
+/// A one-way step, so the record is matchable by whoever can derive
+/// `subject_key` from a handle and gives nothing to a reader who cannot. The
+/// difference is not cosmetic: `subject_key` is the missing input to
+/// [`manifest_entry`], and while the record published it the manifest could be
+/// intersected with the store by anybody at all.
+pub fn erasure_tag(subject_key: KeyId) -> Hash {
+    let mut seed = Vec::with_capacity(80);
+    seed.extend_from_slice(b"trailryx.erasure.subject.v1");
+    seed.extend_from_slice(subject_key.0.as_bytes());
+    Sha384::digest(&seed)
+}
+
 /// One line of an erasure manifest.
 ///
 /// Not the destroyed key id itself. Listing those would let anybody with
@@ -477,6 +565,12 @@ impl<O: ObjectStore, K: KeyProvider, A: Aead, S: KeySource> Vault<O, K, A, S> {
 /// which records belonged to the person who asked to be forgotten. Hashing each
 /// one together with the subject's key id keeps the entry verifiable by
 /// somebody holding the handle and meaningless to everybody else.
+///
+/// That last sentence was false for one commit, and not because of anything in
+/// this function: the erasure record published `subject_key` in a cleartext
+/// metadata field, so both inputs were public and the entry was recomputable by
+/// everybody. The asymmetry lives entirely in who can derive `subject_key`, and
+/// that is now nobody without the handle.
 pub fn manifest_entry(subject_key: KeyId, destroyed: KeyId) -> Hash {
     let mut seed = Vec::with_capacity(112);
     seed.extend_from_slice(b"trailryx.erasure.entry.v1");

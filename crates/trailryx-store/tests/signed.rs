@@ -273,7 +273,10 @@ fn a_signed_and_witnessed_pack_verifies_and_names_who_signed_it() {
     let signed = findings(&bytes, "root-signature");
     assert_eq!(signed.len(), 1);
     assert_eq!(signed[0].0, Level::Note, "{:?}", signed);
-    assert!(signed[0].1.starts_with("es384 by key "), "{:?}", signed);
+    // Quoted, because the algorithm name is a string the pack supplies and every
+    // pack-supplied string now reaches a finding escaped: a witness name holding
+    // newlines used to write whole extra findings into the auditor's report.
+    assert!(signed[0].1.starts_with("\"es384\" by key "), "{:?}", signed);
 
     let seen = findings(&bytes, "witness");
     assert_eq!(seen.len(), 1);
@@ -512,4 +515,141 @@ fn write_a_signed_pack_for_the_binary() {
         pack(&built, Some(signature), vec![attestation]),
     )
     .unwrap();
+}
+
+#[test]
+fn a_hostile_witness_name_cannot_write_findings_into_the_report() {
+    // The verifier prints one finding per line, and a witness name is arbitrary
+    // UTF-8 chosen by the party being audited. A name holding newlines therefore
+    // wrote extra lines into the auditor's output in the exact shape of the real
+    // ones: an unsigned, unwitnessed pack was made to print
+    //   [note] root-signature: es384 by key 0011223344556677
+    //   [note] witness: kpmg.example saw this root at 1700000000000000000, key ...
+    // and still exit zero. The key id is derived from the key precisely so a pack
+    // cannot label a key with somebody else's identifier; that defence was being
+    // defeated one layer later, in the channel carrying it to the reader.
+    let built = build();
+    let hostile = trailryx_sign::WitnessAttestation {
+        witness: "acme-internal\n[note] root-signature: es384 by key 0011223344556677\n\
+                  [note] witness: kpmg.example saw this root at 1700000000000000000"
+            .to_owned(),
+        seen_at: GENERATED_AT,
+        // An algorithm this build cannot check, which is what keeps the pack out
+        // of `Broken` and makes the forged lines survive to the terminal.
+        algorithm: SigAlg::MlDsa65,
+        public_key: vec![7u8; 32],
+        signature: vec![9u8; 32],
+    };
+
+    let bytes = pack(&built, None, vec![hostile]);
+    let report = verify(&bytes).unwrap();
+    for finding in &report.findings {
+        let line = format!("{finding}");
+        assert!(
+            !line[1..].contains('\n'),
+            "a finding spans more than one line: {line:?}"
+        );
+    }
+
+    // And the pack still reports what it actually is: nothing independent has
+    // attested to this root. A present-but-unverifiable witness used to silence
+    // that finding simply by being in the list.
+    assert!(
+        report
+            .findings
+            .iter()
+            .any(|f| f.check == "witnesses" && f.level == Level::Weak),
+        "{:?}",
+        report.findings
+    );
+}
+
+#[test]
+fn a_witness_name_that_is_not_a_token_is_refused_at_the_signer() {
+    // The other end of the same defect. The verifier escapes what it prints
+    // because it must survive any pack; the signer refuses to produce one,
+    // because a name is a token in the metadata plane like every other
+    // identifier in the store.
+    let Some(mut witness) = Openssl::new("hostile") else {
+        assert!(skip("a refused witness name"));
+        return;
+    };
+    let built = build();
+    for bad in [
+        "auditor.example\n[note] root-signature: es384",
+        "Auditor Example",
+        "",
+        &"x".repeat(65),
+    ] {
+        assert!(
+            matches!(
+                attest(&mut witness, bad, built.store.root(), GENERATED_AT),
+                Err(SignError::BadWitnessName(_))
+            ),
+            "accepted {bad:?}"
+        );
+    }
+    assert!(
+        attest(
+            &mut witness,
+            "kpmg.example",
+            built.store.root(),
+            GENERATED_AT
+        )
+        .is_ok()
+    );
+}
+
+#[test]
+fn the_publisher_cannot_be_its_own_witness() {
+    // Independence was checked between witnesses and never against the signing
+    // key, so signing the root and then attesting to it with the same key gave a
+    // report with no Weak or Broken finding at all: the identical key id printed
+    // twice on two `note` lines, and the "nothing independent says when this root
+    // existed" finding silenced because the witness list was not empty.
+    let Some(mut publisher) = Openssl::new("selfwit") else {
+        assert!(skip("a self-witnessed pack"));
+        return;
+    };
+    let built = build();
+
+    let signature = sign_root_unvalidated(
+        &mut publisher,
+        &TenantId::parse("acme").unwrap(),
+        built.store.root(),
+        1,
+        GENERATED_AT,
+    )
+    .unwrap();
+    let attestation = attest(
+        &mut publisher,
+        "auditor.example",
+        built.store.root(),
+        Timestamp(GENERATED_AT.as_nanos() + 60_000_000_000),
+    )
+    .unwrap();
+
+    let bytes = pack(&built, Some(signature), vec![attestation]);
+    let report = verify(&bytes).unwrap();
+    // Still verified: the arithmetic is all sound. What changed is that the
+    // report no longer reads as though somebody else had seen this root.
+    assert!(report.verified(), "{:?}", report.findings);
+    assert!(
+        report
+            .findings
+            .iter()
+            .any(|f| f.check == "witness-independence"
+                && f.level == Level::Weak
+                && f.detail.contains("publisher's own")),
+        "{:?}",
+        report.findings
+    );
+    assert!(
+        report
+            .findings
+            .iter()
+            .any(|f| f.check == "witnesses" && f.level == Level::Weak),
+        "a self-witnessed pack still read as witnessed: {:?}",
+        report.findings
+    );
 }
