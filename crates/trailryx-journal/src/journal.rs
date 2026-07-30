@@ -284,6 +284,18 @@ pub struct Journal {
     written: u64,
     /// Records promised durable. Never decreases while the process lives.
     acked: u64,
+    /// The same number, on disk, so the promise outlives the process that made it.
+    ///
+    /// Without it the durability contract could not be checked across a restart, and
+    /// that was the whole hole: `promised` came from this field in memory, so a fresh
+    /// process started at zero, `recovered < promised` was never true, and a journal
+    /// that came back three records short of what a previous process had acked
+    /// reported nothing at all. The README recorded it as an open debt for two days.
+    ///
+    /// A separate twelve-byte file rather than a field in the segment header, because
+    /// the header is hashed into the chain's genesis and written once. Nothing about
+    /// the record format changes for this, which is the point: the format is frozen.
+    watermark: FileId,
     /// Offset just past the last complete record.
     good_bytes: u64,
     since_sync: u64,
@@ -308,9 +320,13 @@ impl Journal {
         clock: &C,
     ) -> JournalResult<(Self, Recovered)> {
         let file = io.create(name)?;
+        // Beside the journal and named after it, so an operator moving a journal
+        // moves its promise with it and nobody has to know a second convention.
+        let watermark = io.create(&format!("{name}.ack"))?;
 
         let mut j = Self {
             file,
+            watermark,
             shard,
             segment,
             created_at: Timestamp(clock.wall_nanos()),
@@ -547,7 +563,11 @@ impl Journal {
             self.dedup.remember(rec.id, rec.seq);
         }
 
-        let promised = self.acked;
+        // The greater of what this process promised and what a previous one wrote
+        // down. On a fresh open the first is zero, which is exactly the case that
+        // used to report nothing; within one process the two agree, because a
+        // successful sync writes the file.
+        let promised = self.acked.max(self.read_watermark(io));
         let recovered = walked.chain.length();
         let violation = (recovered < promised).then_some(DurabilityViolation {
             promised,
@@ -672,6 +692,17 @@ impl Journal {
                 self.acked = self.written;
                 self.since_sync = 0;
                 self.degraded = false;
+                // After the journal is durable and never before. A crash between the
+                // two leaves the watermark BEHIND the journal, which under-promises
+                // and is safe: recovery then finds more than was promised, which is
+                // not a violation. The other order would promise records the journal
+                // does not hold, which is the lie this whole file exists to prevent.
+                //
+                // A failure to record it is not a failure to sync: the records are
+                // durable either way, so the caller is told the truth about them and
+                // the promise is simply not written down this round. It goes down at
+                // the next sync, because the value only ever increases.
+                let _ = self.write_watermark(io);
                 Ok(self.acked)
             }
             Err(e) => {
@@ -679,6 +710,54 @@ impl Journal {
                 Err(e.into())
             }
         }
+    }
+
+    /// Put the acked watermark on disk. Twelve bytes, rewritten in place.
+    ///
+    /// Truncate then append is not atomic, so a crash can leave a torn file. The CRC
+    /// is what makes that safe rather than merely unlikely: a torn watermark fails
+    /// its checksum, is read as absent, and absent under-promises. A watermark that
+    /// could be half-read as a plausible number would be worse than none.
+    fn write_watermark<I: Io>(&mut self, io: &mut I) -> JournalResult<()> {
+        let mut bytes = self.acked.to_be_bytes().to_vec();
+        bytes.extend_from_slice(&crate::wire::crc32(&bytes).to_le_bytes());
+        io.truncate(self.watermark, 0)?;
+        let mut done = 0usize;
+        let mut attempts = 0u32;
+        while done < bytes.len() {
+            attempts += 1;
+            if attempts > 10_000 {
+                return Err(JournalError::Io(IoError::NoSpace));
+            }
+            match io.append(self.watermark, &bytes[done..]) {
+                Ok(n) => done += n,
+                Err(IoError::NoSpace) => continue,
+                Err(e) => return Err(e.into()),
+            }
+        }
+        io.fsync(self.watermark)?;
+        Ok(())
+    }
+
+    /// The watermark a previous process left, or zero if there is none to trust.
+    ///
+    /// Zero for an absent, short or torn file, and for a failing checksum. Every one
+    /// of those means the same thing operationally: nobody wrote down a promise we
+    /// can hold them to, so hold them to nothing rather than to a guess.
+    fn read_watermark<I: Io>(&self, io: &mut I) -> u64 {
+        let Ok(bytes) = io.read_all(self.watermark) else {
+            return 0;
+        };
+        if bytes.len() != 12 {
+            return 0;
+        }
+        let want = u32::from_le_bytes([bytes[8], bytes[9], bytes[10], bytes[11]]);
+        if crate::wire::crc32(&bytes[..8]) != want {
+            return 0;
+        }
+        u64::from_be_bytes([
+            bytes[0], bytes[1], bytes[2], bytes[3], bytes[4], bytes[5], bytes[6], bytes[7],
+        ])
     }
 
     /// Record that something was lost. Counted rather than swallowed.

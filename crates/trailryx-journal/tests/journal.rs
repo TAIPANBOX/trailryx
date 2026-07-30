@@ -4,7 +4,9 @@
 //! path and the real recovery, and the same crash model is pointed at them.
 
 use trailryx_crypto::{ChainState, Sha384};
-use trailryx_journal::journal::{Appended, ChainStart, Journal, JournalError, StoppedBecause};
+use trailryx_journal::journal::{
+    Appended, ChainStart, DurabilityViolation, Journal, JournalError, StoppedBecause,
+};
 use trailryx_journal::wire::{decode_frame, decode_record, encode_record};
 use trailryx_record::{
     AgentId, Algorithms, Basis, ErrorCode, EventType, Hash, MapperVersion, ModelId, Outcome,
@@ -773,4 +775,105 @@ fn losing_acked_data_is_reported_rather_than_absorbed() {
     assert_eq!(v.promised, 6);
     assert!(v.recovered < 6, "{v:?}");
     assert!(rep.is_suspicious());
+}
+
+#[test]
+fn a_promise_made_by_one_process_is_still_a_promise_after_a_restart() {
+    // The debt the README carried for two days. `promised` came from a field in
+    // memory, so a fresh process started at zero, `recovered < promised` could never
+    // be true, and a journal that came back short of what a previous process had
+    // acked reported nothing at all. The durability contract says every sequence
+    // number reported as acked survives any crash, and until now nothing could check
+    // that sentence across the crash it is about.
+    let mut io = SimIo::new(41, IoFaults::NONE);
+    let mut j = open(&mut io);
+    for n in 1..=5u128 {
+        j.append(&minimal(n), &mut io).unwrap();
+    }
+    assert_eq!(j.sync(&mut io).unwrap(), 5);
+    let file = j_file(&mut io);
+    let before = io.read_all(file).unwrap();
+    drop(j);
+
+    // A disk that lost the last two records after promising five. Not our bug, and
+    // never something to discover from a silently lowered watermark.
+    let mut short = before.clone();
+    let frames = decode_frame(&short[20..]).unwrap().total_len;
+    short.truncate(short.len() - 2 * frames);
+    io.truncate(file, 0).unwrap();
+    io.append(file, &short).unwrap();
+    io.fsync(file).unwrap();
+
+    let mut reopened = open(&mut io);
+    let rep = reopened.recover(&mut io).unwrap();
+    assert_eq!(rep.records, 3, "three came back");
+    assert_eq!(
+        rep.durability_violation,
+        Some(DurabilityViolation {
+            promised: 5,
+            recovered: 3
+        }),
+        "a promise made before the restart has to survive it"
+    );
+    assert!(
+        rep.is_suspicious(),
+        "and this is an incident, not a restart"
+    );
+}
+
+#[test]
+fn a_watermark_that_did_not_finish_landing_promises_nothing() {
+    // Truncate then append is not atomic, so a crash can leave the watermark torn.
+    // The CRC is what makes that safe rather than merely unlikely: a torn file is
+    // read as absent, and absent under-promises. A file that could be half-read as a
+    // plausible number would be worse than no file.
+    let mut io = SimIo::new(42, IoFaults::NONE);
+    let mut j = open(&mut io);
+    for n in 1..=4u128 {
+        j.append(&minimal(n), &mut io).unwrap();
+    }
+    j.sync(&mut io).unwrap();
+    drop(j);
+
+    let ack = io.create("s0.journal.ack").unwrap();
+    let good = io.read_all(ack).unwrap();
+    assert_eq!(good.len(), 12, "eight bytes and a checksum");
+
+    for (label, bytes) in [
+        ("a byte flipped in the value", {
+            let mut b = good.clone();
+            b[7] ^= 0x01;
+            b
+        }),
+        ("a byte flipped in the checksum", {
+            let mut b = good.clone();
+            b[11] ^= 0x01;
+            b
+        }),
+        ("only half of it landed", good[..6].to_vec()),
+        ("nothing landed", Vec::new()),
+    ] {
+        io.truncate(ack, 0).unwrap();
+        io.append(ack, &bytes).unwrap();
+        io.fsync(ack).unwrap();
+
+        let mut reopened = open(&mut io);
+        let rep = reopened.recover(&mut io).unwrap();
+        assert_eq!(rep.records, 4, "{label}: the journal itself is untouched");
+        assert_eq!(
+            rep.durability_violation, None,
+            "{label}: an unreadable promise is no promise, never a guess"
+        );
+    }
+
+    // And the intact one is still believed, so the check above is not passing by
+    // being unable to read anything at all.
+    io.truncate(ack, 0).unwrap();
+    io.append(ack, &good).unwrap();
+    io.fsync(ack).unwrap();
+    let mut reopened = open(&mut io);
+    assert_eq!(
+        reopened.recover(&mut io).unwrap().durability_violation,
+        None
+    );
 }

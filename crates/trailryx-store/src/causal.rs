@@ -37,7 +37,7 @@ use crate::query::{Answer, ProofStatus, Query, query_segment};
 use std::collections::{BTreeSet, VecDeque};
 use trailryx_index::completeness::{CompletenessProof, Dimension};
 use trailryx_index::segment::Segment;
-use trailryx_record::{Record, RecordId, RunId};
+use trailryx_record::{EventType, Record, RecordId, RunId, Verdict};
 
 /// How far a reconstruction may go before it stops and says so.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -168,6 +168,27 @@ pub fn reconstruct(segments: &[&Segment], run: &RunId, bounds: Bounds) -> Recons
             if records.len() >= bounds.max_records {
                 stopped = Stopped::RecordLimit;
                 break;
+            }
+
+            // The store saying it lost something about this run. Until this arm
+            // existed, a closure could only be downgraded for an edge that was
+            // *present* and unresolvable, so an edge that was never created produced
+            // no hop, the proof stayed `Full`, and `is_complete()` returned true for a
+            // run whose causal graph had a hole in it. Indistinguishable from a run
+            // that genuinely had no parent, which is exactly the shape of dishonesty
+            // this crate exists to refuse.
+            //
+            // It reads a record rather than a counter, and that is the point: the
+            // assembler writes one of these carrying the affected run's own id, so it
+            // lands in the same `run_id` bucket as the records it is about and the
+            // query above finds it with no new index and no new field. The verdict is
+            // the whole test, and deliberately not the *kind* of loss: a
+            // reconstruction does not need to know whether an edge, a span or a batch
+            // went missing, only that something did.
+            if r.event_type == EventType::StoreEvent && r.outcome.verdict == Some(Verdict::Failed) {
+                status.downgrade_public(
+                    "the store recorded a loss against this run, so the closure may be short",
+                );
             }
 
             // Edges are read from a record that has just been proved, so the

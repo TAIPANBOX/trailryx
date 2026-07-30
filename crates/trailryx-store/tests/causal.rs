@@ -4,7 +4,7 @@ use trailryx_crypto::Sha384;
 use trailryx_index::segment::Segment;
 use trailryx_record::{
     AgentId, Algorithms, Basis, EventType, Hash, MapperVersion, Outcome, Record, RecordId, RunId,
-    SegmentId, Severity, ShardIx, TenantId, Timestamp, Untrusted,
+    SegmentId, Severity, ShardIx, TenantId, Timestamp, Untrusted, Verdict,
 };
 use trailryx_store::causal::{Bounds, Hop, Stopped, reconstruct};
 use trailryx_store::query::ProofStatus;
@@ -284,4 +284,80 @@ fn the_same_closure_reconstructs_the_same_way_twice() {
     assert_eq!(a.records, b.records);
     assert_eq!(a.hops, b.hops);
     assert_eq!(a.stopped, b.stopped);
+}
+
+#[test]
+fn a_loss_the_store_recorded_stops_the_closure_claiming_to_be_complete() {
+    // The second debt the README carried, from the other end. `reconstruct` could only
+    // downgrade for an edge that was PRESENT and unresolvable, so an edge the assembler
+    // never managed to create produced no hop at all: the proof stayed `Full` and
+    // `is_complete()` returned true for a run whose causal graph had a hole in it, and
+    // that is indistinguishable from a run which genuinely had no parent.
+    //
+    // What closes it needs no new field. The assembler writes a `StoreEvent` carrying
+    // the affected run's own id, so it lands in the same `run_id` bucket as the records
+    // it is about and the query a reconstruction already runs finds it.
+    let clean = vec![
+        build(B {
+            id: 1,
+            run: "run-a",
+            agent: "agent://acme.example/support",
+            at: 1_000,
+            parent_run: None,
+            caused_by: vec![],
+        }),
+        build(B {
+            id: 2,
+            run: "run-a",
+            agent: "agent://acme.example/support",
+            at: 1_010,
+            parent_run: None,
+            caused_by: vec![1],
+        }),
+    ];
+    let segment = Segment::seal(SegmentId(1), ShardIx(0), Sha384::digest(b"g"), &clean).unwrap();
+    let whole = reconstruct(
+        &[&segment],
+        &RunId::parse("run-a").unwrap(),
+        Bounds::default(),
+    );
+    assert!(
+        whole.is_complete(),
+        "the control: nothing is missing, so nothing is claimed to be"
+    );
+
+    // The same run, plus the record the store writes when it loses an edge.
+    let mut with_loss = clean.clone();
+    let (mut note, link) = build(B {
+        id: 3,
+        run: "run-a",
+        agent: "agent://acme.example/trailryx.assemble",
+        at: 1_020,
+        parent_run: None,
+        caused_by: vec![],
+    });
+    note.event_type = EventType::StoreEvent;
+    note.severity = Severity::Warning;
+    note.outcome.verdict = Some(Verdict::Failed);
+    note.outcome.tokens_in = Some(1);
+    with_loss.push((note, link));
+
+    let short = Segment::seal(SegmentId(1), ShardIx(0), Sha384::digest(b"g"), &with_loss).unwrap();
+    let r = reconstruct(
+        &[&short],
+        &RunId::parse("run-a").unwrap(),
+        Bounds::default(),
+    );
+    assert!(
+        !r.is_complete(),
+        "a run the store recorded a loss against must not report itself complete"
+    );
+    let why = format!("{:?}", r.proof);
+    assert!(
+        why.contains("recorded a loss against this run"),
+        "and it has to say why: {why}"
+    );
+
+    // Still every record, because a downgrade is about the claim and not the data.
+    assert_eq!(r.records.len(), 3);
 }

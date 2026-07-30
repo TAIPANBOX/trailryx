@@ -37,6 +37,8 @@
 pub mod correlation;
 pub mod ids;
 
+use std::collections::BTreeMap;
+
 use correlation::Correlation;
 use ids::Ids;
 use trailryx_contracts::contracts::{KeyProvider, ObjectStore};
@@ -45,8 +47,8 @@ use trailryx_erasure::aead::{Aead, KeySource};
 use trailryx_erasure::subject::SubjectHandle;
 use trailryx_erasure::vault::{Vault, VaultError};
 use trailryx_record::{
-    Algorithms, Hash, Outcome, PayloadRef, Record, RecordId, SegmentId, ShardIx, Timestamp,
-    assess_skew,
+    Algorithms, ErrorCode, EventType, Hash, Outcome, PayloadClass, PayloadRef, Record, RecordId,
+    RunId, SegmentId, Severity, ShardIx, Timestamp, Untrusted, Verdict, assess_skew,
 };
 use trailryx_sim::rng::Rng;
 
@@ -110,6 +112,25 @@ pub struct Assembler<R> {
     ids: Ids<R>,
     correlation: Correlation,
     unresolved_parents: u64,
+    /// Which runs lost an edge, and how many, until somebody writes it down.
+    ///
+    /// A count on its own could never reach a reconstruction. `reconstruct` can only
+    /// downgrade a proof for an edge that is *present* and unresolvable: an edge that
+    /// was never created produces no hop, so the closure stayed `Full` and
+    /// `is_complete()` returned true, indistinguishable from a run that genuinely had
+    /// no parent. That was the second debt the README carried.
+    ///
+    /// Keyed by run, because that is what makes the fix possible without touching the
+    /// frozen record schema. A `StoreEvent` carrying the affected run's own id is
+    /// found by the very query a reconstruction of that run already runs, since
+    /// `run_id` is one of the five provable dimensions. So the downgrade ends up
+    /// backed by a chained, committed record rather than by a number in memory, which
+    /// is strictly better than the field I was going to add.
+    ///
+    /// Bounded by the correlation window, for the same reason that is: a receiver
+    /// runs for months and a map of every run it ever saw is a leak whose symptom is
+    /// a store that gets slower and then stops.
+    lost_edges: BTreeMap<RunId, u32>,
 }
 
 impl<R: Rng> Assembler<R> {
@@ -123,6 +144,7 @@ impl<R: Rng> Assembler<R> {
             ids: Ids::new(rng),
             correlation: Correlation::new(window),
             unresolved_parents: 0,
+            lost_edges: BTreeMap::new(),
         }
     }
 
@@ -144,6 +166,71 @@ impl<R: Rng> Assembler<R> {
     /// can be had now: an operator can see that edges were lost, and how many.
     pub fn unresolved_parents(&self) -> u64 {
         self.unresolved_parents
+    }
+
+    /// One record per run that lost an edge, so a reconstruction of that run finds out.
+    ///
+    /// This is the whole fix for the second debt, and the shape is the interesting
+    /// part. `reconstruct` can only downgrade a proof for an edge that is *present*
+    /// and unresolvable; an edge that was never created produces no hop, so the
+    /// closure stayed `Full` and said it was complete. A counter here could never
+    /// change that, because a counter is not in the store.
+    ///
+    /// A record is. Each one carries the affected run's **own** `run_id`, which is one
+    /// of the five provable dimensions, so the query a reconstruction of that run
+    /// already runs finds it without a new index, a new field or a format version.
+    /// The record schema is frozen and stays frozen.
+    ///
+    /// `EventType::StoreEvent` is the store speaking about itself, which its own doc
+    /// comment lists as "a gap, a re-sign, a recovery", and a lost edge is a gap.
+    /// `Verdict::Failed` is what a reconstruction looks for: it does not need to know
+    /// which kind of loss this was, only that something about this run was lost, so
+    /// nothing here has to be invented to be recognised.
+    ///
+    /// Drains what it reports. Calling it twice does not double the record, and a run
+    /// that loses another edge later earns another one.
+    pub fn lost_edge_events(
+        &mut self,
+        recorded_at: Timestamp,
+        draft: &MetaDraft,
+    ) -> Vec<Assembled> {
+        let lost = std::mem::take(&mut self.lost_edges);
+        lost.into_iter()
+            .map(|(run_id, edges)| {
+                let mut meta = draft.clone();
+                // The run that lost the edge, not the store's own synthetic one. That
+                // substitution is the entire mechanism: the record lands in the same
+                // run_id index bucket as the records it is about.
+                meta.run_id = run_id;
+                meta.mapper = trailryx_record::MapperVersion::UNMAPPED;
+                meta.event_type = EventType::StoreEvent;
+                meta.severity = Severity::Warning;
+                meta.verdict = Some(Verdict::Failed);
+                meta.error = Some(ErrorCode::Internal);
+                meta.occurred_at = Untrusted::new(recorded_at);
+                meta.decided_at = None;
+                meta.latency_micros = None;
+                meta.tokens_in = Some(edges);
+                meta.tokens_out = None;
+                meta.cost_micros = None;
+                let id = self.ids.mint(recorded_at);
+                Assembled {
+                    record: assemble(id, self.shard, meta, recorded_at, Vec::new()),
+                    // The count is metadata and survives erasure; the detail is
+                    // payload, because a source's own name for a parent is the
+                    // source's text and belongs on the encrypted side.
+                    payload: vec![PayloadPart::new(
+                        PayloadClass::Diagnostic,
+                        format!("caused_by_unresolved\t{edges}\n").into_bytes(),
+                    )],
+                }
+            })
+            .collect()
+    }
+
+    /// Whether any run is waiting for one of those records.
+    pub fn has_lost_edges(&self) -> bool {
+        !self.lost_edges.is_empty()
     }
 
     /// A record from the store's own envelope, where the caller knows the edges.
@@ -212,17 +299,34 @@ impl<R: Rng> Assembler<R> {
     /// event's own name is already remembered.
     fn finish(&mut self, ingest: Ingest, id: RecordId, recorded_at: Timestamp) -> Assembled {
         let mut caused_by = Vec::new();
+        let mut lost = false;
         if let Some(parent) = ingest.correlation.and_then(|c| c.parent) {
             match self.correlation.resolve(&parent) {
                 // A span naming itself as its own parent. Not a guess to make:
                 // an edge from a record to itself is a cycle of length one, and
                 // remembering this event's name before resolving is what makes it
                 // reachable at all.
-                Some(found) if found == id => self.unresolved_parents += 1,
+                Some(found) if found == id => lost = true,
                 Some(found) => caused_by.push(found),
                 // Out of the window, or in another shard's assembler. No edge,
                 // and counted rather than dropped in silence.
-                None => self.unresolved_parents += 1,
+                None => lost = true,
+            }
+        }
+        if lost {
+            self.unresolved_parents += 1;
+            // Against the run that lost it, so a reconstruction of that run can find
+            // out. Bounded like the correlation window it shares a lifetime with: at
+            // the cap the count is dropped rather than the map grown, and dropping a
+            // count is not dropping the fact, because the total above never resets.
+            if self.lost_edges.len() < self.correlation.capacity() {
+                let entry = self
+                    .lost_edges
+                    .entry(ingest.meta.run_id.clone())
+                    .or_insert(0);
+                *entry = entry.saturating_add(1);
+            } else if let Some(entry) = self.lost_edges.get_mut(&ingest.meta.run_id) {
+                *entry = entry.saturating_add(1);
             }
         }
 

@@ -7,7 +7,7 @@
 ![Stage](https://img.shields.io/badge/stage-9%20of%2013-blue.svg)
 ![Core](https://img.shields.io/badge/core-frozen-success.svg)
 ![Rust](https://img.shields.io/badge/rust-1.85%2B-orange.svg)
-![Tests](https://img.shields.io/badge/tests-676-success.svg)
+![Tests](https://img.shields.io/badge/tests-681-success.svg)
 ![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)
 ![Dependencies](https://img.shields.io/badge/dependencies-0-success.svg)
 ![Unsafe](https://img.shields.io/badge/unsafe-forbidden-success.svg)
@@ -245,12 +245,12 @@ and the proof shapes do not change without a version and a migration.
 | `trailryx-crypto` | SHA-384 and the hash chain | 14 |
 | `trailryx-core` | the simulated store the determinism criterion runs against | 15 |
 | `trailryx-contracts` | eight adapter traits and a conformance suite | 21 |
-| `trailryx-journal` | wire format, append-only write path, recovery | 26 |
+| `trailryx-journal` | wire format, append-only write path, recovery | 28 |
 | `trailryx-index` | Merkle history tree, completeness proofs, segment composition | 54 |
-| `trailryx-store` | sealing, the read surface, causal reconstruction | 58 |
+| `trailryx-store` | sealing, the read surface, causal reconstruction | 59 |
 | `trailryx-json` | a strict bounded RFC 8259 reader and a JSON Lines framer. Depends on nothing | 116 |
 | `trailryx-otlp` | two OTLP transports, one mapper: protobuf and JSON, the GenAI semconv, the file source | 140 |
-| `trailryx-assemble` | what a source handed over, made into records | 27 |
+| `trailryx-assemble` | what a source handed over, made into records | 29 |
 | `trailryx-erasure` | payload envelopes, the key hierarchy, erasure | 35 |
 | `trailryx-verify` | the offline verifier, including its own ECDSA. Depends on nothing | 20 |
 | `trailryx-projection` | Thrift, a Parquet writer, and columnar projections | 18 |
@@ -263,7 +263,7 @@ and the proof shapes do not change without a version and a migration.
 ## Try it
 
 ```bash
-cargo test                                    # 676 tests
+cargo test                                    # 681 tests
 cargo run --bin trailryx-sim-run -- --help
 ```
 
@@ -1005,13 +1005,28 @@ its compliance mapping and RFC 3161 anchor are still to come. Stage 9 has no
 repeated columns, so lists are comma-joined (safe, because no identifier's
 character set contains a comma), and no storage tiering.
 
-Two debts the core review named and left open, both because closing them means
-changing the record schema, which is frozen. A record cannot yet say "this event
-named a parent we could not resolve", so a reconstruction missing that edge cannot
-downgrade its own proof; the assembler counts the loss instead. And a journal's
-acked watermark lives only in memory, so after a restart nothing can report a
-durability violation against what a previous process had promised; the destructive
-paths that made this matter are closed, and the watermark itself wants persisting.
+Two debts the core review named are closed, and the interesting part is that neither
+needed the record schema opened after all. Both descriptions above said they did,
+which was my reading and not a fact, and checking beat believing.
+
+The journal's acked watermark now lives in a twelve-byte file beside the journal,
+written after the journal's own fsync and never before, so a crash between the two
+leaves the watermark behind rather than ahead: under-promising is safe, the other
+order would promise records the journal does not hold. A torn or unreadable watermark
+promises nothing rather than a plausible number, which is what the checksum is for.
+`promised` is now the greater of what this process said and what a previous one wrote
+down, so the sentence "every sequence number reported as acked survives any crash"
+can finally be checked across the crash it is about.
+
+A lost causal edge is now a record rather than a counter, which is what makes it
+reachable. `reconstruct` could only ever downgrade a proof for an edge that was
+*present* and unresolvable, so an edge that was never created produced no hop and the
+closure reported itself complete. The assembler writes a `StoreEvent` carrying the
+affected run's **own** identifier, and because `run_id` is one of the five provable
+dimensions, the query a reconstruction of that run already runs finds it: no new
+field, no new index, no format version. The downgrade is then backed by a chained,
+committed record instead of by a number in memory, which is strictly better than the
+field I was going to add.
 
 One deliberate availability trade-off, also from that review. A journal whose
 middle was corrupted or edited now refuses to open rather than repairing itself by

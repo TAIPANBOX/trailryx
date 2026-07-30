@@ -12,7 +12,7 @@ use trailryx_erasure::vault::Vault;
 use trailryx_erasure::{PredictableKeys, Sha384Ctr};
 use trailryx_record::{
     AgentId, Basis, EventType, Hash, MapperVersion, PayloadClass, RunId, SegmentId, Severity,
-    ShardIx, TenantId, Timestamp, Untrusted,
+    ShardIx, TenantId, Timestamp, Untrusted, Verdict,
 };
 use trailryx_sim::rng::SimRng;
 
@@ -350,4 +350,77 @@ fn a_span_naming_itself_as_its_own_parent_gets_no_edge() {
     let assembled = a.adopt_batch(vec![ingest(1, Some(1), Vec::new())], NOW);
     assert!(assembled[0].record.caused_by.is_empty());
     assert_eq!(a.unresolved_parents(), 1);
+}
+
+#[test]
+fn a_lost_edge_becomes_a_record_against_the_run_that_lost_it() {
+    // The second debt the README carried. A count of unresolved parents can never
+    // reach a reconstruction, because a count is not in the store: an edge that was
+    // never created produces no hop, so the closure stayed `Full` and said it was
+    // complete, indistinguishable from a run that genuinely had no parent.
+    //
+    // The fix needs no field and no format version. The record carries the affected
+    // run's OWN id, which is one of the five provable dimensions, so it lands in the
+    // same index bucket as the records it is about.
+    let mut a = Assembler::with_window(ShardIx(3), SimRng::new(11), 2);
+    a.adopt(ingest(1, None, Vec::new()), NOW);
+    a.adopt(ingest(8, None, Vec::new()), NOW);
+    a.adopt(ingest(9, None, Vec::new()), NOW); // evicts the name 1
+    assert!(!a.has_lost_edges(), "nothing has been lost yet");
+
+    let orphan = a.adopt(ingest(2, Some(1), Vec::new()), NOW).record;
+    assert!(orphan.caused_by.is_empty());
+    assert!(a.has_lost_edges());
+
+    let events = a.lost_edge_events(NOW, &draft(NOW.as_nanos()));
+    assert_eq!(events.len(), 1, "one run lost an edge, so one record");
+    let event = &events[0].record;
+
+    // Against the run, not against a synthetic one of the store's own.
+    assert_eq!(event.run_id, orphan.run_id, "the record is about that run");
+    assert_eq!(event.event_type, EventType::StoreEvent);
+    assert_eq!(event.outcome.verdict, Some(Verdict::Failed));
+    assert_eq!(event.severity, Severity::Warning);
+    assert_eq!(event.outcome.tokens_in, Some(1), "one edge");
+    assert_eq!(
+        event.mapper,
+        MapperVersion::UNMAPPED,
+        "no mapper touched a record the store wrote about itself"
+    );
+
+    // The detail is payload, because a source's own name for a parent is the source's
+    // text and belongs on the encrypted side. The fact is metadata and survives.
+    let detail = String::from_utf8(events[0].payload[0].bytes.clone()).expect("text");
+    assert!(detail.contains("caused_by_unresolved\t1"), "{detail}");
+    assert_eq!(events[0].payload[0].class, PayloadClass::Diagnostic);
+
+    // Drained: asking twice does not double the record.
+    assert!(!a.has_lost_edges());
+    assert!(a.lost_edge_events(NOW, &draft(NOW.as_nanos())).is_empty());
+
+    // And the running total is not reset by reporting, because it counts the fact
+    // rather than the reporting of it.
+    assert_eq!(a.unresolved_parents(), 1);
+}
+
+#[test]
+fn the_map_of_runs_that_lost_an_edge_is_bounded() {
+    // A receiver runs for months. A map of every run that ever lost an edge is a leak
+    // whose symptom is a store that gets slower and then stops, which is the same
+    // defect the correlation window exists to prevent, so it takes the same bound.
+    let mut a = Assembler::with_window(ShardIx(3), SimRng::new(12), 2);
+    for n in 20..60u8 {
+        // Each of these names a parent nobody remembers, in a run of its own.
+        let mut one = ingest(n, Some(n.wrapping_add(100)), Vec::new());
+        one.meta.run_id = RunId::parse(format!("run-{n}")).unwrap();
+        a.adopt(one, NOW);
+    }
+    let events = a.lost_edge_events(NOW, &draft(NOW.as_nanos()));
+    assert!(
+        events.len() <= 2,
+        "the map is bounded by the correlation window, got {} records",
+        events.len()
+    );
+    // The total is not bounded, because dropping a count must not drop the fact.
+    assert_eq!(a.unresolved_parents(), 40);
 }
