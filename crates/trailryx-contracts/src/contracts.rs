@@ -284,8 +284,22 @@ pub struct Principal {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Action {
+    /// Reading records as written, past the projections and past the proofs.
+    ///
+    /// A stronger permission than [`Self::Query`] and not a weaker one, which is
+    /// the opposite of how the names read. A query returns an answer with a
+    /// completeness proof attached; this returns the bytes a journal holds, in the
+    /// order it holds them, with no proof and no shape imposed. It is the debugging
+    /// and forensics surface, and PostgreSQL treats its equivalent the same way:
+    /// `pg_walinspect` is restricted by default to superusers and members of
+    /// `pg_read_server_files`, while ordinary SQL needs no such grant.
     ReadMetadata,
     ReadPayload,
+    /// Asking a question and getting an answer, through the projections.
+    ///
+    /// The ordinary read. An answer either carries a completeness proof or says
+    /// which predicate cost it one, so what a caller gets back is bounded by the
+    /// question they asked.
     Query,
     ProduceEvidence,
     Erase,

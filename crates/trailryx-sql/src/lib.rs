@@ -96,8 +96,23 @@ impl Session {
     ///
     /// One table, no catalog of the operator's choosing, no external locations. The
     /// tables a session can see are the ones the store registered.
+    /// A session that may query the projections and nothing more.
     pub fn new(segments: Vec<Segment>) -> Self {
-        let table = Arc::new(RecordTable::new(segments));
+        Self::with_raw_access(segments, false)
+    }
+
+    /// A session that may also read the journal past the projections.
+    ///
+    /// `raw` is the answer to `Action::ReadMetadata`, asked separately from
+    /// `Action::Query` because it is a stronger permission and not a weaker one: a
+    /// query returns an answer with a proof, and the journal returns the bytes with
+    /// none. When it is false the `journal` function is **not registered**, so a
+    /// session without the grant does not have it rather than being refused when it
+    /// tries. That is how `pg_walinspect` behaves and it is the better shape: the
+    /// catalog a session can see is what it may use.
+    pub fn with_raw_access(segments: Vec<Segment>, raw: bool) -> Self {
+        let slot = table::ProofSlot::default();
+        let table = Arc::new(RecordTable::new(segments).sharing(Arc::clone(&slot)));
         let context = SessionContext::new();
         context
             .register_table("records", Arc::clone(&table) as Arc<_>)
@@ -110,16 +125,28 @@ impl Session {
         let shared = Arc::new(segments_of(&table));
         context.register_udtf(
             "records_as_of",
-            Arc::new(dialect::RecordsAsOf::new(Arc::clone(&shared))),
+            Arc::new(dialect::RecordsAsOf::new(
+                Arc::clone(&shared),
+                Arc::clone(&slot),
+            )),
         );
         context.register_udtf(
             "causal_closure",
-            Arc::new(dialect::CausalClosure::new(shared)),
+            Arc::new(dialect::CausalClosure::new(
+                Arc::clone(&shared),
+                Arc::clone(&slot),
+            )),
         );
         context.register_udtf(
             "trailryx_proof",
             Arc::new(dialect::ProofOfLastAnswer::new(Arc::clone(&table))),
         );
+        if raw {
+            context.register_udtf(
+                "journal",
+                Arc::new(dialect::Journal::new(shared, Arc::clone(&slot))),
+            );
+        }
 
         Self { context, table }
     }

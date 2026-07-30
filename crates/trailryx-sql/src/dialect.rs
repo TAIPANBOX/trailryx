@@ -53,7 +53,7 @@ use trailryx_index::segment::Segment;
 use trailryx_record::{RunId, Timestamp};
 use trailryx_store::causal::{Bounds, reconstruct};
 
-use crate::table::{Provability, RecordTable};
+use crate::table::{ProofSlot, Provability, RecordTable};
 
 /// The one string argument a table function was given.
 fn one_string(args: &[Expr], what: &str) -> DfResult<String> {
@@ -78,11 +78,14 @@ fn one_string(args: &[Expr], what: &str) -> DfResult<String> {
 #[derive(Debug)]
 pub struct RecordsAsOf {
     segments: Arc<Vec<Segment>>,
+    /// The session's proof slot, so an answer from this function is reachable through
+    /// the same accessor as an answer from `records`.
+    slot: ProofSlot,
 }
 
 impl RecordsAsOf {
-    pub fn new(segments: Arc<Vec<Segment>>) -> Self {
-        Self { segments }
+    pub fn new(segments: Arc<Vec<Segment>>, slot: ProofSlot) -> Self {
+        Self { segments, slot }
     }
 }
 
@@ -91,7 +94,9 @@ impl TableFunctionImpl for RecordsAsOf {
         let text = one_string(args, "records_as_of")?;
         let nanos = parse_instant(&text)?;
         Ok(Arc::new(
-            RecordTable::new((*self.segments).clone()).as_of(Timestamp(nanos)),
+            RecordTable::new((*self.segments).clone())
+                .sharing(Arc::clone(&self.slot))
+                .as_of(Timestamp(nanos)),
         ))
     }
 }
@@ -158,11 +163,14 @@ fn parse_instant(text: &str) -> DfResult<u64> {
 #[derive(Debug)]
 pub struct CausalClosure {
     segments: Arc<Vec<Segment>>,
+    /// The session's proof slot, so an answer from this function is reachable through
+    /// the same accessor as an answer from `records`.
+    slot: ProofSlot,
 }
 
 impl CausalClosure {
-    pub fn new(segments: Arc<Vec<Segment>>) -> Self {
-        Self { segments }
+    pub fn new(segments: Arc<Vec<Segment>>, slot: ProofSlot) -> Self {
+        Self { segments, slot }
     }
 }
 
@@ -187,6 +195,7 @@ impl TableFunctionImpl for CausalClosure {
                     closure.proof, closure.stopped
                 )]),
             },
+            Arc::clone(&self.slot),
         )))
     }
 }
@@ -314,5 +323,139 @@ mod tests {
         .unwrap_err()
         .to_string();
         assert!(error.contains("exactly one string literal"), "{error}");
+    }
+}
+
+/// `journal(<from seq>, <to seq>)`
+///
+/// The records as the journal holds them, in journal order, past the projections and
+/// past the proofs. `docs/planning/trailryx-architecture.md` §3.3 calls it "the raw
+/// truth", and §3.2a says the facade never touches the live journal. Both are true at
+/// once, and the shape that makes them true is not one this repository invented.
+///
+/// # It is modelled on `pg_walinspect`, which solves the same problem
+///
+/// PostgreSQL faced exactly this: expose the write-ahead log through SQL without
+/// letting the query executor near the write path. `pg_walinspect` shipped in
+/// PostgreSQL 15 and every one of its four decisions applies here, so all four are
+/// copied rather than re-derived:
+///
+/// - **A table function taking a range, not a table.** `pg_get_wal_records_info(start,
+///   end)`. There is no `SELECT * FROM wal`, because a log is unbounded and a client
+///   that could ask for all of it could ask the server to read all of it.
+/// - **An error when the start is not available.** Postgres refuses an LSN that has
+///   not been flushed or has been recycled. Here the equivalent is a sequence number
+///   in no **sealed** segment: a record in the live journal is not refused because it
+///   is secret, it is refused because reading it would put this runtime on the write
+///   path, which is what §3.2a forbids and what would cost the shard its determinism.
+/// - **Permissive about the upper bound.** Postgres accepts an `end_lsn` past the
+///   current one and returns what exists. Erroring instead would make the ordinary
+///   "everything from here" query a moving target.
+/// - **A different privilege from ordinary SQL.** Restricted by default to superusers
+///   and `pg_read_server_files`. Here that is [`Action::ReadMetadata`] rather than
+///   [`Action::Query`], asked for separately, and a session that was not granted it
+///   does not get this function registered at all. The catalog a session sees is what
+///   it may use.
+///
+/// [`Action::ReadMetadata`]: trailryx_contracts::contracts::Action::ReadMetadata
+/// [`Action::Query`]: trailryx_contracts::contracts::Action::Query
+#[derive(Debug)]
+pub struct Journal {
+    segments: Arc<Vec<Segment>>,
+    /// The session's proof slot, so an answer from this function is reachable through
+    /// the same accessor as an answer from `records`.
+    slot: ProofSlot,
+}
+
+impl Journal {
+    pub fn new(segments: Arc<Vec<Segment>>, slot: ProofSlot) -> Self {
+        Self { segments, slot }
+    }
+}
+
+impl TableFunctionImpl for Journal {
+    fn call(&self, args: &[Expr]) -> DfResult<Arc<dyn TableProvider>> {
+        let (from, to) = two_numbers(args)?;
+        if from > to {
+            return Err(DataFusionError::Plan(format!(
+                "journal({from}, {to}): the range runs backwards"
+            )));
+        }
+
+        // Sealed segments only, and in journal order, which is `(segment, seq)`
+        // because one segment is one journal file numbering from one.
+        let mut rows: Vec<(trailryx_record::Record, trailryx_record::Hash)> = Vec::new();
+        let mut available_from: Option<u64> = None;
+        let mut available_to: Option<u64> = None;
+        let mut ordered: Vec<&Segment> = self.segments.iter().collect();
+        ordered.sort_by_key(|s| s.manifest().segment.0);
+        for segment in ordered {
+            for (record, link) in segment.records().iter().zip(segment.links()) {
+                available_from =
+                    Some(available_from.map_or(record.seq, |v: u64| v.min(record.seq)));
+                available_to = Some(available_to.map_or(record.seq, |v: u64| v.max(record.seq)));
+                if record.seq >= from && record.seq <= to {
+                    rows.push((record.clone(), link));
+                }
+            }
+        }
+
+        // The start has to exist, exactly as Postgres refuses an LSN it cannot reach.
+        // A silent empty answer would be indistinguishable from "that range is empty",
+        // and the two mean very different things to somebody doing forensics.
+        let (Some(low), Some(high)) = (available_from, available_to) else {
+            return Err(DataFusionError::Plan(
+                "journal: no sealed segment is available to read".to_owned(),
+            ));
+        };
+        if from < low {
+            return Err(DataFusionError::Plan(format!(
+                "journal({from}, {to}): sequence {from} is not in any sealed segment; the \
+                 earliest available is {low}"
+            )));
+        }
+        if from > high {
+            return Err(DataFusionError::Plan(format!(
+                "journal({from}, {to}): sequence {from} is past the last sealed record, \
+                 which is {high}. A record that is not sealed yet is not refused for being \
+                 secret: reading it would put this runtime on the write path"
+            )));
+        }
+        // The upper bound stays permissive, as Postgres is: whatever exists.
+
+        Ok(Arc::new(RecordTable::from_records_with_links(
+            rows,
+            // No proof, and it says so rather than reporting `Full` for a scan that
+            // deliberately went around the thing that proves.
+            Provability::Partial(vec![
+                "journal() reads past the projections, so no completeness proof applies to \
+                 this answer"
+                    .to_owned(),
+            ]),
+            Arc::clone(&self.slot),
+        )))
+    }
+}
+
+/// The two integer arguments a range function was given.
+fn two_numbers(args: &[Expr]) -> DfResult<(u64, u64)> {
+    let number = |e: &Expr| -> Option<u64> {
+        match e {
+            Expr::Literal(ScalarValue::Int64(Some(v)), _) => u64::try_from(*v).ok(),
+            Expr::Literal(ScalarValue::UInt64(Some(v)), _) => Some(*v),
+            Expr::Literal(ScalarValue::Int32(Some(v)), _) => u64::try_from(*v).ok(),
+            _ => None,
+        }
+    };
+    match args {
+        [a, b] => match (number(a), number(b)) {
+            (Some(from), Some(to)) => Ok((from, to)),
+            _ => Err(DataFusionError::Plan(
+                "journal takes two non-negative sequence numbers".to_owned(),
+            )),
+        },
+        _ => Err(DataFusionError::Plan(
+            "journal takes exactly two arguments: journal(from_seq, to_seq)".to_owned(),
+        )),
     }
 }

@@ -530,3 +530,115 @@ async fn the_extensions_are_still_behind_the_statement_gate() {
         "a table function must not carry a create past the gate"
     );
 }
+
+// ---------------------------------------------------------------------------
+// journal(): the raw truth, shaped like pg_walinspect
+// ---------------------------------------------------------------------------
+//
+// Every assertion here is one of the four decisions PostgreSQL made for
+// `pg_walinspect`, which solves the same problem: expose the log through SQL without
+// letting the query engine near the write path. Copied rather than re-derived, and
+// each test names which decision it is.
+
+/// Decision one: a table function taking a range, so there is no "give me everything".
+#[tokio::test]
+async fn journal_is_a_range_function_and_not_a_table() {
+    let session = Session::with_raw_access(vec![segment()], true);
+    assert!(
+        session.query("SELECT * FROM journal").await.is_err(),
+        "a log must not be askable in one piece"
+    );
+    assert!(
+        session.query("SELECT * FROM journal(1)").await.is_err(),
+        "one bound is not a range"
+    );
+    assert_eq!(rows_of(&session, "SELECT * FROM journal(1, 6)").await, 6);
+    assert_eq!(rows_of(&session, "SELECT * FROM journal(2, 4)").await, 3);
+}
+
+/// Decision two: an error when the start is not available, never a silent empty
+/// answer. The two mean very different things to somebody doing forensics.
+#[tokio::test]
+async fn a_start_that_is_not_sealed_is_an_error_and_says_what_is_available() {
+    let session = Session::with_raw_access(vec![segment()], true);
+
+    let error = session
+        .query("SELECT * FROM journal(99, 200)")
+        .await
+        .expect_err("a start past the sealed records must be refused");
+    assert!(
+        error.to_string().contains("past the last sealed"),
+        "{error}"
+    );
+    // And it says why, so nobody reads it as the record being hidden.
+    assert!(error.to_string().contains("write path"), "{error}");
+
+    // The fixture starts at 1, so there is no earlier case to test here; the
+    // backwards range is the other refusal that must not be a silent empty answer.
+    let error = session
+        .query("SELECT * FROM journal(5, 2)")
+        .await
+        .expect_err("a backwards range must be refused");
+    assert!(error.to_string().contains("backwards"), "{error}");
+}
+
+/// Decision three: permissive about the upper bound. Postgres accepts an end past the
+/// current LSN and returns what exists, because erroring would make "everything from
+/// here" a moving target.
+#[tokio::test]
+async fn an_upper_bound_past_the_end_returns_what_exists() {
+    let session = Session::with_raw_access(vec![segment()], true);
+    assert_eq!(
+        rows_of(&session, "SELECT * FROM journal(1, 999999)").await,
+        6,
+        "an open-ended range returns everything sealed, not an error"
+    );
+}
+
+/// Decision four: a different privilege from ordinary SQL. A session without the grant
+/// does not have the function, rather than being refused when it reaches for it.
+#[tokio::test]
+async fn a_session_without_the_raw_grant_does_not_have_the_function_at_all() {
+    let ordinary = Session::new(vec![segment()]);
+    let error = ordinary
+        .query("SELECT * FROM journal(1, 6)")
+        .await
+        .expect_err("journal must not be in an ordinary session's catalog");
+    // Not "permission denied" but "no such function": the catalog a session sees is
+    // what it may use, which is how pg_walinspect behaves when the grant is absent.
+    assert!(
+        error.to_string().to_lowercase().contains("journal"),
+        "{error}"
+    );
+
+    // And the ordinary surface still works, so the grant is the only difference.
+    assert_eq!(rows_of(&ordinary, "SELECT * FROM records").await, 6);
+}
+
+/// The raw path carries no proof, and it says so rather than reporting the strongest
+/// value for a scan that deliberately went round the thing that proves.
+#[tokio::test]
+async fn journal_reports_no_proof_because_it_went_past_the_projections() {
+    let session = Session::with_raw_access(vec![segment()], true);
+    session.query("SELECT * FROM journal(1, 6)").await.unwrap();
+    let Some(Provability::Partial(reasons)) = session.last_proof() else {
+        panic!("a raw read must never report a full proof");
+    };
+    assert!(
+        reasons.iter().any(|r| r.contains("past the projections")),
+        "{reasons:?}"
+    );
+}
+
+/// And it is still behind the statement gate, so the raw function is not a way round
+/// anything else.
+#[tokio::test]
+async fn the_raw_function_is_still_behind_the_gate() {
+    let session = Session::with_raw_access(vec![segment()], true);
+    assert!(
+        session
+            .query("CREATE TABLE x AS SELECT * FROM journal(1, 6)")
+            .await
+            .is_err()
+    );
+}

@@ -7,7 +7,7 @@
 ![Stage](https://img.shields.io/badge/stage-9%20of%2013-blue.svg)
 ![Core](https://img.shields.io/badge/core-frozen-success.svg)
 ![Rust](https://img.shields.io/badge/rust-1.85%2B-orange.svg)
-![Tests](https://img.shields.io/badge/tests-906-success.svg)
+![Tests](https://img.shields.io/badge/tests-912-success.svg)
 ![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)
 ![Dependencies](https://img.shields.io/badge/deps-0%20in%20the%20core-success.svg)
 ![Unsafe](https://img.shields.io/badge/unsafe-forbidden-success.svg)
@@ -259,7 +259,7 @@ and the proof shapes do not change without a version and a migration.
 | `trailryx-anchor` | RFC 3161 timestamping: TSP, the CMS subset, and RSA over Montgomery arithmetic | 52 |
 | `trailryx-ingest` | the OTLP/HTTP server: HTTP/1.1, gzip, bearer auth, all hand-written | 119 |
 | `trailryx-compliance` | a versioned map from what is proved to what a framework asks, and what it does not | 12 |
-| `trailryx-sql` | the SQL facade: DataFusion and the Postgres wire protocol, predicates pushed into the index, statements gated, reads authorised, three dialect extensions | 53 |
+| `trailryx-sql` | the SQL facade: DataFusion and the Postgres wire protocol, predicates pushed into the index, statements gated, reads authorised, four dialect extensions | 59 |
 | `trailryx-demo` | the eight acceptance steps, and a reader for a collector's file | - |
 
 **Zero third-party dependencies in every crate above.** `unsafe` forbidden at the
@@ -285,7 +285,7 @@ thing an auditor reads.
 ## Try it
 
 ```bash
-cargo test                                    # 906 tests
+cargo test                                    # 912 tests
 cargo run --bin trailryx-sim-run -- --help
 ```
 
@@ -384,6 +384,30 @@ store holds events, so the name says which of the two is on offer.
 `trailryx_proof()` reports "none" before any query has been answered, not "full". A
 session that has proved nothing must not report the strongest value for the absence of
 an answer.
+
+### The raw journal, shaped the way PostgreSQL shaped the same problem
+
+§3.3 wants raw truth past the projections; §3.2a says the facade never touches the
+live journal. Both hold at once, and the shape that makes them hold is not one this
+repository invented.
+
+PostgreSQL faced exactly this and shipped `pg_walinspect` in version 15: expose the
+write-ahead log through SQL without letting the query executor near the write path.
+All four of its decisions apply here and all four are copied rather than re-derived:
+
+| `pg_walinspect` | here | why |
+|---|---|---|
+| a table function taking a range | `journal(from_seq, to_seq)` | there is no `SELECT * FROM wal`, because a client that could ask for all of a log could ask the server to read all of it |
+| errors when the start is unavailable | errors when the sequence is in no **sealed** segment | a silent empty answer is indistinguishable from "that range is empty", and the two mean very different things in forensics |
+| permissive about the upper bound | the same | erroring would make "everything from here" a moving target |
+| a **different privilege** from ordinary SQL | `Action::ReadMetadata`, not `Action::Query` | reading past the proofs is a stronger permission than querying, which is the opposite of how the names read |
+
+The fourth is the one that would have been got wrong. A session without the grant does
+not get the function **registered at all**, so it does not have it rather than being
+refused when it reaches for it: the catalog a session can see is what it may use.
+
+And the answer carries no proof and says so, rather than reporting the strongest value
+for a scan that deliberately went round the thing that proves.
 
 ### A Postgres client connects, and two defaults had to be refused first
 
@@ -1104,7 +1128,7 @@ that is the part an auditor cannot do without the pack. It then says out loud th
 it did not check the authority's signature, and prints the command that does:
 
 ```
-[note]  anchor: "digicert" stamped this root at 1785421800, token 738 bytes, nonce 906344827
+[note]  anchor: "digicert" stamped this root at 1785421800, token 738 bytes, nonce 912344827
 [weak]  anchor-signature: this verifier checked that "digicert"'s token is over this
         root and did not check the authority's signature; verify it with
         `openssl ts -verify` against their published certificate

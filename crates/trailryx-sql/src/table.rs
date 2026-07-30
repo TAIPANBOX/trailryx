@@ -95,8 +95,19 @@ pub struct RecordTable {
     /// Rows somebody else selected, for a table function that has already done the
     /// selecting. `None` means the index answers.
     fixed: Option<Vec<(trailryx_record::Record, trailryx_record::Hash)>>,
-    last_proof: Mutex<Option<Provability>>,
+    /// Where this table records how provable its last answer was.
+    ///
+    /// Shared across every table a session serves, including the ones a table
+    /// function builds. One slot per session rather than one per table: a caller
+    /// asks "how provable was the last answer", and an answer that came from
+    /// `causal_closure` or `journal` is still the last answer. The first version
+    /// gave each table its own and the proof of a table function's answer was
+    /// unreachable, which a test caught.
+    last_proof: ProofSlot,
 }
+
+/// One session's record of how provable its last answer was.
+pub type ProofSlot = Arc<Mutex<Option<Provability>>>;
 
 impl RecordTable {
     pub fn new(segments: Vec<Segment>) -> Self {
@@ -106,8 +117,14 @@ impl RecordTable {
             fallback: Dimension::RecordedAt,
             as_of: None,
             fixed: None,
-            last_proof: Mutex::new(None),
+            last_proof: ProofSlot::default(),
         }
+    }
+
+    /// The same table, writing its provability where the session can see it.
+    pub fn sharing(mut self, slot: ProofSlot) -> Self {
+        self.last_proof = slot;
+        self
     }
 
     /// The store as it was known at an instant.
@@ -126,7 +143,33 @@ impl RecordTable {
     /// For `causal_closure`, where the traversal has decided both. Re-deriving either
     /// here could disagree with the reconstruction, and the reconstruction is the one
     /// the store's own tests are about.
-    pub fn from_records(records: Vec<trailryx_record::Record>, proof: Provability) -> Self {
+    /// The same, for rows that already carry their chain links.
+    pub fn from_records_with_links(
+        rows: Vec<(trailryx_record::Record, trailryx_record::Hash)>,
+        proof: Provability,
+        slot: ProofSlot,
+    ) -> Self {
+        if let Ok(mut held) = slot.lock() {
+            *held = Some(proof);
+        }
+        Self {
+            segments: Vec::new(),
+            schema: projection_schema(),
+            fallback: Dimension::RecordedAt,
+            as_of: None,
+            fixed: Some(rows),
+            last_proof: slot,
+        }
+    }
+
+    pub fn from_records(
+        records: Vec<trailryx_record::Record>,
+        proof: Provability,
+        slot: ProofSlot,
+    ) -> Self {
+        if let Ok(mut held) = slot.lock() {
+            *held = Some(proof);
+        }
         let rows: Vec<(trailryx_record::Record, trailryx_record::Hash)> = records
             .into_iter()
             // The chain link is not carried by a reconstruction, and inventing one
@@ -143,7 +186,7 @@ impl RecordTable {
             fallback: Dimension::RecordedAt,
             as_of: None,
             fixed: Some(rows),
-            last_proof: Mutex::new(Some(proof)),
+            last_proof: slot,
         }
     }
 
