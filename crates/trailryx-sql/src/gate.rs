@@ -107,6 +107,16 @@ fn classify(statement: &Statement) -> Result<(), Refusal> {
     }
 }
 
+/// The same decision, for a statement somebody else already parsed.
+///
+/// The pgwire query hook receives `sqlparser`'s AST rather than text, so it needs the
+/// classification without the parse step. `CREATE EXTERNAL TABLE` reaches this path as
+/// a `CreateTable` with a location, which the object-creation arm refuses, so the
+/// dangerous statement is refused on both routes into the engine.
+pub fn allow_statement(statement: &SqlStatement) -> Result<(), Refusal> {
+    classify_ansi(statement)
+}
+
 fn classify_ansi(statement: &SqlStatement) -> Result<(), Refusal> {
     match statement {
         SqlStatement::Query(_) => Ok(()),

@@ -22,7 +22,7 @@ pull request that adds one outside the facade needs to argue for it in the descr
 rather than in `Cargo.toml`.
 
 `trailryx-sql` is the SQL facade and it is the exception on purpose: DataFusion and
-the Postgres wire protocol, 243 transitive crates, decided on 30 July 2026 with
+the Postgres wire protocol, 297 transitive crates, decided on 30 July 2026 with
 `docs/planning/trailryx-architecture.md` §3.1 behind it. Two gate checks hold the
 boundary: everything else has zero, and the core builds and tests with the facade
 absent. **A change that makes the core depend on the facade will fail the second one**,

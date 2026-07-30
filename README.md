@@ -7,7 +7,7 @@
 ![Stage](https://img.shields.io/badge/stage-9%20of%2013-blue.svg)
 ![Core](https://img.shields.io/badge/core-frozen-success.svg)
 ![Rust](https://img.shields.io/badge/rust-1.85%2B-orange.svg)
-![Tests](https://img.shields.io/badge/tests-882-success.svg)
+![Tests](https://img.shields.io/badge/tests-895-success.svg)
 ![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)
 ![Dependencies](https://img.shields.io/badge/deps-0%20in%20the%20core-success.svg)
 ![Unsafe](https://img.shields.io/badge/unsafe-forbidden-success.svg)
@@ -259,14 +259,14 @@ and the proof shapes do not change without a version and a migration.
 | `trailryx-anchor` | RFC 3161 timestamping: TSP, the CMS subset, and RSA over Montgomery arithmetic | 52 |
 | `trailryx-ingest` | the OTLP/HTTP server: HTTP/1.1, gzip, bearer auth, all hand-written | 119 |
 | `trailryx-compliance` | a versioned map from what is proved to what a framework asks, and what it does not | 12 |
-| `trailryx-sql` | the SQL facade: DataFusion over the projections, predicates pushed into the index, statements gated. **The one crate with third-party dependencies** | 29 |
+| `trailryx-sql` | the SQL facade: DataFusion and the Postgres wire protocol, predicates pushed into the index, statements gated, reads authorised. **The one crate with third-party dependencies** | 42 |
 | `trailryx-demo` | the eight acceptance steps, and a reader for a collector's file | - |
 
 **Zero third-party dependencies in every crate above.** `unsafe` forbidden at the
 workspace level.
 
 The one exception is `trailryx-sql`, the SQL facade, which took DataFusion and the
-Postgres wire protocol on 30 July 2026 and brings **243 transitive crates** with it.
+Postgres wire protocol on 30 July 2026 and brings **297 transitive crates** with it.
 That number is here rather than buried: it is what the decision cost. The gate
 enforces the boundary in two checks that are worth more than the old single one:
 every other crate still has zero, and **the core builds and passes its tests with
@@ -285,7 +285,7 @@ thing an auditor reads.
 ## Try it
 
 ```bash
-cargo test                                    # 882 tests
+cargo test                                    # 895 tests
 cargo run --bin trailryx-sim-run -- --help
 ```
 
@@ -357,6 +357,42 @@ no proof at all.
 **completes**. DataFusion plans the statement happily; the refusal comes at execution.
 An earlier version of that test checked only that planning failed and was itself
 wrong.
+
+### A Postgres client connects, and two defaults had to be refused first
+
+```bash
+psql "host=127.0.0.1 port=5432 user=auditor password=... dbname=trailryx"
+```
+
+That is the plan's exit criterion for the facade: a Postgres client connects as it
+would to Postgres. The test uses `tokio-postgres`, the driver and the protocol Grafana
+speaks, and it connects, authenticates, queries, and is refused on both the simple and
+the prepared-statement paths.
+
+`datafusion_postgres::serve` is **not** used, for two reasons measured against the
+library rather than assumed:
+
+- **It does no authentication.** `HandlerFactory::new` installs a startup handler
+  whose own doc comment says "does no authentication", and the auth manager seeds a
+  `postgres` superuser with an empty password and every permission. Anything that
+  reaches the port is in, as a superuser.
+- **It forwards arbitrary SQL**, which is the file read below.
+
+Neither is a criticism of the library: a general-purpose adapter that made those
+decisions for you would be worse. They are the decisions a store serving an audit
+trail has to make itself.
+
+So the startup handler is ours and it consults the deployment's `AuthProvider`, asking
+**`Action::Query` by name**: the contract splits `ReadMetadata`, `ReadPayload` and
+`Query` because they are different permissions, and permission to write records is
+not permission to read them. Loopback is the default, a routable bind with no provider
+**refuses to start**, and a poisoned provider denies for ever rather than falling open.
+
+Two things about writing that handler are worth passing on, because the symptom of
+getting either wrong is identical and says nothing: every client reports "connection
+closed". The handshake needs `protocol_negotiation`, and it needs the connection state
+set to `AuthenticationInProgress`, without which pgwire never routes the password
+message to the handler at all.
 
 ### A Postgres port that forwards SQL is arbitrary file read
 
@@ -1041,7 +1077,7 @@ that is the part an auditor cannot do without the pack. It then says out loud th
 it did not check the authority's signature, and prints the command that does:
 
 ```
-[note]  anchor: "digicert" stamped this root at 1785421800, token 738 bytes, nonce 882344827
+[note]  anchor: "digicert" stamped this root at 1785421800, token 738 bytes, nonce 895344827
 [weak]  anchor-signature: this verifier checked that "digicert"'s token is over this
         root and did not check the authority's signature; verify it with
         `openssl ts -verify` against their published certificate

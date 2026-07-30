@@ -17,13 +17,22 @@ rust-version.workspace = true
 [dependencies]
 async-trait = "0.1"
 datafusion = "54"
+datafusion-postgres = "0.18"
+futures = "0.3"
+pgwire = "0.40"
+# The runtime the facade lives on, in its OWN threads. architecture.md §3.2a requires
+# the facade never to run on a shard core: tokio's scheduler would cost that shard the
+# determinism deterministic simulation testing needs, and DST is the correctness method.
+tokio = { version = "1", features = ["rt-multi-thread", "net", "macros"] }
+trailryx-contracts = { path = "../trailryx-contracts" }
 trailryx-index = { path = "../trailryx-index" }
 trailryx-projection = { path = "../trailryx-projection" }
 trailryx-record = { path = "../trailryx-record" }
 trailryx-store = { path = "../trailryx-store" }
 
 [dev-dependencies]
-tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "time"] }
+tokio-postgres = "0.7"
 trailryx-crypto = { path = "../trailryx-crypto" }
 trailryx-journal = { path = "../trailryx-journal" }
 

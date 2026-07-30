@@ -48,7 +48,9 @@
 
 pub mod gate;
 pub mod pushdown;
+pub mod server;
 pub mod table;
+pub mod wire;
 
 use std::sync::Arc;
 
@@ -126,6 +128,19 @@ impl Session {
     /// costs and why it is not a lie in the meantime.
     pub fn last_proof(&self) -> Option<Provability> {
         self.table.last_proof()
+    }
+
+    /// The Postgres-facing service, with the statement gate already installed.
+    ///
+    /// Built here rather than by the server so the gate cannot be left out. The
+    /// `SessionContext` is still not exposed: a caller gets a service that has the
+    /// hook, or it gets nothing, and there is no third option to reach for under time
+    /// pressure.
+    pub fn pg_service(&self) -> Arc<datafusion_postgres::DfSessionService> {
+        Arc::new(datafusion_postgres::DfSessionService::new_with_hooks(
+            Arc::new(self.context.clone()),
+            wire::hooks(),
+        ))
     }
 }
 

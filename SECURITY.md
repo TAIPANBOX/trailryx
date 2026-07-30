@@ -73,12 +73,18 @@ Stated here so nobody spends their time on it:
   `Aead::is_validated()` returns false and `Vault::new` refuses them. A deployment
   is expected to supply a validated implementation behind that seam. Breaking
   `Sha384Ctr` is not a finding; a way to bypass the `is_validated` check is.
+- **An unauthenticated read of the trail over the Postgres port.** The facade's
+  startup handler consults the deployment's `AuthProvider` for `Action::Query`, a
+  routable bind with no provider refuses to start, and a poisoned provider denies for
+  ever. A way past any of those is a report. Note that
+  `datafusion_postgres::serve` does no authentication at all, which is why it is not
+  used; a deployment that calls it directly has built its own hole.
 - **A path that gets SQL past `trailryx_sql::gate`.** A statement kind the gate lets
   through that can name a filesystem path, or a way to reach `SessionContext::sql`
   without the gate, is arbitrary local file read on the store's host and is the most
   serious report this crate can receive. `crates/trailryx-sql/src/gate.rs` states what
   is allowed and why each one is.
-- **The SQL facade has 243 transitive dependencies, and everything else has none.**
+- **The SQL facade has 297 transitive dependencies, and everything else has none.**
   `trailryx-sql` took DataFusion and the Postgres wire protocol on 30 July 2026. A
   vulnerability in one of those crates is a real report and `cargo audit` in CI is
   where it should surface, but it is a vulnerability in the facade and not in the
