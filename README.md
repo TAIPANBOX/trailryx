@@ -7,9 +7,9 @@
 ![Stage](https://img.shields.io/badge/stage-9%20of%2013-blue.svg)
 ![Core](https://img.shields.io/badge/core-frozen-success.svg)
 ![Rust](https://img.shields.io/badge/rust-1.85%2B-orange.svg)
-![Tests](https://img.shields.io/badge/tests-849-success.svg)
+![Tests](https://img.shields.io/badge/tests-857-success.svg)
 ![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)
-![Dependencies](https://img.shields.io/badge/dependencies-0-success.svg)
+![Dependencies](https://img.shields.io/badge/deps-0%20in%20the%20core-success.svg)
 ![Unsafe](https://img.shields.io/badge/unsafe-forbidden-success.svg)
 
 </div>
@@ -186,7 +186,7 @@ structural rather than a gap somebody forgot to fill.
 | Agent semantics: runs, causal edges, `basis` | yes | no | no | partial |
 | Bitemporal `as_of`: what we knew in March | yes | partial | no | no |
 | An auditor checks it without the vendor | yes | partial | yes | no |
-| Zero third-party dependencies | yes | no | no | no |
+| Zero third-party dependencies in the verifier | yes | no | no | no |
 
 "Partial" is doing real work in that table and is not a hedge. A transparency log
 proves consistency between two versions of a log, which is a completeness property
@@ -261,12 +261,30 @@ and the proof shapes do not change without a version and a migration.
 | `trailryx-compliance` | a versioned map from what is proved to what a framework asks, and what it does not | 12 |
 | `trailryx-demo` | the eight acceptance steps, and a reader for a collector's file | - |
 
-**Zero dependencies.** `unsafe` forbidden at the workspace level.
+**Zero third-party dependencies in every crate above.** `unsafe` forbidden at the
+workspace level.
+
+The one exception is `trailryx-sql`, the SQL facade, which took DataFusion and the
+Postgres wire protocol on 30 July 2026 and brings **243 transitive crates** with it.
+That number is here rather than buried: it is what the decision cost. The gate
+enforces the boundary in two checks that are worth more than the old single one:
+every other crate still has zero, and **the core builds and passes its tests with
+the facade absent**.
+
+`docs/planning/trailryx-architecture.md` §3.1 argues the trade from the lesson that
+made VictoriaMetrics, that compatibility wins rather than speed: the Postgres wire
+protocol means Grafana, Metabase, Superset, DBeaver, psql, pandas and every ORM work
+on the day of release. The same document rejects the alternative by name, in the
+section that turns down Zig: the risk of our own SQL engine exceeds the gain.
+
+What did not change is the part that carried the argument. `trailryx-verify` still
+has none, and that was never a property of the workspace: it is a property of the
+thing an auditor reads.
 
 ## Try it
 
 ```bash
-cargo test                                    # 849 tests
+cargo test                                    # 857 tests
 cargo run --bin trailryx-sim-run -- --help
 ```
 
@@ -950,7 +968,7 @@ that is the part an auditor cannot do without the pack. It then says out loud th
 it did not check the authority's signature, and prints the command that does:
 
 ```
-[note]  anchor: "digicert" stamped this root at 1785421800, token 738 bytes, nonce 849344827
+[note]  anchor: "digicert" stamped this root at 1785421800, token 738 bytes, nonce 857344827
 [weak]  anchor-signature: this verifier checked that "digicert"'s token is over this
         root and did not check the authority's signature; verify it with
         `openssl ts -verify` against their published certificate
@@ -1138,14 +1156,15 @@ proves and erases. That is the test of whose engine it is.
 git config core.hooksPath .githooks   # once
 ```
 
-`.githooks/pre-push` runs eleven checks and refuses the push if any fails:
+`.githooks/pre-push` runs twelve checks and refuses the push if any fails:
 formatting, clippy with warnings as errors, the tests, a standalone build of the
-substrate crate, a zero-dependency check, an `unsafe` check, the determinism
+substrate crate, a zero-dependency check on every crate outside the SQL facade, a
+build and test of the core with the facade absent, an `unsafe` check, the determinism
 criterion, the published seed corpus, the two verifiers agreeing on the same packs, a
 reproducible build of the verifier from two different paths, and a 200-seed durability
-sweep. About forty seconds.
+sweep. About a minute and a half, most of it the facade's dependency tree.
 
-`.github/workflows/ci.yml` runs the same eleven plus `cargo audit`, so a green push
+`.github/workflows/ci.yml` runs the same twelve plus `cargo audit`, which stopped being trivially green the day the facade arrived and is now a real check with real work behind it,, so a green push
 is a green pull request. It keeps a guard that skips every job while the repository
 is private, because Actions minutes are metered there and free here. The repository
 went public on 30 July 2026 and the condition released itself, which is why it was

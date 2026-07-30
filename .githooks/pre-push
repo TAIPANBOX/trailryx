@@ -40,27 +40,50 @@ step "cargo fmt --check" cargo fmt --all --check
 step "cargo clippy -D warnings" cargo clippy --all-targets --quiet -- -D warnings
 step "cargo test" cargo test --workspace --quiet
 
-# The substrate must stand on its own. Today that is trivially true; from stage
-# 10 it stops being trivial, because DataFusion and pgwire arrive as a facade
-# and must never become load-bearing. Checking it from the start means the day
-# it would break, it breaks here.
+# The substrate must stand on its own. This stopped being trivially true on 30 July
+# 2026, exactly as the comment here predicted it would: DataFusion and pgwire
+# arrived as a facade and must never become load-bearing. The check above it is the
+# broader version of the same question.
 step "sim crate builds standalone" cargo test -p trailryx-sim --quiet
 
-# Zero third-party dependencies. Not an aesthetic: the offline verifier has to
-# be small enough for an auditor to read, and every crate pulled in is a crate
-# somebody has to trust. If this ever needs to change, it changes deliberately,
-# not by accident in a lockfile.
-printf '  %-34s' "zero third-party deps"
-deps=$(cargo tree --workspace --prefix none --no-dedupe 2>/dev/null \
-       | grep -v '^trailryx' | grep -c . || true)
-if [ "$deps" -eq 0 ]; then
+# Zero third-party dependencies IN THE CORE.
+#
+# This check used to say "workspace-wide" and it stopped being true on 30 July
+# 2026, when `trailryx-sql` took DataFusion and pgwire. That was a deliberate
+# decision with the architecture behind it (§3.1: compatibility wins, and §3.2a,
+# which requires exactly the boundary these two checks enforce), and the honest
+# response is to narrow the claim to what is still true rather than to keep
+# printing the old one.
+#
+# What is still true, and what actually carried the argument: the offline verifier
+# has to be small enough for an auditor to read, and every crate pulled in is a
+# crate somebody has to trust. That was never a property of the workspace. It is a
+# property of the thing an auditor reads.
+FACADE="trailryx-sql"
+printf '  %-34s' "zero deps outside the facade"
+offenders=""
+for dir in crates/*/; do
+  crate=$(basename "$dir")
+  [ "$crate" = "$FACADE" ] && continue
+  n=$(cargo tree -p "$crate" --prefix none 2>/dev/null | grep -v '^trailryx' | grep -c . || true)
+  if [ "$n" -ne 0 ]; then
+    offenders="$offenders $crate($n)"
+  fi
+done
+if [ -z "$offenders" ]; then
   printf 'ok\n'
   pass=$((pass + 1))
 else
-  printf 'FAIL (%s found)\n' "$deps"
-  cargo tree --workspace --prefix none 2>/dev/null | grep -v '^trailryx' | sed 's/^/      /' | head -10
+  printf 'FAIL%s\n' "$offenders"
   fail=$((fail + 1))
 fi
+
+# The core has to stand up with the facade absent, which §3.2a requires by name:
+# if the core cannot build and pass its tests without the facade, the facade has
+# got into the foundation. This is also what protects the core's determinism, and
+# with it deterministic simulation testing, from tokio's scheduler.
+step "core builds without the facade" \
+  cargo test --workspace --exclude "$FACADE" --quiet
 
 # No unsafe. The workspace lint forbids it, so this is a second pair of eyes on
 # the lint itself rather than on the code.

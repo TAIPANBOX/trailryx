@@ -73,6 +73,14 @@ Stated here so nobody spends their time on it:
   `Aead::is_validated()` returns false and `Vault::new` refuses them. A deployment
   is expected to supply a validated implementation behind that seam. Breaking
   `Sha384Ctr` is not a finding; a way to bypass the `is_validated` check is.
+- **The SQL facade has 243 transitive dependencies, and everything else has none.**
+  `trailryx-sql` took DataFusion and the Postgres wire protocol on 30 July 2026. A
+  vulnerability in one of those crates is a real report and `cargo audit` in CI is
+  where it should surface, but it is a vulnerability in the facade and not in the
+  store: the gate proves the core builds and passes its tests with the facade absent,
+  and `trailryx-verify` still depends on nothing at all. A report that a facade
+  dependency reaches the core is a report about the boundary, which is the more
+  serious kind.
 - **The HTTP listener has no TLS.** That is the honest configuration for a listener
   built with no dependencies, and it says so at startup. On a routable bind the
   credential is readable on the wire, so a routable bind belongs behind a terminating

@@ -1,0 +1,25 @@
+[package]
+name = "trailryx-sql"
+description = "The SQL facade: DataFusion over our projections, with predicates on the provable dimensions pushed into the authenticated index"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+# THE ONLY CRATE IN THIS WORKSPACE WITH THIRD-PARTY DEPENDENCIES.
+#
+# `docs/planning/trailryx-architecture.md` §3.2a requires the facade to be
+# physically separable: on its own runtime, in its own threads, reading only
+# projections, talking to the core over channels. The gate enforces the two halves
+# of that boundary: every other crate has zero third-party dependencies, and the
+# core builds and passes its tests with this crate absent.
+[dependencies]
+datafusion = "54"
+trailryx-index = { path = "../trailryx-index" }
+trailryx-projection = { path = "../trailryx-projection" }
+trailryx-record = { path = "../trailryx-record" }
+trailryx-store = { path = "../trailryx-store" }
+
+[lints]
+workspace = true

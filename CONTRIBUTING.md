@@ -16,9 +16,17 @@ git config core.hooksPath .githooks   # once
 cargo test
 ```
 
-There is nothing to install beyond a Rust toolchain. The workspace has **zero
-third-party dependencies** and the gate enforces it, so a pull request that adds one
-needs to argue for it in the description rather than in `Cargo.toml`.
+There is nothing to install beyond a Rust toolchain. Every crate except
+`trailryx-sql` has **zero third-party dependencies** and the gate enforces it, so a
+pull request that adds one outside the facade needs to argue for it in the description
+rather than in `Cargo.toml`.
+
+`trailryx-sql` is the SQL facade and it is the exception on purpose: DataFusion and
+the Postgres wire protocol, 243 transitive crates, decided on 30 July 2026 with
+`docs/planning/trailryx-architecture.md` §3.1 behind it. Two gate checks hold the
+boundary: everything else has zero, and the core builds and tests with the facade
+absent. **A change that makes the core depend on the facade will fail the second one**,
+and that is the check to read the failure of rather than to work around.
 
 Some tests reach for `python3`, `node` or `openssl` as third-party oracles, because a
 hand-written SHA-384, ECDSA, Parquet writer or JSON parser checked only against
@@ -28,7 +36,7 @@ against.
 
 ## Before you push
 
-`.githooks/pre-push` runs eleven checks and refuses the push if any fails:
+`.githooks/pre-push` runs twelve checks and refuses the push if any fails:
 formatting, clippy with warnings as errors, the whole test suite, a standalone build
 of the substrate crate, the zero-dependency count, an `unsafe` scan, the determinism
 criterion (one seed reproduces a run byte for byte), the published seed corpus in

@@ -1,6 +1,6 @@
 name: ci
 
-# The same eleven checks `.githooks/pre-push` runs, so a green push is a green pull
+# The same twelve checks `.githooks/pre-push` runs, so a green push is a green pull
 # request and neither can drift from the other.
 #
 # THE GUARD ON `if:` STAYS, and it is not decoration. Actions minutes are metered on
@@ -48,16 +48,28 @@ jobs:
         run: cargo test -p trailryx-sim --quiet
 
       # Not an aesthetic: the offline verifier has to be small enough for an auditor
-      # to read, and every crate pulled in is a crate somebody has to trust.
-      - name: zero third-party deps
+      # to read, and every crate pulled in is a crate somebody has to trust. Narrowed
+      # from "workspace-wide" on 30 July 2026, when the SQL facade took DataFusion.
+      # The claim follows the reality rather than the other way round.
+      - name: zero deps outside the facade
         run: |
-          deps=$(cargo tree --workspace --prefix none --no-dedupe 2>/dev/null \
-                 | grep -v '^trailryx' | grep -c . || true)
-          if [ "$deps" -ne 0 ]; then
-            cargo tree --workspace --prefix none | grep -v '^trailryx' | head -20
-            echo "::error::$deps third-party dependencies"
+          offenders=""
+          for dir in crates/*/; do
+            crate=$(basename "$dir")
+            [ "$crate" = "trailryx-sql" ] && continue
+            n=$(cargo tree -p "$crate" --prefix none 2>/dev/null | grep -v '^trailryx' | grep -c . || true)
+            [ "$n" -ne 0 ] && offenders="$offenders $crate($n)"
+          done
+          if [ -n "$offenders" ]; then
+            echo "::error::third-party dependencies outside the facade:$offenders"
             exit 1
           fi
+
+      # §3.2a requires this by name: if the core cannot build and pass its tests
+      # without the facade, the facade has got into the foundation. It is also what
+      # protects the core's determinism, and with it DST, from tokio's scheduler.
+      - name: core builds without the facade
+        run: cargo test --workspace --exclude trailryx-sql --quiet
 
       # The workspace lint forbids it, so this is a second pair of eyes on the lint.
       - name: no unsafe
