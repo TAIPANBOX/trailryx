@@ -22,7 +22,7 @@
 //! look.
 
 use crate::merkle::{leaf_hash, root_of};
-use crate::pack::{Pack, PackError, Segment};
+use crate::pack::{AnchorKind, Pack, PackError, Segment};
 use crate::record::{Fields, fields, key_for};
 use crate::sha384::{HASH_BYTES, Hash, Sha384};
 
@@ -823,7 +823,22 @@ fn check_anchors(pack: &Pack, report: &mut Report) -> usize {
             continue;
         }
 
-        let stamped = match crate::tsp::read(&anchor.token) {
+        // A kind this build does not read is reported as unread, never as broken.
+        // A pack anchored by something newer must not be condemned by an older
+        // verifier, which is the same rule as for a signature algorithm.
+        if anchor.kind != AnchorKind::Tsp {
+            report.weak(
+                "anchor",
+                format!(
+                    "{where_} anchored this root by {}, which this build does not read, so \
+                     nothing here confirms or denies it",
+                    anchor.kind.name()
+                ),
+            );
+            continue;
+        }
+
+        let stamped = match crate::tsp::read(&anchor.evidence) {
             Ok(stamped) => stamped,
             Err(why) => {
                 report.broken(
@@ -848,15 +863,47 @@ fn check_anchors(pack: &Pack, report: &mut Report) -> usize {
             continue;
         }
 
+        // The token's own nonce against the challenge the store recorded. This is
+        // what makes the pack's account of the exchange checkable rather than
+        // merely stated: without it a replayed response for the same root is
+        // indistinguishable from a fresh one, and a root does not change between
+        // retries.
+        match (anchor.nonce(), stamped.nonce) {
+            (Some(sent), Some(echoed)) if sent == echoed => {}
+            (Some(_), Some(_)) => {
+                report.broken(
+                    "anchor",
+                    format!(
+                        "the token from {where_} echoes a different nonce than the challenge this \
+                         pack records, so it is not an answer to the request the pack describes"
+                    ),
+                );
+                continue;
+            }
+            _ => {
+                // Not broken: RFC 3161 makes the nonce optional, and an older
+                // pack may not have recorded the challenge. But an anchor whose
+                // freshness cannot be checked does not rule out a replay, and
+                // saying nothing here would let it read as though it did.
+                report.weak(
+                    "anchor-freshness",
+                    format!(
+                        "the token from {where_} carries no nonce this pack can match, so nothing \
+                         here rules out a replay of an older response for the same root"
+                    ),
+                );
+            }
+        }
+
         bound += 1;
         report.note(
             "anchor",
             format!(
-                "{where_} stamped this root at {} (seconds since the epoch), token {} bytes, \
-                 nonce {}",
+                "{where_} stamped this root at {} (seconds since the epoch), {} by {} bytes of \
+                 evidence",
                 stamped.at,
-                anchor.token.len(),
-                anchor.nonce
+                anchor.kind.name(),
+                anchor.evidence.len()
             ),
         );
         report.weak(

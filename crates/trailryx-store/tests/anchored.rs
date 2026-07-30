@@ -319,6 +319,13 @@ fn a_pack_anchored_over_its_own_root_verifies_and_names_what_it_did_not_check() 
         anchors[0].1.contains("test-tsa") && anchors[0].1.contains("stamped this root"),
         "{anchors:?}"
     );
+    // The token's own nonce matched the challenge the pack recorded, so nothing
+    // says freshness could not be checked.
+    assert!(
+        findings(&bytes, "anchor-freshness").is_empty(),
+        "the nonce should have matched: {:?}",
+        findings(&bytes, "anchor-freshness")
+    );
 
     // The verifier must not imply it checked the signature. This is the finding
     // that keeps it honest, and it is a `weak` rather than a note because a
@@ -526,6 +533,76 @@ fn an_anchor_answers_the_finding_that_nothing_places_this_root_in_time() {
     );
 }
 
+/// A nonce that does not match the recorded challenge is a replay this pack cannot
+/// rule out, and the verifier must say so rather than reporting the anchor as good.
+#[test]
+fn a_token_whose_nonce_disagrees_with_the_recorded_challenge_is_broken() {
+    if !have_openssl_ts() {
+        return skip("the nonce cross-check");
+    }
+    let built = build();
+    let root = built.store.root();
+    let Some((_tsa, token)) = anchor_over("nonce", root) else {
+        return skip("the nonce cross-check");
+    };
+
+    // The token echoes NONCE. The pack claims a different challenge was sent.
+    let bytes = PackBuilder::new(TenantId::parse("acme").unwrap(), GENERATED_AT)
+        .shard(&built.tree, &[&built.segment])
+        .anchored_by("swapped-tsa", root, NONCE ^ 1, token)
+        .build(&built.store);
+
+    let anchors = findings(&bytes, "anchor");
+    assert_eq!(anchors.len(), 1, "{anchors:?}");
+    assert_eq!(anchors[0].0, Level::Broken, "{anchors:?}");
+    assert!(anchors[0].1.contains("different nonce"), "{anchors:?}");
+}
+
+/// An anchor of a kind this build does not read is reported as unread, never as
+/// broken. A pack anchored by something newer must not be condemned by an older
+/// verifier, which is the rule already applied to signature algorithms.
+#[test]
+fn an_anchor_kind_this_build_cannot_read_is_unread_and_not_broken() {
+    let built = build();
+    let root = built.store.root();
+    for (kind, name) in [
+        (
+            trailryx_store::evidence::ANCHOR_TRANSPARENCY_LOG,
+            "transparency log",
+        ),
+        (
+            trailryx_store::evidence::ANCHOR_SIGNED_ARTIFACT,
+            "signed artifact",
+        ),
+        (200u8, "an unknown kind"),
+    ] {
+        let bytes = PackBuilder::new(TenantId::parse("acme").unwrap(), GENERATED_AT)
+            .shard(&built.tree, &[&built.segment])
+            .anchored(
+                kind,
+                "future-party",
+                "slh-dsa-sha2-128s",
+                root,
+                Vec::new(),
+                b"evidence this build does not parse".to_vec(),
+            )
+            .build(&built.store);
+
+        let anchors = findings(&bytes, "anchor");
+        assert_eq!(anchors.len(), 1, "{name}: {anchors:?}");
+        assert_eq!(
+            anchors[0].0,
+            Level::Weak,
+            "{name} must be unread, not broken: {anchors:?}"
+        );
+        assert!(anchors[0].1.contains(name), "{name}: {anchors:?}");
+        assert!(
+            verify(&bytes).expect("parses").verified(),
+            "{name}: an unread anchor must not stop a pack verifying"
+        );
+    }
+}
+
 /// A version 2 pack has no anchors and must still verify. A pack written by an
 /// older commit keeps verifying, which is the same promise the frozen record
 /// format makes.
@@ -548,4 +625,138 @@ fn a_version_two_pack_still_parses() {
         verify(&bytes).is_err(),
         "a version this build does not know must be refused rather than half-read"
     );
+}
+
+// ---------------------------------------------------------------------------
+// What the coverage layer makes of a real pack
+// ---------------------------------------------------------------------------
+//
+// The mapping is derived from the verifier's findings, so the only honest input to
+// it is a pack somebody actually built. These assertions are here rather than in
+// `trailryx-compliance` because that is where the packs are.
+
+use trailryx_compliance::{Coverage, Framework, Requirement, assess, render};
+
+/// An anchored pack must satisfy the attestation requirement, and the same pack
+/// without the anchor must not. That difference is the whole reason the layer
+/// derives its answers instead of declaring them.
+#[test]
+fn coverage_changes_when_the_evidence_changes() {
+    if !have_openssl_ts() {
+        return skip("the coverage layer against a real anchored pack");
+    }
+    let built = build();
+    let root = built.store.root();
+    let Some((_tsa, token)) = anchor_over("coverage", root) else {
+        return skip("the coverage layer against a real anchored pack");
+    };
+
+    let bare = PackBuilder::new(TenantId::parse("acme").unwrap(), GENERATED_AT)
+        .shard(&built.tree, &[&built.segment])
+        .build(&built.store);
+    let anchored = PackBuilder::new(TenantId::parse("acme").unwrap(), GENERATED_AT)
+        .shard(&built.tree, &[&built.segment])
+        .anchored_by("test-tsa", root, NONCE, token)
+        .build(&built.store);
+
+    let bare_report = verify(&bare).expect("parses");
+    let anchored_report = verify(&anchored).expect("parses");
+
+    // The requirement the anchor exists to satisfy, asked directly. This is the
+    // difference the anchor makes and it is measurable on its own.
+    assert!(
+        !Requirement::TimeAttested.satisfied_by(&bare_report),
+        "an unanchored, unwitnessed pack must not count as attested"
+    );
+    assert!(
+        Requirement::TimeAttested.satisfied_by(&anchored_report),
+        "a pack with a bound token must count as attested"
+    );
+
+    // And the count does NOT move, which is the more interesting fact. The one
+    // obligation needing an attestation needs a signed root first, and this
+    // fixture is unsigned, so the anchor changes what is missing without changing
+    // how much is shown. An earlier version of this test asserted the count went
+    // up and was wrong about the fixture rather than about the design.
+    let without = assess(&bare_report);
+    let with = assess(&anchored_report);
+    assert_eq!(
+        with.shown(),
+        without.shown(),
+        "an unsigned pack cannot demonstrate the integrity obligation either way"
+    );
+
+    let integrity = |a: &trailryx_compliance::Assessment| {
+        a.for_framework(Framework::Soc2)
+            .find(|l| l.obligation.reference.starts_with("Integrity"))
+            .map(|l| l.coverage)
+            .expect("the obligation is in the mapping")
+    };
+    // Both report the same first missing piece, and it is the signature.
+    for (name, coverage) in [
+        ("bare", integrity(&without)),
+        ("anchored", integrity(&with)),
+    ] {
+        assert_eq!(
+            coverage,
+            Coverage::NotInThisPack(Requirement::SignedRoot),
+            "{name}: the missing piece should be named as the signature"
+        );
+    }
+}
+
+/// A broken pack must demonstrate nothing, and the rendered report must say so
+/// rather than printing a table a reader could quote out of context.
+#[test]
+fn a_broken_pack_shows_nothing_and_the_report_stays_honest() {
+    let built = build();
+    let mut bytes = PackBuilder::new(TenantId::parse("acme").unwrap(), GENERATED_AT)
+        .shard(&built.tree, &[&built.segment])
+        .anchored_by("junk-tsa", built.store.root(), NONCE, vec![0x30, 0x00])
+        .build(&built.store);
+    // Also corrupt a record, so the pack fails on its own arithmetic and not only
+    // on the anchor.
+    let at = bytes.len() - 40;
+    bytes[at] ^= 0xFF;
+
+    let report = verify(&bytes).expect("parses");
+    assert!(!report.verified());
+    let assessment = assess(&report);
+    assert_eq!(assessment.shown(), 0, "a broken pack demonstrates nothing");
+
+    let text = render(&assessment).to_lowercase();
+    assert!(text.contains("not legal advice"));
+    assert!(!text.contains("compliant"));
+    assert!(!text.contains("conforms to"));
+}
+
+/// Every framework appears in the rendered report, including the draft standard
+/// and including the obligations nothing bears on. A report that printed only the
+/// wins is a report somebody will quote as complete.
+#[test]
+fn the_rendered_report_names_every_framework_and_every_no() {
+    let built = build();
+    let bytes = PackBuilder::new(TenantId::parse("acme").unwrap(), GENERATED_AT)
+        .shard(&built.tree, &[&built.segment])
+        .build(&built.store);
+    let text = render(&assess(&verify(&bytes).expect("parses")));
+
+    for framework in [
+        Framework::EuAiAct,
+        Framework::PrEn24970,
+        Framework::Sr117,
+        Framework::Soc2,
+    ] {
+        assert!(
+            text.contains(framework.name()),
+            "{} is missing from the report",
+            framework.name()
+        );
+    }
+    for reference in ["Article 12(3)", "Article 19(1)", "Article 113"] {
+        assert!(text.contains(reference), "{reference} is missing");
+    }
+    assert!(text.contains("[not addressed]"));
+    assert!(text.contains("[operator]"));
+    assert!(text.contains("not cited in the Official Journal"));
 }

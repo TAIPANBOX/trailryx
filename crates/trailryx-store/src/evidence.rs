@@ -57,20 +57,32 @@ pub struct PackBuilder {
     shards: Vec<ShardPart>,
 }
 
-/// A timestamp token, and what it took to obtain it.
+/// External evidence that a root existed by a time this store did not choose.
 ///
-/// The nonce is stored because without it nobody can later show the token answers
-/// a particular request rather than being a replay of an older one for the same
-/// root. A root does not change between retries, so the nonce is the only thing
-/// that distinguishes them, and a store that threw it away would be keeping
-/// evidence it had made unverifiable.
+/// Three kinds, because `docs/planning/trailryx-plan.md` item 15 names three and
+/// says the format is prepared for all of them from the start. The challenge is
+/// stored because without it nobody can later show a timestamp token answers a
+/// particular request rather than being a replay of an older one for the same
+/// root: a root does not change between retries, so the challenge is the only
+/// thing that distinguishes them, and a store that threw it away would be keeping
+/// evidence it had made uncheckable.
 #[derive(Debug, Clone)]
 struct AnchorPart {
+    kind: u8,
     authority: String,
+    algorithm: String,
     root: Hash,
-    nonce: u64,
-    token: Vec<u8>,
+    challenge: Vec<u8>,
+    evidence: Vec<u8>,
 }
+
+/// The anchor kinds, matching `trailryx_verify::pack::AnchorKind`.
+///
+/// Duplicated rather than shared, like every other constant in this writer: the
+/// verifier depends on nothing, so the two sides agree by test and not by import.
+pub const ANCHOR_TSP: u8 = 1;
+pub const ANCHOR_TRANSPARENCY_LOG: u8 = 2;
+pub const ANCHOR_SIGNED_ARTIFACT: u8 = 3;
 
 #[derive(Debug)]
 struct ShardPart {
@@ -111,7 +123,7 @@ impl PackBuilder {
         self
     }
 
-    /// Add a timestamp token obtained over the store root.
+    /// Add an RFC 3161 timestamp token obtained over a root.
     ///
     /// `root` is what the token was requested over, and it is stored rather than
     /// assumed to be the store root: the verifier compares the two and refuses an
@@ -121,17 +133,49 @@ impl PackBuilder {
     /// This crate does not obtain tokens. `trailryx-anchor` does, and it lives
     /// outside the verifier for the reason that crate documents.
     pub fn anchored_by(
-        mut self,
+        self,
         authority: impl Into<String>,
         root: Hash,
         nonce: u64,
         token: Vec<u8>,
     ) -> Self {
-        self.anchors.push(AnchorPart {
-            authority: authority.into(),
+        // The nonce goes in as eight big-endian bytes, which is what the verifier
+        // reads back and compares against the nonce inside the token.
+        self.anchored(
+            ANCHOR_TSP,
+            authority,
+            "",
             root,
-            nonce,
+            nonce.to_be_bytes().to_vec(),
             token,
+        )
+    }
+
+    /// Add an anchor of any kind, including one this build's verifier cannot read.
+    ///
+    /// The general form. A transparency-log checkpoint and a signed build artifact
+    /// are both anchors and neither is a timestamp token, so the shape has to take
+    /// all three: the first version of this took a nonce and a token and could
+    /// only ever have taken one of them.
+    ///
+    /// `algorithm` names the signature scheme for evidence that does not name its
+    /// own. Empty for a timestamp token, which carries its own identifiers.
+    pub fn anchored(
+        mut self,
+        kind: u8,
+        authority: impl Into<String>,
+        algorithm: impl Into<String>,
+        root: Hash,
+        challenge: Vec<u8>,
+        evidence: Vec<u8>,
+    ) -> Self {
+        self.anchors.push(AnchorPart {
+            kind,
+            authority: authority.into(),
+            algorithm: algorithm.into(),
+            root,
+            challenge,
+            evidence,
         });
         self
     }
@@ -199,10 +243,12 @@ impl PackBuilder {
 
         for anchor in &self.anchors {
             let mut body = Vec::new();
+            body.push(anchor.kind);
             put_str(&mut body, &anchor.authority);
+            put_str(&mut body, &anchor.algorithm);
             body.extend_from_slice(anchor.root.as_bytes());
-            body.extend_from_slice(&anchor.nonce.to_be_bytes());
-            put_bytes(&mut body, &anchor.token);
+            put_bytes(&mut body, &anchor.challenge);
+            put_bytes(&mut body, &anchor.evidence);
             section(&mut out, SECTION_ANCHOR, &body);
         }
 

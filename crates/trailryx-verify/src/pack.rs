@@ -209,28 +209,107 @@ pub struct Witness {
     pub signature: Vec<u8>,
 }
 
-/// A timestamp token from an authority, over a root.
+/// What kind of external party fixed a root in time.
 ///
-/// The token travels as the exact bytes the authority delivered. Nothing is
-/// re-encoded, because a re-encoded token is a different byte string and its
-/// signature no longer verifies over it.
+/// Three kinds, because the design calls for three and not because two were
+/// easy. `docs/planning/trailryx-plan.md` item 15 names them and says the format
+/// is prepared for all three from the start. The first version of this section
+/// was not: it carried an eight-byte nonce and a token, which is the shape of
+/// exactly one of them. That was caught by reading the plan rather than by a
+/// test, and a format version spent on the mistake would have been spent for
+/// nothing.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AnchorKind {
+    /// An RFC 3161 timestamp token from a timestamping authority.
+    Tsp,
+    /// A transparency log: a signed checkpoint and an inclusion proof.
+    TransparencyLog,
+    /// A signature over the root by a build or release identity, the shape a
+    /// signed CI artifact takes. Also where an SLH-DSA epoch anchor will land,
+    /// which is why [`Anchor::algorithm`] is a field rather than an assumption:
+    /// `docs/planning/trailryx-architecture.md` §14.2 defers that signature
+    /// scheme past v1 and requires the format to be ready for it now.
+    SignedArtifact,
+    /// A kind this build does not know.
+    ///
+    /// Never an error. A pack anchored by something newer is reported as unread,
+    /// not as broken, which is the rule this verifier already applies to a
+    /// signature algorithm it cannot check.
+    Unknown(u8),
+}
+
+impl AnchorKind {
+    pub fn from_code(code: u8) -> Self {
+        match code {
+            1 => Self::Tsp,
+            2 => Self::TransparencyLog,
+            3 => Self::SignedArtifact,
+            other => Self::Unknown(other),
+        }
+    }
+
+    pub fn code(self) -> u8 {
+        match self {
+            Self::Tsp => 1,
+            Self::TransparencyLog => 2,
+            Self::SignedArtifact => 3,
+            Self::Unknown(other) => other,
+        }
+    }
+
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Tsp => "RFC 3161",
+            Self::TransparencyLog => "transparency log",
+            Self::SignedArtifact => "signed artifact",
+            Self::Unknown(_) => "an unknown kind",
+        }
+    }
+}
+
+/// Somebody outside this store fixing a root in time.
 ///
-/// The verifier reads the token to check it commits to **this** root and does not
-/// check the authority's signature: see [`crate::tsp`] for why that split is the
-/// honest one and how an auditor completes it.
+/// The evidence travels as the exact bytes the party delivered. Nothing is
+/// re-encoded, because a re-encoded signature is over a different byte string and
+/// no longer verifies.
+///
+/// For [`AnchorKind::Tsp`] the verifier reads the token to check it commits to
+/// **this** root, and does not check the authority's signature: see
+/// [`crate::tsp`] for why that split is the honest one and how an auditor
+/// completes it. For the other kinds it reports the anchor as unread.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Anchor {
-    /// What the store calls the authority. A label for a human, never a trust
+    pub kind: AnchorKind,
+    /// What the store calls the party. A label for a human, never a trust
     /// decision: the verifier draws no conclusion from it.
     pub authority: String,
-    /// The root the store says this token is about. Checked against the token
-    /// rather than believed, and against the pack's own store root.
+    /// The signature scheme, for a kind whose evidence does not name its own.
+    ///
+    /// Empty for a timestamp token, which carries algorithm identifiers inside
+    /// it. Filled for a signed artifact, where the bytes are a bare signature and
+    /// nothing else says what produced them.
+    pub algorithm: String,
+    /// The root the store says this evidence is about. Checked against the
+    /// evidence rather than believed, and against the pack's own store root.
     pub root: Hash,
-    /// The nonce the store sent. Without it a token cannot be shown to answer a
-    /// particular request rather than to be a replay of an older one.
-    pub nonce: u64,
-    /// The DER `TimeStampToken`, verbatim.
-    pub token: Vec<u8>,
+    /// The freshness value the store sent, where the kind has one.
+    ///
+    /// Eight big-endian bytes for a timestamp token's nonce. Empty for a
+    /// transparency log, which is append-only and needs none. Without it a token
+    /// cannot be shown to answer a particular request rather than being a replay
+    /// of an older one, and a root does not change between retries.
+    pub challenge: Vec<u8>,
+    /// The delivered bytes: a DER `TimeStampToken`, a checkpoint and a proof, or
+    /// a signature.
+    pub evidence: Vec<u8>,
+}
+
+impl Anchor {
+    /// The nonce a timestamp token's challenge encodes, if it is one.
+    pub fn nonce(&self) -> Option<u64> {
+        let bytes: [u8; 8] = self.challenge.as_slice().try_into().ok()?;
+        Some(u64::from_be_bytes(bytes))
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -361,12 +440,14 @@ impl Pack {
                     // spellings of anything has to enforce that rather than
                     // assume it. `shard` and `records` already do.
                     if anchors.iter().any(|a: &Anchor| {
-                        a.authority == anchor.authority && a.nonce == anchor.nonce
+                        a.authority == anchor.authority
+                            && a.kind == anchor.kind
+                            && a.challenge == anchor.challenge
                     }) {
                         return Err(PackError::Duplicate {
-                            what: "an anchor from one authority under one nonce",
+                            what: "an anchor from one party of one kind under one challenge",
                             shard: 0,
-                            segment: anchor.nonce,
+                            segment: anchor.nonce().unwrap_or(0),
                         });
                     }
                     anchors.push(anchor);
@@ -433,10 +514,12 @@ fn parse_witness(r: &mut Reader<'_>) -> Result<Witness, PackError> {
 
 fn parse_anchor(r: &mut Reader<'_>) -> Result<Anchor, PackError> {
     Ok(Anchor {
+        kind: AnchorKind::from_code(r.u8("an anchor kind")?),
         authority: r.string("an anchor authority")?,
+        algorithm: r.string("an anchor algorithm")?,
         root: r.hash("an anchored root")?,
-        nonce: r.u64("an anchor nonce")?,
-        token: r.bytes("a timestamp token")?.to_vec(),
+        challenge: r.bytes("an anchor challenge")?.to_vec(),
+        evidence: r.bytes("anchor evidence")?.to_vec(),
     })
 }
 

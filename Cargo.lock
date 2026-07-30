@@ -27,6 +27,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "trailryx-compliance"
+version = "0.0.1"
+dependencies = [
+ "trailryx-verify",
+]
+
+[[package]]
 name = "trailryx-contracts"
 version = "0.0.1"
 dependencies = [
@@ -154,6 +161,7 @@ name = "trailryx-store"
 version = "0.0.1"
 dependencies = [
  "trailryx-anchor",
+ "trailryx-compliance",
  "trailryx-contracts",
  "trailryx-crypto",
  "trailryx-index",

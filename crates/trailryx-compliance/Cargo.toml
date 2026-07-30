@@ -1,0 +1,18 @@
+[package]
+name = "trailryx-compliance"
+description = "A versioned map from what the store proves to what a framework requires, and what it does not"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+trailryx-verify = { path = "../trailryx-verify" }
+
+[[bin]]
+name = "trailryx-coverage"
+path = "src/main.rs"
+
+[lints]
+workspace = true

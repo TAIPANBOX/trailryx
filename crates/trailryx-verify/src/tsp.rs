@@ -41,6 +41,7 @@ const OID_TST_INFO: &[u8] = &[
 /// 2.16.840.1.101.3.4.2.2, id-sha384.
 const OID_SHA384: &[u8] = &[0x60, 0x86, 0x48, 0x01, 0x65, 0x03, 0x04, 0x02, 0x02];
 
+const TAG_BOOLEAN: u8 = 0x01;
 const TAG_INTEGER: u8 = 0x02;
 const TAG_OCTET_STRING: u8 = 0x04;
 const TAG_OID: u8 = 0x06;
@@ -88,6 +89,14 @@ pub struct Stamped {
     pub imprint: Hash,
     /// `genTime`, seconds since the Unix epoch.
     pub at: i64,
+    /// The nonce the token echoed, if it carried one.
+    ///
+    /// RFC 3161 makes it optional. Read here because it is the only thing that
+    /// distinguishes an answer to a particular request from a replay of an older
+    /// response for the same root, and a root does not change between retries. The
+    /// pack records the challenge it sent, so the two can be compared without
+    /// trusting either.
+    pub nonce: Option<u64>,
 }
 
 impl Stamped {
@@ -153,12 +162,52 @@ pub fn read(token: &[u8]) -> Result<Stamped, TokenError> {
 
     let after_imprint = skip(after_policy)?;
     let (_, after_serial) = tlv(after_imprint, TAG_INTEGER)?;
-    let (time, _) = tlv(after_serial, TAG_GENERALIZED_TIME)?;
+    let (time, after_time) = tlv(after_serial, TAG_GENERALIZED_TIME)?;
 
     Ok(Stamped {
         imprint,
         at: generalized_time(time)?,
+        nonce: optional_nonce(after_time)?,
     })
+}
+
+/// The `nonce` field of a `TSTInfo`, stepping over `accuracy` and `ordering`.
+///
+/// All three are optional and they appear in that order, so the nonce is the
+/// first INTEGER after any SEQUENCE and any BOOLEAN. Absent is `None` and not an
+/// error: the specification permits a token without one, and the caller decides
+/// what that means for freshness.
+fn optional_nonce(mut rest: &[u8]) -> Result<Option<u64>, TokenError> {
+    // accuracy: SEQUENCE. ordering: BOOLEAN.
+    for tag in [TAG_SEQUENCE, TAG_BOOLEAN] {
+        if rest.first() == Some(&tag) {
+            rest = skip(rest)?;
+        }
+    }
+    if rest.first() != Some(&TAG_INTEGER) {
+        return Ok(None);
+    }
+    let (body, _) = tlv(rest, TAG_INTEGER)?;
+    // A negative or padded INTEGER is refused rather than reinterpreted: a nonce
+    // read as a different number would silently fail to match the challenge, and
+    // the failure would look like a replay.
+    match body {
+        [] => return Err(TokenError::NotDer),
+        [0x00, next, ..] if next & 0x80 == 0 => return Err(TokenError::NotDer),
+        [first, ..] if first & 0x80 != 0 => return Ok(None),
+        _ => {}
+    }
+    let significant = if body[0] == 0 { &body[1..] } else { body };
+    if significant.len() > 8 {
+        // A nonce wider than the store can have sent. Not an error, just not a
+        // match: the caller will report that freshness could not be checked.
+        return Ok(None);
+    }
+    Ok(Some(
+        significant
+            .iter()
+            .fold(0u64, |acc, b| (acc << 8) | u64::from(*b)),
+    ))
 }
 
 /// The contents of the one TLV that fills `bytes`, refusing anything after it.

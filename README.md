@@ -7,7 +7,7 @@
 ![Stage](https://img.shields.io/badge/stage-9%20of%2013-blue.svg)
 ![Core](https://img.shields.io/badge/core-frozen-success.svg)
 ![Rust](https://img.shields.io/badge/rust-1.85%2B-orange.svg)
-![Tests](https://img.shields.io/badge/tests-819-success.svg)
+![Tests](https://img.shields.io/badge/tests-836-success.svg)
 ![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)
 ![Dependencies](https://img.shields.io/badge/dependencies-0-success.svg)
 ![Unsafe](https://img.shields.io/badge/unsafe-forbidden-success.svg)
@@ -258,6 +258,7 @@ and the proof shapes do not change without a version and a migration.
 | `trailryx-asn1` | a bounded DER reader, enough for RFC 3161 and nothing more. Depends on nothing | 30 |
 | `trailryx-anchor` | RFC 3161 timestamping: TSP, the CMS subset, and RSA over Montgomery arithmetic | 52 |
 | `trailryx-ingest` | the OTLP/HTTP server: HTTP/1.1, gzip, bearer auth, all hand-written | 119 |
+| `trailryx-compliance` | a versioned map from what is proved to what a framework asks, and what it does not | 12 |
 | `trailryx-demo` | the eight acceptance steps, and a reader for a collector's file | - |
 
 **Zero dependencies.** `unsafe` forbidden at the workspace level.
@@ -265,7 +266,7 @@ and the proof shapes do not change without a version and a migration.
 ## Try it
 
 ```bash
-cargo test                                    # 819 tests
+cargo test                                    # 836 tests
 cargo run --bin trailryx-sim-run -- --help
 ```
 
@@ -886,6 +887,45 @@ once, out of band, where a human can look at it, which is what transparency logs
 settled on for witnesses. What it costs is stated rather than hidden: this cannot
 be pointed at an arbitrary authority and asked to work it out.
 
+The pack section takes **three kinds** of anchor, not one: a timestamp token, a
+transparency-log checkpoint, and a signature by a build identity, which is also
+where an SLH-DSA epoch anchor will land when there is an audited implementation to
+put behind it. Only the first is implemented, and the other two exist in the format
+because the design called for three from the start. The first version of that
+section carried a nonce and a token, which is the shape of exactly one of them; it
+was caught by reading the plan rather than by a test, before a format version had
+been spent on it. An anchor of a kind this build cannot read is reported as
+**unread**, never as broken: a pack anchored by something newer must not be
+condemned by an older verifier.
+
+## Nobody here will tell you that you are compliant
+
+Article 12 of the EU AI Act bites on **2 August 2026** and, as of June 2026, no
+JTC 21 document is cited in the Official Journal. No harmonised standard confers a
+presumption of conformity on anybody, for any product. So the obligation arrives
+before the instruction manual, which is the whole reason there is a layer for this
+and the whole reason it must not overstate itself.
+
+`trailryx-coverage` prints what a pack proves next to what each obligation asks
+for, and every obligation gets one of four answers, two of which are no: **shown**,
+**not in this pack**, **not addressed**, **operator**. Retention is the clearest of
+the last kind: Article 19(1) wants six months and nothing in a pack can show how
+long anything was kept.
+
+Every answer is **derived from the verifier's own findings** about a specific pack,
+never declared. Nothing is written into a pack either: a pack carrying its own
+compliance assertion would be the store describing its own evidence, which is the
+failure mode the verifier exists to catch. And the exit code follows the pack's
+verdict, not the table, because a table of obligations means nothing about a pack
+that does not verify.
+
+The mapping covers the AI Act, **prEN ISO/IEC 24970** (the profile document for AI
+system logging, still a draft, so its clauses are quoted nowhere), SR 11-7 and the
+SOC 2 criteria. It lists the obligations this store does nothing for, by name,
+because a mapping that shows only its wins reads as complete. `docs/compliance.md`
+is the long form, including which source each quotation was read from and on what
+date.
+
 A pack with a valid signature and no witness still gets a finding, and it is the
 one that reads as pedantry until somebody tries it.
 
@@ -1049,9 +1089,9 @@ gzipped, zstd-compressed or length-prefixed export by naming the collector setti
 that produced it rather than half-reading it. Stage 7 has no validated cipher behind its
 seam and no KMS-backed key provider, and its hostile erasure suite tries every
 recovery path that exists: caches, projections, exports and backups each arrive
-with their own attempt, or they arrive unchecked. Stage 8 has its RFC 3161 anchor now; what is
-left there is the compliance mapping to Article 12, SR 11-7 and SOC 2, and
-reproducible builds with published simulator seeds. Stage 9 has no
+with their own attempt, or they arrive unchecked. Stage 8 has its RFC 3161 anchor and its
+compliance mapping now; what is left there is reproducible builds with published
+simulator seeds. Stage 9 has no
 repeated columns, so lists are comma-joined (safe, because no identifier's
 character set contains a comma), and no storage tiering.
 
