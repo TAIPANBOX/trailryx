@@ -15,6 +15,17 @@
 # divergence in the value returned rather than in the verdict, which lives in
 # values.py and floats.py.
 #
+# STACK-DEPENDENT CASES ARE EXCLUDED FROM THE PINNED SET, and one of them is why.
+# i_structure_nested_100000_deep: on this laptop CPython and node BOTH accept it; on
+# a GitHub ubuntu-latest runner they DISAGREE. Neither is wrong. A recursive descent
+# parser's verdict on a hundred-thousand-deep document is decided by how much stack
+# the process was given, so a row for it would pin the machine rather than the
+# parser, and tests/oracle.rs skips it in the equality and asserts instead the thing
+# that holds everywhere: we refuse it as a Limit, never as a syntax error.
+# Measured 2026-07-30, laptop CPython 3.14.6 / node v22.23.1 both accept; the first
+# public CI run on 91f1733 measured a disagreement and failed the build, which is
+# how this note came to exist.
+#
 # One caveat stated plainly, because it flatters the agreement number: the
 # sixteen invalid-UTF-8 cases agree partly by construction. classify.js checks
 # the bytes round-trip through Buffer.toString before JSON.parse sees them,

@@ -167,21 +167,64 @@ fn we_agree_with_cpython_and_node_except_where_we_chose_not_to() {
         (Oracle::Node, classified(Oracle::Node)),
     ];
 
-    // The disagreement map first, on its own, because it is the measurement the
-    // two tables were built from and a sixth row in it means one of the oracles
-    // moved under us.
+    // The disagreement map first, on its own, because it is the measurement the two
+    // tables were built from and a sixth row in it means one of the oracles moved
+    // under us.
+    //
+    // Except for the cases below, whose answer is a property of the machine rather
+    // than of the parser. This assertion first shipped pinned to what one laptop
+    // measured, and CI caught it within the hour: on a GitHub runner CPython and
+    // node disagree about a hundred-thousand-deep document, and on the laptop both
+    // accept it. Neither answer is wrong. A recursive descent parser's verdict on
+    // that input is decided by how much stack the process was given, so pinning it
+    // pins the runner. The corpus already labels these `i_`, which is exactly the
+    // right label: implementation-defined includes defined by the machine.
+    //
+    // Everything else stays a strict equality, because that is the whole value of
+    // the check: a sixth divergence that is NOT about stack depth fails the build.
+    let stack_dependent: BTreeSet<String> = ["i_structure_nested_100000_deep"]
+        .iter()
+        .map(|s| (*s).to_owned())
+        .collect();
+
     let mut disagreed = BTreeSet::new();
     for case in &cases {
+        if stack_dependent.contains(&case.name) {
+            continue;
+        }
         if measured[0].1[&case.name] != measured[1].1[&case.name] {
             disagreed.insert(case.name.clone());
         }
     }
-    let pinned: BTreeSet<String> = split.keys().cloned().collect();
+    let pinned: BTreeSet<String> = split
+        .keys()
+        .filter(|k| !stack_dependent.contains(*k))
+        .cloned()
+        .collect();
     assert_eq!(
         disagreed, pinned,
         "CPython and node no longer disagree on exactly the pinned set. \
-         Measured: {disagreed:?}. Pinned in DISAGREEMENTS.tsv: {pinned:?}"
+         Measured: {disagreed:?}. Pinned in DISAGREEMENTS.tsv: {pinned:?}. \
+         Cases excluded as stack-dependent: {stack_dependent:?}"
     );
+
+    // And the excluded cases are still asserted, just for the property that holds
+    // everywhere: whatever the two oracles think, we refuse them as a bound rather
+    // than pretending they are not JSON.
+    for name in &stack_dependent {
+        let case = cases
+            .iter()
+            .find(|c| &c.name == name)
+            .unwrap_or_else(|| panic!("{name} left the corpus; drop it from the exclusion too"));
+        let err = validate(&case.bytes, Limits::default(), 1)
+            .expect_err("a hundred thousand containers is past our bound");
+        assert!(
+            err.is_limit(),
+            "{name}: a stack-dependent document must be refused as a bound, not as \
+             syntax, whatever the oracles do with it. Got {:?}",
+            err.kind
+        );
+    }
 
     for (oracle, answers) in &measured {
         let mut want: BTreeSet<String> = BTreeSet::new();
