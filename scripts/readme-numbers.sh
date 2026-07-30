@@ -66,6 +66,23 @@ done < <(grep '^| `trailryx-' "$readme")
 [ "$sum" -eq "$total" ] ||
   note "the table's rows sum to $sum and the workspace runs $total"
 
+# The dependency figure behind the SQL facade. It is the number the whole
+# zero-dependency argument is spent against, and it is the one that moved twice in a
+# day: once because a dependency tree is bigger than it looks, and once because an
+# audit measured it with a narrower edge filter than the line meant. The command in
+# the README is the command run here, which is the only way a reader can check it.
+if deps=$(cargo tree --offline -p trailryx-sql --prefix none 2>/dev/null |
+  awk '{print $1}' | grep -v '^trailryx' | grep -v '^$' | sort -u | wc -l | tr -d ' ') &&
+  [ -n "$deps" ] && [ "$deps" -gt 0 ]; then
+  stated=$(grep -o '\*\*[0-9]* third-party crates\*\*' "$readme" | grep -o '[0-9]*')
+  [ "$stated" = "$deps" ] ||
+    note "the README says $stated crates behind the facade and \`cargo tree\` counts $deps"
+else
+  # Said out loud rather than passed silently: a check that cannot run is not a
+  # check that passed.
+  printf 'skipped the dependency count: cargo tree could not resolve offline\n'
+fi
+
 # The stage badge, against the roadmap that owns the order of work.
 stage=$(grep -o 'badge/stage-[0-9]*%20of%20[0-9]*' "$readme" | grep -o '[0-9]*' | head -1)
 closed=$(grep -oE 'Етап [0-9]+ закритий' docs/planning/trailryx-roadmap.md |

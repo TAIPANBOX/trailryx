@@ -303,12 +303,16 @@ and the proof shapes do not change without a version and a migration.
 workspace level.
 
 The one exception is `trailryx-sql`, the SQL facade, which took DataFusion and the
-Postgres wire protocol on 30 July 2026 and brings **279 third-party crates** with it
-(`cargo tree -p trailryx-sql -e normal`, counting distinct names; 293 if you count a
-crate that appears at two versions twice). That number is here rather than buried: it
-is what the decision cost, and it is written with the command that produces it,
-because the first version of this line said 297 and no reading of the tree gave that
-back a day later. The gate
+Postgres wire protocol on 30 July 2026 and brings **297 third-party crates** with it
+(`cargo tree -p trailryx-sql`, counting distinct names). That number is here rather
+than buried: it is what the decision cost.
+
+It is written with the command because two honest readings of the same tree differ.
+279 of the 297 are what actually ships (`-e normal`); the rest arrive to build it and
+to test it, and a fourth reading, 293, counts a crate appearing at two versions twice.
+An audit of this page briefly replaced 297 with 279 and said no reading reproduced
+297, which was itself false and sat in the paragraph about being honest with numbers.
+The command settles it, and the gate now checks this figure along with the rest. The gate
 enforces the boundary in two checks that are worth more than the old single one:
 every other crate still has zero, and **the core builds and passes its tests with
 the facade absent**.
