@@ -391,3 +391,142 @@ async fn writing_through_a_session_is_refused_by_name() {
         assert!(refusal.to_string().contains(expected), "{sql}: {refusal}");
     }
 }
+
+// ---------------------------------------------------------------------------
+// The dialect extensions
+// ---------------------------------------------------------------------------
+//
+// Table functions rather than the architecture's illustrative `AS OF TIMESTAMP` and
+// trailing `WITH PROOF`, neither of which the engine's parser accepts. That was
+// checked, not assumed, and `dialect`'s own docs carry the reasoning: getting the
+// syntax exactly would need a second parser over the same string, which is the defect
+// class `gate` exists to remove.
+
+async fn rows_of(session: &Session, sql: &str) -> usize {
+    session
+        .query(sql)
+        .await
+        .unwrap_or_else(|e| panic!("{sql}: {e}"))
+        .iter()
+        .map(|b| b.num_rows())
+        .sum()
+}
+
+/// Transaction time: what the store had recorded by an instant.
+#[tokio::test]
+async fn records_as_of_answers_the_store_as_it_was() {
+    let session = Session::new(vec![segment()]);
+    // Every record in the fixture is recorded at 1000000 + seq, so an instant in the
+    // middle must cut the answer in half rather than returning everything.
+    let all = rows_of(&session, "SELECT * FROM records_as_of('9999999999')").await;
+    assert_eq!(all, 6, "an instant after everything sees everything");
+
+    let half = rows_of(&session, "SELECT * FROM records_as_of('1000003')").await;
+    assert_eq!(half, 3, "an instant in the middle sees the first three");
+
+    let none = rows_of(&session, "SELECT * FROM records_as_of('1')").await;
+    assert_eq!(none, 0, "an instant before everything sees nothing");
+}
+
+/// The spelled-out form and the numeric one must mean the same moment.
+#[tokio::test]
+async fn an_instant_may_be_spelled_two_ways_and_means_one_thing() {
+    let session = Session::new(vec![segment()]);
+    let numeric = rows_of(&session, "SELECT * FROM records_as_of('9999999999')").await;
+    let spelled = rows_of(
+        &session,
+        "SELECT * FROM records_as_of('2026-03-01T00:00:00Z')",
+    )
+    .await;
+    assert_eq!(numeric, spelled);
+}
+
+/// An instant nobody can place is refused rather than guessed at.
+#[tokio::test]
+async fn an_ambiguous_instant_is_refused() {
+    let session = Session::new(vec![segment()]);
+    for bad in ["2026-03-01", "yesterday", "2026-03-01T00:00:00+02:00"] {
+        assert!(
+            session
+                .query(&format!("SELECT * FROM records_as_of('{bad}')"))
+                .await
+                .is_err(),
+            "{bad} should not have parsed as an instant"
+        );
+    }
+}
+
+/// The proof, readable from SQL.
+#[tokio::test]
+async fn trailryx_proof_reports_the_last_answers_provability() {
+    let session = Session::new(vec![segment()]);
+
+    // Before anything has been answered, the answer is "none" and not "full". A
+    // session that has proved nothing must not report the strongest value.
+    let batches = session
+        .query("SELECT proof FROM trailryx_proof()")
+        .await
+        .expect("the function is registered");
+    let first = format!("{:?}", batches[0].column(0));
+    assert!(first.contains("none"), "{first}");
+
+    session
+        .query("SELECT * FROM records WHERE run_id = 'run-b'")
+        .await
+        .unwrap();
+    let batches = session
+        .query("SELECT proof, unproved FROM trailryx_proof()")
+        .await
+        .unwrap();
+    assert!(format!("{:?}", batches[0].column(0)).contains("full"));
+
+    session
+        .query("SELECT * FROM records WHERE severity = 'error'")
+        .await
+        .unwrap();
+    let batches = session
+        .query("SELECT proof, unproved, reason FROM trailryx_proof()")
+        .await
+        .unwrap();
+    let rendered = format!("{:?}", batches[0]);
+    assert!(rendered.contains("partial"), "{rendered}");
+}
+
+/// The causal closure of a run, with the reconstruction's own verdict carried over
+/// rather than re-derived.
+#[tokio::test]
+async fn causal_closure_returns_a_runs_closure() {
+    let session = Session::new(vec![segment()]);
+    let rows = rows_of(&session, "SELECT * FROM causal_closure('run-a')").await;
+    assert_eq!(rows, 2, "run-a has two records and no delegation");
+
+    // A run nobody wrote is an empty closure, not an error: "there is nothing" is a
+    // real answer and a different one from "the query was wrong".
+    let none = rows_of(&session, "SELECT * FROM causal_closure('run-zzz')").await;
+    assert_eq!(none, 0);
+}
+
+/// An argument that is not a run identifier is refused by name.
+#[tokio::test]
+async fn causal_closure_refuses_something_that_is_not_a_run() {
+    let session = Session::new(vec![segment()]);
+    let error = session
+        .query("SELECT * FROM causal_closure('not a run id at all!!')")
+        .await
+        .expect_err("must be refused");
+    assert!(error.to_string().contains("run identifier"), "{error}");
+}
+
+/// The extensions go through the same gate as everything else, so a table function
+/// cannot be a way round it.
+#[tokio::test]
+async fn the_extensions_are_still_behind_the_statement_gate() {
+    let session = Session::new(vec![segment()]);
+    assert!(
+        session
+            .query("CREATE TABLE x AS SELECT * FROM causal_closure('run-a')")
+            .await
+            .is_err(),
+        "a table function must not carry a create past the gate"
+    );
+}

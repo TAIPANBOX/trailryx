@@ -46,6 +46,7 @@
 //! there is nothing here that could perform one: records arrive through a `Source`
 //! and nowhere else.
 
+pub mod dialect;
 pub mod gate;
 pub mod pushdown;
 pub mod server;
@@ -101,6 +102,25 @@ impl Session {
         context
             .register_table("records", Arc::clone(&table) as Arc<_>)
             .expect("a fresh context has no `records` table to collide with");
+
+        // The dialect extensions, as table functions, because the engine's own parser
+        // accepts those and does not accept `AS OF TIMESTAMP` or a trailing
+        // `WITH PROOF`. See `dialect` for the deviation and why a second parser was
+        // refused rather than written.
+        let shared = Arc::new(segments_of(&table));
+        context.register_udtf(
+            "records_as_of",
+            Arc::new(dialect::RecordsAsOf::new(Arc::clone(&shared))),
+        );
+        context.register_udtf(
+            "causal_closure",
+            Arc::new(dialect::CausalClosure::new(shared)),
+        );
+        context.register_udtf(
+            "trailryx_proof",
+            Arc::new(dialect::ProofOfLastAnswer::new(Arc::clone(&table))),
+        );
+
         Self { context, table }
     }
 
@@ -162,3 +182,11 @@ impl std::fmt::Display for QueryError {
 }
 
 impl std::error::Error for QueryError {}
+
+/// The segments a table was built over.
+///
+/// The table functions need the same segments the table has, and taking them from the
+/// table rather than from the caller means the two cannot be given different ones.
+fn segments_of(table: &RecordTable) -> Vec<Segment> {
+    table.segments().to_vec()
+}

@@ -7,7 +7,7 @@
 ![Stage](https://img.shields.io/badge/stage-9%20of%2013-blue.svg)
 ![Core](https://img.shields.io/badge/core-frozen-success.svg)
 ![Rust](https://img.shields.io/badge/rust-1.85%2B-orange.svg)
-![Tests](https://img.shields.io/badge/tests-895-success.svg)
+![Tests](https://img.shields.io/badge/tests-906-success.svg)
 ![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)
 ![Dependencies](https://img.shields.io/badge/deps-0%20in%20the%20core-success.svg)
 ![Unsafe](https://img.shields.io/badge/unsafe-forbidden-success.svg)
@@ -259,7 +259,7 @@ and the proof shapes do not change without a version and a migration.
 | `trailryx-anchor` | RFC 3161 timestamping: TSP, the CMS subset, and RSA over Montgomery arithmetic | 52 |
 | `trailryx-ingest` | the OTLP/HTTP server: HTTP/1.1, gzip, bearer auth, all hand-written | 119 |
 | `trailryx-compliance` | a versioned map from what is proved to what a framework asks, and what it does not | 12 |
-| `trailryx-sql` | the SQL facade: DataFusion and the Postgres wire protocol, predicates pushed into the index, statements gated, reads authorised. **The one crate with third-party dependencies** | 42 |
+| `trailryx-sql` | the SQL facade: DataFusion and the Postgres wire protocol, predicates pushed into the index, statements gated, reads authorised, three dialect extensions | 53 |
 | `trailryx-demo` | the eight acceptance steps, and a reader for a collector's file | - |
 
 **Zero third-party dependencies in every crate above.** `unsafe` forbidden at the
@@ -285,7 +285,7 @@ thing an auditor reads.
 ## Try it
 
 ```bash
-cargo test                                    # 895 tests
+cargo test                                    # 906 tests
 cargo run --bin trailryx-sim-run -- --help
 ```
 
@@ -357,6 +357,33 @@ no proof at all.
 **completes**. DataFusion plans the statement happily; the refusal comes at execution.
 An earlier version of that test checked only that planning failed and was itself
 wrong.
+
+### The dialect extensions are table functions, and that is a deviation
+
+`docs/planning/trailryx-architecture.md` §3.3 illustrates three extensions. The third
+parses with the engine's own parser; **the first two do not**, and that was checked
+rather than assumed:
+
+| the architecture's spelling | parses | what is served instead |
+|---|---|---|
+| `... AS OF TIMESTAMP '...'` | no | `SELECT * FROM records_as_of('...')` |
+| `... WITH PROOF` | no | `SELECT * FROM trailryx_proof()` |
+| `causal_closure('4471')` | yes | unchanged |
+
+Getting the illustrated syntax exactly would need forking the parser or preprocessing
+the text, and both mean **two readers of one string** which is the defect the statement
+gate exists to remove. Adding it back one module later would be incoherent. So the
+capability is the same and the spelling is not, which is a decision worth writing down
+rather than a syntax quietly missing. If the spelling matters more later, the way to
+get it is to teach `sqlparser` upstream, not to read the string twice here.
+
+`records_as_of` answers **transaction time**: what the store had recorded by then, not
+what was true then. Valid-time travel needs facts that supersede one another and this
+store holds events, so the name says which of the two is on offer.
+
+`trailryx_proof()` reports "none" before any query has been answered, not "full". A
+session that has proved nothing must not report the strongest value for the absence of
+an answer.
 
 ### A Postgres client connects, and two defaults had to be refused first
 
@@ -1077,7 +1104,7 @@ that is the part an auditor cannot do without the pack. It then says out loud th
 it did not check the authority's signature, and prints the command that does:
 
 ```
-[note]  anchor: "digicert" stamped this root at 1785421800, token 738 bytes, nonce 895344827
+[note]  anchor: "digicert" stamped this root at 1785421800, token 738 bytes, nonce 906344827
 [weak]  anchor-signature: this verifier checked that "digicert"'s token is over this
         root and did not check the authority's signature; verify it with
         `openssl ts -verify` against their published certificate

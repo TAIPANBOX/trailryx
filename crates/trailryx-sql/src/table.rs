@@ -90,6 +90,11 @@ pub struct RecordTable {
     schema: SchemaRef,
     /// The dimension to scan when no predicate can be the sorted one.
     fallback: Dimension,
+    /// Transaction-time bound, if this table is a point in the store's past.
+    as_of: Option<trailryx_record::Timestamp>,
+    /// Rows somebody else selected, for a table function that has already done the
+    /// selecting. `None` means the index answers.
+    fixed: Option<Vec<(trailryx_record::Record, trailryx_record::Hash)>>,
     last_proof: Mutex<Option<Provability>>,
 }
 
@@ -99,8 +104,52 @@ impl RecordTable {
             segments,
             schema: projection_schema(),
             fallback: Dimension::RecordedAt,
+            as_of: None,
+            fixed: None,
             last_proof: Mutex::new(None),
         }
+    }
+
+    /// The store as it was known at an instant.
+    ///
+    /// Transaction time: records the store had recorded by then. Not valid time,
+    /// which would need facts that supersede one another, and this store holds
+    /// events. The two answer different questions and only one is on offer.
+    pub fn as_of(mut self, at: trailryx_record::Timestamp) -> Self {
+        self.as_of = Some(at);
+        self
+    }
+
+    /// A table over records somebody else already selected, with the provability they
+    /// already established.
+    ///
+    /// For `causal_closure`, where the traversal has decided both. Re-deriving either
+    /// here could disagree with the reconstruction, and the reconstruction is the one
+    /// the store's own tests are about.
+    pub fn from_records(records: Vec<trailryx_record::Record>, proof: Provability) -> Self {
+        let rows: Vec<(trailryx_record::Record, trailryx_record::Hash)> = records
+            .into_iter()
+            // The chain link is not carried by a reconstruction, and inventing one
+            // would put a value in `chain_link` that nothing chains to. `prev_hash` is
+            // the record's own field and is at least true about the record.
+            .map(|r| {
+                let link = r.prev_hash;
+                (r, link)
+            })
+            .collect();
+        Self {
+            segments: Vec::new(),
+            schema: projection_schema(),
+            fallback: Dimension::RecordedAt,
+            as_of: None,
+            fixed: Some(rows),
+            last_proof: Mutex::new(Some(proof)),
+        }
+    }
+
+    /// The sealed segments this table answers from.
+    pub fn segments(&self) -> &[Segment] {
+        &self.segments
     }
 
     /// How provable the last scan was, if there has been one.
@@ -358,7 +407,20 @@ impl TableProvider for RecordTable {
         filters: &[Expr],
         limit: Option<usize>,
     ) -> DfResult<Arc<dyn ExecutionPlan>> {
-        let planned = plan(&translate(filters), self.fallback);
+        // Rows already chosen by a table function: nothing to plan, and the proof
+        // came with them.
+        if let Some(rows) = &self.fixed {
+            let batch = self.batch(rows)?;
+            let table = MemTable::try_new(Arc::clone(&self.schema), vec![vec![batch]])?;
+            return table.scan(state, projection, &[], limit).await;
+        }
+
+        let mut planned = plan(&translate(filters), self.fallback);
+        if let Some(at) = self.as_of {
+            // Folded into the query rather than filtered afterwards, so the index
+            // answers the bounded question and the proof is about that question.
+            planned.query = planned.query.as_of(at);
+        }
 
         // The query goes to the authenticated index, segment by segment. Nothing
         // here scans a record the index did not return, which is what makes the
