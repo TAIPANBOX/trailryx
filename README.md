@@ -24,6 +24,14 @@ Two sentences carry the whole design.
 
 > A verifier must never learn the shape of an answer from the answer.
 
+<div align="center">
+
+<img src="assets/diagram.svg" alt="Two OTLP transports feed one mapper, which splits every event into typed metadata and an encrypted payload; the journal chains records, the segment commits to them in a Merkle history and five sorted indexes, and an evidence pack hands an auditor a signed root a verifier with no dependencies recomputes" width="960">
+
+<sub>Read it left to right: two ways in, one mapper, one plane boundary, and above them the chain of commitments an auditor recomputes from the record bytes alone.</sub>
+
+</div>
+
 ---
 
 ## See it do all of it
@@ -189,6 +197,14 @@ seed=777 steps=20000 digest=42c29db84fa0d604 lines=37394 crashes=95 violations=0
 ```
 
 ## What a proof actually does
+
+<div align="center">
+
+<img src="docs/assets/completeness.svg" alt="A sorted index of nine entries: four answered the query and each carries an inclusion proof, and the entry immediately either side of them is carried too, with a key that must fall outside the range" width="960">
+
+<sub>The two dashed entries are what makes the answer complete rather than merely true. Without them, a store could hand over four real records and keep a fifth.</sub>
+
+</div>
 
 A range answer carries the matching entries with an inclusion proof each,
 evidence that their positions are **contiguous** from a stated start, and the
@@ -452,6 +468,14 @@ test asserting that a re-pointed journal file was emptied rather than refused.
 There are two ways in now, and one mapper. The socket takes protobuf; the second
 is a file.
 
+<div align="center">
+
+<img src="docs/assets/two-decoders.svg" alt="Protobuf bytes and one JSON line decode into the same in-memory types and call the same mapper, producing the same record, and a differential test encodes one fixture twice with two independently written encoders and compares the results as whole structures" width="960">
+
+<sub>The middle box is the whole argument for reading OTLP/JSON rather than inventing a line format: one set of types, one mapper, one place where the plane boundary is decided.</sub>
+
+</div>
+
 **One line is one OTLP/JSON export envelope.** Byte for byte what an
 OpenTelemetry Collector's file exporter writes with `format: json` and
 `compression: none`, and what its `otlp_json_file` receiver reads back. No
@@ -593,6 +617,14 @@ live one nesting level down in the shape the conventions actually use. Six candi
 remain open and are listed in the roadmap rather than quietly dropped.
 
 ## Erasing one person without breaking the audit trail
+
+<div align="center">
+
+<img src="docs/assets/erasure.svg" alt="A record commits to four fields about its payload and does not contain it: hash, size, class and key id. The payload is sealed under a key of its own, forgetting destroys every key in the subject's row before dropping the row, and none of the four fields moves, so every chain, root and proof still verifies" width="960">
+
+<sub>The banner is the property the product turns on, and it is a test rather than a claim: seal, prove, erase, prove again.</sub>
+
+</div>
 
 These two usually pull against each other. An audit trail defends itself by
 being unchangeable; erasure means changing it. `trailryx-erasure` is where they

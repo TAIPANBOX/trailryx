@@ -1,0 +1,67 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="-18 -18 996 316" width="996" height="316" role="img" aria-label="Two OTLP decoders, protobuf and JSON, produce the same in-memory types and call the same mapper, and a differential test pins them to each other">
+  <title>Two decoders, one meaning: the same message by two encodings must produce the same record, and a test compares them as whole structures</title>
+  <rect x="-18" y="-18" width="996" height="316" rx="16" fill="#0A0E13"/>
+  <rect x="-17.5" y="-17.5" width="995" height="315" rx="15.5" fill="none" stroke="rgba(255,255,255,.09)"/>
+
+  <defs><marker id="td1" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0 L8 4 L0 8 z" fill="#5A6675"/></marker></defs>
+
+  <g font-family="ui-monospace,Menlo" text-anchor="middle">
+    <text x="480" y="22" fill="#E9EFF6" font-size="13" font-weight="700">two decoders, one meaning</text>
+    <text x="480" y="42" fill="#5A6675" font-size="10.5">a second mapper would put the plane boundary in two places, and the schema test can only see one of them</text>
+
+    <rect x="14" y="66" width="212" height="72" rx="11" fill="#141C27" stroke="#2a3547"/>
+    <text x="120" y="90" fill="#E9EFF6" font-size="11" font-weight="700">protobuf bytes</text>
+    <text x="120" y="108" fill="#8A97A6" font-size="10.5">off a socket, hand-written</text>
+    <text x="120" y="126" fill="#5A6675" font-size="10.5">varints, nesting bounded at 16</text>
+
+    <rect x="14" y="152" width="212" height="72" rx="11" fill="#141C27" stroke="#2a3547"/>
+    <text x="120" y="176" fill="#E9EFF6" font-size="11" font-weight="700">one JSON line</text>
+    <text x="120" y="194" fill="#8A97A6" font-size="10.5">out of a collector's file</text>
+    <text x="120" y="212" fill="#5A6675" font-size="10.5">strict RFC 8259, bounded too</text>
+
+    <rect x="262" y="66" width="228" height="158" rx="12" fill="#10161F" stroke="#E4626F" stroke-width="1.4"><animate attributeName="stroke-opacity" values="1;.45;1" dur="3.4s" repeatCount="indefinite"/></rect>
+    <text x="376" y="92" fill="#E4626F" font-size="11.5" font-weight="700">one set of types</text>
+    <text x="376" y="114" fill="#8A97A6" font-size="10.5">TraceRequest, Span, Attr, Value</text>
+    <text x="376" y="132" fill="#8A97A6" font-size="10.5">the JSON decoder's output type</text>
+    <text x="376" y="150" fill="#8A97A6" font-size="10.5">IS the protobuf decoder's</text>
+    <text x="376" y="174" fill="#5A6675" font-size="10.5">so there is no second model,</text>
+    <text x="376" y="192" fill="#5A6675" font-size="10.5">and no second place for the</text>
+    <text x="376" y="210" fill="#5A6675" font-size="10.5">two of them to disagree</text>
+
+    <rect x="526" y="66" width="200" height="158" rx="12" fill="#141C27" stroke="#2a3547"/>
+    <text x="626" y="92" fill="#E9EFF6" font-size="11.5" font-weight="700">one mapper</text>
+    <text x="626" y="114" fill="#8A97A6" font-size="10.5">every plane decision</text>
+    <text x="626" y="132" fill="#8A97A6" font-size="10.5">the content table</text>
+    <text x="626" y="150" fill="#8A97A6" font-size="10.5">the derivations</text>
+    <text x="626" y="168" fill="#8A97A6" font-size="10.5">the leftover handling</text>
+    <text x="626" y="192" fill="#5A6675" font-size="10.5">called with the same five</text>
+    <text x="626" y="210" fill="#5A6675" font-size="10.5">arguments from both sides</text>
+
+    <rect x="762" y="66" width="184" height="158" rx="12" fill="#141C27" stroke="#93A8C4"/>
+    <text x="854" y="92" fill="#93A8C4" font-size="11.5" font-weight="700">one record</text>
+    <text x="854" y="116" fill="#8A97A6" font-size="10.5">the same bytes,</text>
+    <text x="854" y="134" fill="#8A97A6" font-size="10.5">the same hash,</text>
+    <text x="854" y="152" fill="#8A97A6" font-size="10.5">whichever way in</text>
+    <text x="854" y="178" fill="#5A6675" font-size="10.5">and the depth bound</text>
+    <text x="854" y="196" fill="#5A6675" font-size="10.5">counts OTLP message</text>
+    <text x="854" y="214" fill="#5A6675" font-size="10.5">levels, not containers</text>
+
+    <rect x="14" y="246" width="932" height="52" rx="11" fill="#10161F" stroke="#E4626F"/>
+    <text x="480" y="268" fill="#E4626F" font-size="11" font-weight="700">the test that makes it true rather than intended</text>
+    <text x="480" y="288" fill="#8A97A6" font-size="10.5">one fixture described once, encoded twice by two independently written encoders, decoded by both readers, compared as whole structures</text>
+  </g>
+
+  <g stroke="#5A6675" stroke-width="1.5">
+    <line x1="226" y1="102" x2="254" y2="120" marker-end="url(#td1)"/>
+    <line x1="226" y1="188" x2="254" y2="170" marker-end="url(#td1)"/>
+    <line x1="490" y1="145" x2="518" y2="145" marker-end="url(#td1)"/>
+    <line x1="726" y1="145" x2="754" y2="145" marker-end="url(#td1)"/>
+  </g>
+
+  <g fill="none">
+    <line x1="226" y1="102" x2="254" y2="120" pathLength="100" stroke="#E4626F" stroke-width="2.6" stroke-linecap="round" stroke-dasharray="7 100" stroke-dashoffset="7"><animate attributeName="stroke-dashoffset" from="7" to="-100" dur="2.4s" begin="0s" repeatCount="indefinite"/></line>
+    <line x1="226" y1="188" x2="254" y2="170" pathLength="100" stroke="#E4626F" stroke-width="2.6" stroke-linecap="round" stroke-dasharray="7 100" stroke-dashoffset="7"><animate attributeName="stroke-dashoffset" from="7" to="-100" dur="2.4s" begin="-0.6s" repeatCount="indefinite"/></line>
+    <line x1="490" y1="145" x2="518" y2="145" pathLength="100" stroke="#E4626F" stroke-width="2.6" stroke-linecap="round" stroke-dasharray="7 100" stroke-dashoffset="7"><animate attributeName="stroke-dashoffset" from="7" to="-100" dur="2.4s" begin="-1.2s" repeatCount="indefinite"/></line>
+    <line x1="726" y1="145" x2="754" y2="145" pathLength="100" stroke="#E4626F" stroke-width="2.6" stroke-linecap="round" stroke-dasharray="7 100" stroke-dashoffset="7"><animate attributeName="stroke-dashoffset" from="7" to="-100" dur="2.4s" begin="-1.8s" repeatCount="indefinite"/></line>
+  </g>
+</svg>
