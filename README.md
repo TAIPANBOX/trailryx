@@ -62,7 +62,7 @@ Two sentences carry the whole design.
 
 <img src="assets/flow.svg" alt="One span arrives and the mapper splits it into typed metadata and an encrypted payload; the metadata becomes a link in a hash chain, the chain is sealed into a Merkle tree, the root is signed and witnessed and checked by a verifier with no dependencies, and then the payload key is destroyed while the verdict still stands" width="971">
 
-<sub>One record, start to finish: it arrives, it splits, it chains, it seals, it gets signed and checked, and then its payload key is destroyed and the tick still stands. The loop runs sixteen seconds.</sub>
+<sub>One record, start to finish: it arrives, it splits, it chains, it seals, it gets signed and checked, and then its payload key is destroyed and the tick still stands. The animation loops every sixteen seconds.</sub>
 
 </div>
 
@@ -269,29 +269,29 @@ A tool that has moved since should be re-checked rather than argued with.</sub>
 </div>
 
 
-Stages 0 to 9, plus the transport. The core is **frozen**: the journal format, the index structures
+Stages 0 to 10 in full, most of 11, plus the transport. The core is **frozen**: the journal format, the index structures
 and the proof shapes do not change without a version and a migration.
 
 | Crate | What it is | Tests |
 |---|---|---|
 | `trailryx-sim` | injectable clock, rng, io and bus; a crash model and fault injection | 18 |
 | `trailryx-record` | the canonical record, its schema, and the plane boundary | 26 |
-| `trailryx-crypto` | SHA-384 and the hash chain | 14 |
+| `trailryx-crypto` | SHA-384 and the hash chain | 22 |
 | `trailryx-core` | the simulated store the determinism criterion runs against | 15 |
-| `trailryx-contracts` | eight adapter traits and a conformance suite | 22 |
+| `trailryx-contracts` | eight adapter traits and a conformance suite | 26 |
 | `trailryx-journal` | wire format, append-only write path, recovery | 28 |
-| `trailryx-index` | Merkle history tree, completeness proofs, segment composition | 54 |
-| `trailryx-store` | sealing, the read surface, causal reconstruction | 67 |
+| `trailryx-index` | Merkle history tree, completeness proofs, segment composition | 58 |
+| `trailryx-store` | sealing, the read surface, causal reconstruction | 75 |
 | `trailryx-json` | a strict bounded RFC 8259 reader and a JSON Lines framer. Depends on nothing | 116 |
 | `trailryx-otlp` | two OTLP transports, one mapper: protobuf and JSON, the GenAI semconv, the file source | 140 |
 | `trailryx-assemble` | what a source handed over, made into records | 29 |
-| `trailryx-erasure` | payload envelopes, the key hierarchy, erasure | 35 |
-| `trailryx-verify` | the offline verifier, including its own ECDSA and a 90-line token reader. Depends on nothing | 29 |
+| `trailryx-erasure` | payload envelopes, the key hierarchy, erasure | 44 |
+| `trailryx-verify` | the offline verifier, including its own ECDSA and a 215-line RFC 3161 token reader. Depends on nothing | 29 |
 | `trailryx-projection` | Thrift, a Parquet writer with real lists, and columnar projections | 19 |
 | `trailryx-sign` | what gets signed, and what a witness attests to | 4 |
 | `trailryx-http` | the workspace's one HTTP/1.1 client. No TLS, no redirects, no reuse | 11 |
 | `trailryx-s3` | SigV4 and S3 over that client. No cloud SDK | 28 |
-| `trailryx-publish` | atomic publication of a sealed segment, and the fault model for it | 10 |
+| `trailryx-publish` | atomic publication of a sealed segment, and the fault model for it | 11 |
 | `trailryx-asn1` | a bounded DER reader, enough for RFC 3161 and nothing more. Depends on nothing | 30 |
 | `trailryx-anchor` | RFC 3161 timestamping: TSP, the CMS subset, and RSA over Montgomery arithmetic | 52 |
 | `trailryx-ingest` | the OTLP/HTTP server: HTTP/1.1, gzip, bearer auth, all hand-written | 119 |
@@ -303,8 +303,12 @@ and the proof shapes do not change without a version and a migration.
 workspace level.
 
 The one exception is `trailryx-sql`, the SQL facade, which took DataFusion and the
-Postgres wire protocol on 30 July 2026 and brings **297 transitive crates** with it.
-That number is here rather than buried: it is what the decision cost. The gate
+Postgres wire protocol on 30 July 2026 and brings **279 third-party crates** with it
+(`cargo tree -p trailryx-sql -e normal`, counting distinct names; 293 if you count a
+crate that appears at two versions twice). That number is here rather than buried: it
+is what the decision cost, and it is written with the command that produces it,
+because the first version of this line said 297 and no reading of the tree gave that
+back a day later. The gate
 enforces the boundary in two checks that are worth more than the old single one:
 every other crate still has zero, and **the core builds and passes its tests with
 the facade absent**.
@@ -447,6 +451,15 @@ Three rules in SigV4 are the ones that bite, and each has its own test:
   and `%` sorts before `b`: sorting first puts the pair in the other order.
 - **The signing key starts from `"AWS4" + secret`**, not the secret. Getting that
   wrong produces a valid-looking signature that is simply refused.
+
+**There is no TLS in it, and that is a limit rather than a position.** The client
+speaks `http://` and refuses `https://` by name, so today this reaches a store over a
+private network or through a terminator the deployment provides, the same seam as
+ingest and the SQL port. Signing a request does protect it from being altered in
+flight, but it does not hide the object, so a public endpoint over plain HTTP is not
+a deployment anybody should run. Writing a TLS stack by hand is exactly the line this
+project does not cross, so this one ends with a dependency or a proxy, and until it
+is decided the README says so rather than letting the word S3 imply the rest.
 
 ### A successful publication that nobody was told about
 
@@ -1493,12 +1506,21 @@ in both directions.
 
 ## Next
 
-Object storage, federation, and the SQL facade: Postgres wire protocol over a
-`TableProvider` that pushes predicates on the provable dimensions into the
-authenticated index, so an answer either carries its completeness proof or says which
-predicate did not fall on a provable dimension.
+Federation, and what is left of storage.
 
-That sentence used to read "the provable query language that replaces the SQL facade",
+The SQL facade shipped: the Postgres wire protocol over a `TableProvider` that pushes
+predicates on the provable dimensions into the authenticated index, so an answer
+either carries its completeness proof or says which predicate did not fall on a
+provable dimension.
+
+Object storage is most of the way there. A segment publishes atomically to S3 over a
+hand-written SigV4 and the workspace's own HTTP client, the body first and the
+manifest as the commit point, with the store's conditional-write behaviour measured
+rather than assumed. What is left is hot and cold tiering, the GCS and Azure
+adapters, and TLS on the outbound client, which is the honest reason the S3 section
+above says a private network or a terminator.
+
+That first sentence used to read "the provable query language that replaces the SQL facade",
 which contradicted `docs/planning/trailryx-architecture.md` §3.1 and §3.2 in both
 halves: SQL **is** the first-class interface, and nothing replaces it. Provability is
 not a different language, it is where the predicate is evaluated.
