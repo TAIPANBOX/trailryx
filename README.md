@@ -7,7 +7,7 @@
 ![Stage](https://img.shields.io/badge/stage-9%20of%2013-blue.svg)
 ![Core](https://img.shields.io/badge/core-frozen-success.svg)
 ![Rust](https://img.shields.io/badge/rust-1.85%2B-orange.svg)
-![Tests](https://img.shields.io/badge/tests-917-success.svg)
+![Tests](https://img.shields.io/badge/tests-932-success.svg)
 ![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)
 ![Dependencies](https://img.shields.io/badge/deps-0%20in%20the%20core-success.svg)
 ![Unsafe](https://img.shields.io/badge/unsafe-forbidden-success.svg)
@@ -255,6 +255,7 @@ and the proof shapes do not change without a version and a migration.
 | `trailryx-verify` | the offline verifier, including its own ECDSA and a 90-line token reader. Depends on nothing | 29 |
 | `trailryx-projection` | Thrift, a Parquet writer with real lists, and columnar projections | 19 |
 | `trailryx-sign` | what gets signed, and what a witness attests to | 4 |
+| `trailryx-s3` | SigV4 and S3 over the workspace's own HTTP client. No cloud SDK | 11 |
 | `trailryx-asn1` | a bounded DER reader, enough for RFC 3161 and nothing more. Depends on nothing | 30 |
 | `trailryx-anchor` | RFC 3161 timestamping: TSP, the CMS subset, and RSA over Montgomery arithmetic | 52 |
 | `trailryx-ingest` | the OTLP/HTTP server: HTTP/1.1, gzip, bearer auth, all hand-written | 119 |
@@ -285,7 +286,7 @@ thing an auditor reads.
 ## Try it
 
 ```bash
-cargo test                                    # 917 tests
+cargo test                                    # 932 tests
 cargo run --bin trailryx-sim-run -- --help
 ```
 
@@ -384,6 +385,32 @@ store holds events, so the name says which of the two is on offer.
 `trailryx_proof()` reports "none" before any query has been answered, not "full". A
 session that has proved nothing must not report the strongest value for the absence of
 an answer.
+
+### S3 without an SDK: one HTTP client and a signature
+
+`aws-sdk-s3` brings a runtime, an HTTP stack, a TLS stack and several hundred crates
+to say that the S3 API is HTTP plus a signature. This workspace already had the HTTP
+client, written for RFC 3161, and both hash functions the signature is made of. So
+`trailryx-s3` has **zero third-party dependencies** like everything outside the SQL
+facade, and the storage adapter stays the size of the rest of the store.
+
+That trade is only defensible if the signature is right, and a signature checked
+against itself is one that gets rejected in production with `SignatureDoesNotMatch`
+and no clue which stage was wrong. So it is checked against **the AWS CLI**: the tests
+drive it, read the canonical request, string to sign and signature out of its debug
+log, and require the same bytes for the same inputs, including a key containing a
+space, a plus and a tilde, and a request with query parameters. AWS's own documented
+worked example is a separate test.
+
+Three rules in SigV4 are the ones that bite, and each has its own test:
+
+- **`UriEncode` is not the platform's.** AWS says so in its own documentation. Hex is
+  uppercase, a space is `%20` and never `+`, and a slash is encoded in a query value
+  but left alone in a path.
+- **The query string is sorted after encoding**, not before. `a+` encodes to `a%2B`,
+  and `%` sorts before `b`: sorting first puts the pair in the other order.
+- **The signing key starts from `"AWS4" + secret`**, not the secret. Getting that
+  wrong produces a valid-looking signature that is simply refused.
 
 ### WORM protects a version, not a key, and that changes the design
 
@@ -1163,7 +1190,7 @@ that is the part an auditor cannot do without the pack. It then says out loud th
 it did not check the authority's signature, and prints the command that does:
 
 ```
-[note]  anchor: "digicert" stamped this root at 1785421800, token 738 bytes, nonce 917344827
+[note]  anchor: "digicert" stamped this root at 1785421800, token 738 bytes, nonce 932344827
 [weak]  anchor-signature: this verifier checked that "digicert"'s token is over this
         root and did not check the authority's signature; verify it with
         `openssl ts -verify` against their published certificate

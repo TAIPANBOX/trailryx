@@ -1,0 +1,18 @@
+[package]
+name = "trailryx-s3"
+description = "S3-compatible object storage over one hand-written HTTP client and SigV4. No cloud SDK"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+# Zero third-party dependencies, like everything outside the SQL facade. The whole
+# point of writing SigV4 rather than taking `aws-sdk-s3` is that the S3 API is HTTP
+# plus a signature, and both of those already exist in this workspace.
+[dependencies]
+trailryx-contracts = { path = "../trailryx-contracts" }
+trailryx-crypto = { path = "../trailryx-crypto" }
+
+[lints]
+workspace = true

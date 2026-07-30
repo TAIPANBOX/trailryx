@@ -19,10 +19,12 @@
 //! v1.
 
 pub mod chain;
+pub mod hmac;
 pub mod sha256;
 pub mod sha384;
 
 pub use chain::{ChainState, chain_step};
+pub use hmac::hmac_sha256;
 pub use sha256::{SHA256_BYTES, Sha256};
 pub use sha384::Sha384;
 pub use trailryx_record::{HASH_BYTES, Hash};
