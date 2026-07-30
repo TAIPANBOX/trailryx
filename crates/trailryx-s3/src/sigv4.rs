@@ -72,6 +72,16 @@ impl Credentials {
     }
 }
 
+impl Credentials {
+    /// The session token, when these are temporary credentials.
+    ///
+    /// Returned rather than exposed as a field so the struct keeps one way in and
+    /// the `Debug` written for it stays the only way anything gets printed.
+    pub fn session_token(&self) -> Option<&str> {
+        self.session_token.as_deref()
+    }
+}
+
 /// One request, in the shape the signature is computed over.
 #[derive(Debug, Clone)]
 pub struct Request {
@@ -140,10 +150,45 @@ fn hex(bytes: &[u8]) -> String {
     bytes.iter().map(|b| format!("{b:02x}")).collect()
 }
 
+/// The hash S3 wants in `x-amz-content-sha256`, and the same value the canonical
+/// request ends with.
+///
+/// Public because the header has to be signed, so the caller needs the hash before
+/// signing rather than after. Two places computing it separately is how they come to
+/// disagree for an empty body.
+pub fn payload_hash(payload: &[u8]) -> String {
+    hex(&Sha256::digest(payload))
+}
+
 /// The hash of an empty payload, which S3 wants in `x-amz-content-sha256` when there
 /// is no body. Computed rather than pasted, so it cannot be a typo.
 pub fn empty_payload_hash() -> String {
     hex(&Sha256::digest(b""))
+}
+
+/// The query string as the signature sees it, which is also what has to go on the
+/// request line.
+///
+/// Encoded first, then sorted. Sorting before encoding gives a different order
+/// whenever the encoding changes a byte's ordinal, which is the kind of difference
+/// that only shows up on the one key somebody happens to use: `a+` encodes to
+/// `a%2B`, and `%` sorts before `b`.
+///
+/// Public because the caller has to put these exact bytes in the request line. The
+/// service recomputes the signature from what arrives, so a target that differs from
+/// what was signed is rejected with `SignatureDoesNotMatch` and no hint as to which
+/// byte moved.
+pub fn canonical_query(query: &[(String, String)]) -> String {
+    let mut query: Vec<(String, String)> = query
+        .iter()
+        .map(|(k, v)| (uri_encode(k, false), uri_encode(v, false)))
+        .collect();
+    query.sort();
+    query
+        .iter()
+        .map(|(k, v)| format!("{k}={v}"))
+        .collect::<Vec<_>>()
+        .join("&")
 }
 
 impl Request {
@@ -155,20 +200,7 @@ impl Request {
             uri_encode(&self.path, true)
         };
 
-        // Encoded first, then sorted. Sorting before encoding gives a different order
-        // whenever the encoding changes a byte's ordinal, which is the kind of
-        // difference that only shows up on the one key somebody happens to use.
-        let mut query: Vec<(String, String)> = self
-            .query
-            .iter()
-            .map(|(k, v)| (uri_encode(k, false), uri_encode(v, false)))
-            .collect();
-        query.sort();
-        let query: String = query
-            .iter()
-            .map(|(k, v)| format!("{k}={v}"))
-            .collect::<Vec<_>>()
-            .join("&");
+        let query = canonical_query(&self.query);
 
         let mut headers: Vec<(String, String)> = self
             .headers
@@ -271,18 +303,30 @@ mod tests {
     /// matters: `+` encodes to `%2B`, and `%` sorts before an alphabetic character.
     #[test]
     fn the_query_string_is_sorted_after_encoding_and_not_before() {
+        // Given in an order that is neither the answer nor the order these keys
+        // sort in before encoding. The first version of this test supplied them
+        // already in the right order, so it passed against a signer that did not
+        // sort at all: a mutation removing the sort went undetected, which made the
+        // test a comment. `{` is the pair that makes the two orders differ, because
+        // it encodes to `%7B` and `%` sorts below every unreserved character while
+        // `{` sorts above them.
         let request = Request {
             method: "GET".into(),
             path: "/".into(),
-            query: vec![("a+".into(), "1".into()), ("ab".into(), "2".into())],
+            query: vec![
+                ("ab".into(), "3".into()),
+                ("a".into(), "1".into()),
+                ("{".into(), "2".into()),
+                ("a+".into(), "4".into()),
+            ],
             headers: vec![("host".into(), "example".into())],
             payload: Vec::new(),
         };
         let (canonical, _) = request.canonical(&empty_payload_hash());
         let query_line = canonical.lines().nth(2).unwrap();
         assert_eq!(
-            query_line, "a%2B=1&ab=2",
-            "encoded first, then sorted: %2B sorts before b"
+            query_line, "%7B=2&a=1&a%2B=4&ab=3",
+            "encoded first, then sorted: %2B sorts before b, and %7B before everything"
         );
     }
 

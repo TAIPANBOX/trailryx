@@ -8,6 +8,7 @@ repository.workspace = true
 rust-version.workspace = true
 
 [dependencies]
+trailryx-http = { path = "../trailryx-http" }
 trailryx-asn1 = { path = "../trailryx-asn1" }
 trailryx-contracts = { path = "../trailryx-contracts" }
 trailryx-crypto = { path = "../trailryx-crypto" }

@@ -26,6 +26,6 @@ pub use contracts::{
     Action, AdapterError, AdapterResult, Anchor, AnchorReceipt, AuthProvider, Decision, Delivery,
     Destroyed, ForeignColumn, ForeignTable, KeyId, KeyProvider, Lossiness, ObjectStore, Ordering,
     Peer, PeerDescriptor, PeerResponse, Principal, ProofStatus, PutOutcome, Sink, SinkDescriptor,
-    Source, SourceDescriptor, Trust,
+    Source, SourceDescriptor, Trust, VersionId,
 };
 pub use ingest::{Correlation, Cursor, Ingest, MetaDraft, PayloadPart, SourceKey};

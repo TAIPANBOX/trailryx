@@ -7,7 +7,7 @@
 ![Stage](https://img.shields.io/badge/stage-9%20of%2013-blue.svg)
 ![Core](https://img.shields.io/badge/core-frozen-success.svg)
 ![Rust](https://img.shields.io/badge/rust-1.85%2B-orange.svg)
-![Tests](https://img.shields.io/badge/tests-932-success.svg)
+![Tests](https://img.shields.io/badge/tests-960-success.svg)
 ![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)
 ![Dependencies](https://img.shields.io/badge/deps-0%20in%20the%20core-success.svg)
 ![Unsafe](https://img.shields.io/badge/unsafe-forbidden-success.svg)
@@ -255,7 +255,8 @@ and the proof shapes do not change without a version and a migration.
 | `trailryx-verify` | the offline verifier, including its own ECDSA and a 90-line token reader. Depends on nothing | 29 |
 | `trailryx-projection` | Thrift, a Parquet writer with real lists, and columnar projections | 19 |
 | `trailryx-sign` | what gets signed, and what a witness attests to | 4 |
-| `trailryx-s3` | SigV4 and S3 over the workspace's own HTTP client. No cloud SDK | 11 |
+| `trailryx-http` | the workspace's one HTTP/1.1 client. No TLS, no redirects, no reuse | 11 |
+| `trailryx-s3` | SigV4 and S3 over that client. No cloud SDK | 28 |
 | `trailryx-asn1` | a bounded DER reader, enough for RFC 3161 and nothing more. Depends on nothing | 30 |
 | `trailryx-anchor` | RFC 3161 timestamping: TSP, the CMS subset, and RSA over Montgomery arithmetic | 52 |
 | `trailryx-ingest` | the OTLP/HTTP server: HTTP/1.1, gzip, bearer auth, all hand-written | 119 |
@@ -286,7 +287,7 @@ thing an auditor reads.
 ## Try it
 
 ```bash
-cargo test                                    # 932 tests
+cargo test                                    # 960 tests
 cargo run --bin trailryx-sim-run -- --help
 ```
 
@@ -411,6 +412,36 @@ Three rules in SigV4 are the ones that bite, and each has its own test:
   and `%` sorts before `b`: sorting first puts the pair in the other order.
 - **The signing key starts from `"AWS4" + secret`**, not the secret. Getting that
   wrong produces a valid-looking signature that is simply refused.
+
+### The dangerous store is the one that says yes
+
+A segment is published atomically by a conditional write, which is what removes the
+coordinator: no etcd, no Consul, no lock service. On S3 that is `If-None-Match: *`,
+answered `200` when the key was free and `412` when somebody else got there first.
+
+Three facts from AWS's documentation shape the adapter, and each is a test:
+
+- **`412` is a lost race, not a failure.** Two nodes sealing the same segment is
+  normal, and the loser reads the winner's bytes.
+- **`409 Conflict` happens and is retryable**, when a delete lands between the check
+  and the write. It maps to unavailable, not to a lost race.
+- **In a versioned bucket the write succeeds if the current version is a delete
+  marker.** So a conditional write does not mean the key never existed: an
+  administrator who deletes a segment re-opens its name. That is why a published
+  object is read back **by version**.
+
+The failure that matters is quieter than any of them. **Not every S3-compatible store
+implements conditional writes, and one that ignores the header answers `200` and
+overwrites.** Nothing in the response distinguishes that from a legitimate first
+write, so two nodes would publish different bytes under one name and every proof
+built on that segment would depend on which copy you happened to read.
+
+Rust's `object_store` treats the mechanism as a declared per-backend setting rather
+than an assumption, and this adapter does the same. It adds the step a setting cannot
+give you: `verify_conditional_writes` **measures** the endpoint by writing the same
+key twice and requiring the second to be refused. A store that accepts both is
+rejected by name. A health check that changes nothing cannot detect this class of
+store, so this one deliberately writes.
 
 ### WORM protects a version, not a key, and that changes the design
 
@@ -1190,7 +1221,7 @@ that is the part an auditor cannot do without the pack. It then says out loud th
 it did not check the authority's signature, and prints the command that does:
 
 ```
-[note]  anchor: "digicert" stamped this root at 1785421800, token 738 bytes, nonce 932344827
+[note]  anchor: "digicert" stamped this root at 1785421800, token 738 bytes, nonce 960344827
 [weak]  anchor-signature: this verifier checked that "digicert"'s token is over this
         root and did not check the authority's signature; verify it with
         `openssl ts -verify` against their published certificate

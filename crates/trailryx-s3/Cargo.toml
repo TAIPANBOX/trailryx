@@ -13,6 +13,7 @@ rust-version.workspace = true
 [dependencies]
 trailryx-contracts = { path = "../trailryx-contracts" }
 trailryx-crypto = { path = "../trailryx-crypto" }
+trailryx-http = { path = "../trailryx-http" }
 
 [lints]
 workspace = true

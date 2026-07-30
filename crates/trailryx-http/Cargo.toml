@@ -1,0 +1,16 @@
+[package]
+name = "trailryx-http"
+description = "The workspace's one HTTP/1.1 client. No TLS, no redirects, no reuse"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+# Zero third-party dependencies. This crate is the whole reason writing the S3
+# adapter by hand is defensible rather than reckless: the cost of not taking
+# `aws-sdk-s3` is this file plus a signature.
+[dependencies]
+
+[lints]
+workspace = true

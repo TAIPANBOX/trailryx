@@ -3553,6 +3553,7 @@ dependencies = [
  "trailryx-asn1",
  "trailryx-contracts",
  "trailryx-crypto",
+ "trailryx-http",
  "trailryx-record",
 ]
 
@@ -3629,6 +3630,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "trailryx-http"
+version = "0.0.1"
+
+[[package]]
 name = "trailryx-index"
 version = "0.0.1"
 dependencies = [
@@ -3694,6 +3699,7 @@ version = "0.0.1"
 dependencies = [
  "trailryx-contracts",
  "trailryx-crypto",
+ "trailryx-http",
 ]
 
 [[package]]
