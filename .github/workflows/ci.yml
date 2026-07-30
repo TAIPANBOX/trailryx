@@ -3,12 +3,15 @@ name: ci
 # The same eight checks `.githooks/pre-push` runs, so a green push is a green pull
 # request and neither can drift from the other.
 #
-# THE GUARD ON `if:` IS NOT DECORATION. Actions minutes are metered on a private
-# repository and free on a public one, and this file was written while the
-# repository was still private. `github.event.repository.private` is false only
-# once the repository is public, so until then every job is skipped and consumes
-# nothing. Deleting that condition turns this file into a billable one, which is a
-# decision for whoever owns the account and not a tidy-up.
+# THE GUARD ON `if:` STAYS, and it is not decoration. Actions minutes are metered on
+# a private repository and free on a public one. This file was written while the
+# repository was still private, so every job was skipped and cost nothing; the
+# repository went public on 30 July 2026 and the condition released itself, which is
+# why it was written as a condition rather than as a note to remember later.
+#
+# It is kept because it works in both directions: if this repository is ever made
+# private again, CI stops billing on its own rather than on somebody noticing.
+# Deleting the line is a billing decision, not a tidy-up.
 
 on:
   push:
@@ -75,6 +78,16 @@ jobs:
           a=$(run); b=$(run)
           [ -n "$a" ] && [ "$a" = "$b" ] || { printf 'run 1: %s\nrun 2: %s\n' "$a" "$b"; exit 1; }
           echo "$a"
+
+      # Trivially green today, and that is the point rather than an excuse: with zero
+      # dependencies there is nothing to audit, so this check exists for the day one
+      # arrives. The same argument as the standalone substrate build above. Free
+      # now that the repository is public; it would have been a billable minute
+      # before.
+      - name: cargo audit
+        run: |
+          cargo install cargo-audit --locked --quiet
+          cargo audit
 
       # Enough to catch a write-path regression. The long sweep belongs in a nightly.
       - name: durability sweep, 200 seeds

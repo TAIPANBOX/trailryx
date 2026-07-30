@@ -967,11 +967,12 @@ formatting, clippy with warnings as errors, the tests, a standalone build of the
 substrate crate, a zero-dependency check, an `unsafe` check, the determinism
 criterion and a 200-seed durability sweep.
 
-`.github/workflows/ci.yml` is the same eight, so a green push is a green pull
-request. It carries a deliberate guard: Actions minutes are metered on a private
-repository and free on a public one, so every job is skipped while
-`github.event.repository.private` is true. Removing that line is a billing decision
-rather than a tidy-up, and the file says so where somebody would find it.
+`.github/workflows/ci.yml` runs the same eight plus `cargo audit`, so a green push
+is a green pull request. It keeps a guard that skips every job while the repository
+is private, because Actions minutes are metered there and free here. The repository
+went public on 30 July 2026 and the condition released itself, which is why it was
+written as a condition rather than as a note to remember. It stays because it works
+in both directions.
 
 ## Next
 
