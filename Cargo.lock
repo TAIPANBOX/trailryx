@@ -153,6 +153,8 @@ version = "0.0.1"
 name = "trailryx-store"
 version = "0.0.1"
 dependencies = [
+ "trailryx-anchor",
+ "trailryx-contracts",
  "trailryx-crypto",
  "trailryx-index",
  "trailryx-journal",

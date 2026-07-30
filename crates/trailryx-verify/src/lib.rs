@@ -40,6 +40,7 @@ pub mod p384;
 pub mod pack;
 pub mod record;
 pub mod sha384;
+pub mod tsp;
 pub mod verify;
 
 pub use pack::{Pack, PackError};

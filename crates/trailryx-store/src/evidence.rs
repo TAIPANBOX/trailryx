@@ -26,9 +26,16 @@ use trailryx_record::{Hash, TenantId, Timestamp};
 use trailryx_sign::{RootSignature, WitnessAttestation};
 
 pub const MAGIC: &[u8; 7] = b"TRXEVID";
+/// Three.
+///
 /// Two, because the signature moved out of the header into sections of its own
-/// once there could be more than one of them.
-pub const VERSION: u8 = 2;
+/// once there could be more than one of them. Three, because [`SECTION_ANCHOR`]
+/// was added: an older verifier meeting one would report an unknown section, and
+/// a version says why instead.
+///
+/// A version 2 pack still parses, and must: a pack written by an older commit
+/// keeps verifying, which is the same promise the frozen record format makes.
+pub const VERSION: u8 = 3;
 
 const SECTION_END: u8 = 0;
 const SECTION_HEADER: u8 = 1;
@@ -37,6 +44,7 @@ const SECTION_SEGMENT: u8 = 3;
 const SECTION_RECORDS: u8 = 4;
 const SECTION_SIGNATURE: u8 = 5;
 const SECTION_WITNESS: u8 = 6;
+const SECTION_ANCHOR: u8 = 7;
 
 /// A pack under construction.
 #[derive(Debug)]
@@ -45,7 +53,23 @@ pub struct PackBuilder {
     generated_at: Timestamp,
     signature: Option<RootSignature>,
     witnesses: Vec<WitnessAttestation>,
+    anchors: Vec<AnchorPart>,
     shards: Vec<ShardPart>,
+}
+
+/// A timestamp token, and what it took to obtain it.
+///
+/// The nonce is stored because without it nobody can later show the token answers
+/// a particular request rather than being a replay of an older one for the same
+/// root. A root does not change between retries, so the nonce is the only thing
+/// that distinguishes them, and a store that threw it away would be keeping
+/// evidence it had made unverifiable.
+#[derive(Debug, Clone)]
+struct AnchorPart {
+    authority: String,
+    root: Hash,
+    nonce: u64,
+    token: Vec<u8>,
 }
 
 #[derive(Debug)]
@@ -62,6 +86,7 @@ impl PackBuilder {
             generated_at,
             signature: None,
             witnesses: Vec::new(),
+            anchors: Vec::new(),
             shards: Vec::new(),
         }
     }
@@ -83,6 +108,31 @@ impl PackBuilder {
     /// the root does.
     pub fn witnessed_by(mut self, attestation: WitnessAttestation) -> Self {
         self.witnesses.push(attestation);
+        self
+    }
+
+    /// Add a timestamp token obtained over the store root.
+    ///
+    /// `root` is what the token was requested over, and it is stored rather than
+    /// assumed to be the store root: the verifier compares the two and refuses an
+    /// anchor over anything else. Passing the wrong one produces a pack that fails
+    /// its own verification, which is the correct outcome.
+    ///
+    /// This crate does not obtain tokens. `trailryx-anchor` does, and it lives
+    /// outside the verifier for the reason that crate documents.
+    pub fn anchored_by(
+        mut self,
+        authority: impl Into<String>,
+        root: Hash,
+        nonce: u64,
+        token: Vec<u8>,
+    ) -> Self {
+        self.anchors.push(AnchorPart {
+            authority: authority.into(),
+            root,
+            nonce,
+            token,
+        });
         self
     }
 
@@ -145,6 +195,15 @@ impl PackBuilder {
             put_bytes(&mut body, &attestation.public_key);
             put_bytes(&mut body, &attestation.signature);
             section(&mut out, SECTION_WITNESS, &body);
+        }
+
+        for anchor in &self.anchors {
+            let mut body = Vec::new();
+            put_str(&mut body, &anchor.authority);
+            body.extend_from_slice(anchor.root.as_bytes());
+            body.extend_from_slice(&anchor.nonce.to_be_bytes());
+            put_bytes(&mut body, &anchor.token);
+            section(&mut out, SECTION_ANCHOR, &body);
         }
 
         for shard in &self.shards {

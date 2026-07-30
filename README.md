@@ -7,7 +7,7 @@
 ![Stage](https://img.shields.io/badge/stage-9%20of%2013-blue.svg)
 ![Core](https://img.shields.io/badge/core-frozen-success.svg)
 ![Rust](https://img.shields.io/badge/rust-1.85%2B-orange.svg)
-![Tests](https://img.shields.io/badge/tests-716-success.svg)
+![Tests](https://img.shields.io/badge/tests-819-success.svg)
 ![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)
 ![Dependencies](https://img.shields.io/badge/dependencies-0-success.svg)
 ![Unsafe](https://img.shields.io/badge/unsafe-forbidden-success.svg)
@@ -247,14 +247,16 @@ and the proof shapes do not change without a version and a migration.
 | `trailryx-contracts` | eight adapter traits and a conformance suite | 21 |
 | `trailryx-journal` | wire format, append-only write path, recovery | 28 |
 | `trailryx-index` | Merkle history tree, completeness proofs, segment composition | 54 |
-| `trailryx-store` | sealing, the read surface, causal reconstruction | 59 |
+| `trailryx-store` | sealing, the read surface, causal reconstruction | 67 |
 | `trailryx-json` | a strict bounded RFC 8259 reader and a JSON Lines framer. Depends on nothing | 116 |
 | `trailryx-otlp` | two OTLP transports, one mapper: protobuf and JSON, the GenAI semconv, the file source | 140 |
 | `trailryx-assemble` | what a source handed over, made into records | 29 |
 | `trailryx-erasure` | payload envelopes, the key hierarchy, erasure | 35 |
-| `trailryx-verify` | the offline verifier, including its own ECDSA. Depends on nothing | 20 |
+| `trailryx-verify` | the offline verifier, including its own ECDSA and a 90-line token reader. Depends on nothing | 29 |
 | `trailryx-projection` | Thrift, a Parquet writer, and columnar projections | 18 |
 | `trailryx-sign` | what gets signed, and what a witness attests to | 4 |
+| `trailryx-asn1` | a bounded DER reader, enough for RFC 3161 and nothing more. Depends on nothing | 30 |
+| `trailryx-anchor` | RFC 3161 timestamping: TSP, the CMS subset, and RSA over Montgomery arithmetic | 52 |
 | `trailryx-ingest` | the OTLP/HTTP server: HTTP/1.1, gzip, bearer auth, all hand-written | 119 |
 | `trailryx-demo` | the eight acceptance steps, and a reader for a collector's file | - |
 
@@ -263,7 +265,7 @@ and the proof shapes do not change without a version and a migration.
 ## Try it
 
 ```bash
-cargo test                                    # 716 tests
+cargo test                                    # 819 tests
 cargo run --bin trailryx-sim-run -- --help
 ```
 
@@ -849,9 +851,40 @@ history can be reconstructed today, signed today and dated last year, and the
 signature will verify perfectly. Only somebody independent saying they saw the
 root rules that out. A witness attestation is the same kind of signature over a
 different statement, so the verifier learns nothing new to check one, and
-several independent witnesses beat one authority. RFC 3161 arrives later as one
-more kind of receipt; it needs ASN.1, CMS and a certificate chain, and none of
-that belongs in a crate whose value is that it can be read in a sitting.
+several independent witnesses beat one authority.
+
+**An RFC 3161 anchor says the same thing in the form an auditor asks for by
+name**, and it is the other half of that answer. A timestamp token from a public
+authority is obtainable today, comes from an organisation with a published policy
+and a commercial reason not to backdate, and can be checked by anyone with
+OpenSSL. `trailryx-anchor` obtains one, verifies its CMS signature against a
+**pinned key**, and stores the token in the pack as the exact bytes the authority
+delivered.
+
+Where the work is split matters. Full verification needs ASN.1, CMS and RSA, and
+none of that belongs in a crate whose value is that it can be read in a sitting,
+so it lives outside the verifier. What the verifier does carry is ninety lines
+that read the token's own imprint and check it commits to **this** root, because
+that is the part an auditor cannot do without the pack. It then says out loud that
+it did not check the authority's signature, and prints the command that does:
+
+```
+[note]  anchor: "digicert" stamped this root at 1785421800, token 738 bytes, nonce 837344827
+[weak]  anchor-signature: this verifier checked that "digicert"'s token is over this
+        root and did not check the authority's signature; verify it with
+        `openssl ts -verify` against their published certificate
+```
+
+A store must not be the thing that declares its own third-party evidence valid.
+What it can do, and what the verifier does, is refuse to let the pack describe
+that evidence: a token whose imprint is some other root is **BROKEN**, not a note,
+because the pack's own account of it is false.
+
+The trust model is a pinned key on purpose: no chain building, no revocation, no
+extended key usage, no validity windows. Pinning decides which key to believe
+once, out of band, where a human can look at it, which is what transparency logs
+settled on for witnesses. What it costs is stated rather than hidden: this cannot
+be pointed at an arbitrary authority and asked to work it out.
 
 A pack with a valid signature and no witness still gets a finding, and it is the
 one that reads as pedantry until somebody tries it.
@@ -1016,8 +1049,9 @@ gzipped, zstd-compressed or length-prefixed export by naming the collector setti
 that produced it rather than half-reading it. Stage 7 has no validated cipher behind its
 seam and no KMS-backed key provider, and its hostile erasure suite tries every
 recovery path that exists: caches, projections, exports and backups each arrive
-with their own attempt, or they arrive unchecked. Stage 8 signs nothing yet, so
-its compliance mapping and RFC 3161 anchor are still to come. Stage 9 has no
+with their own attempt, or they arrive unchecked. Stage 8 has its RFC 3161 anchor now; what is
+left there is the compliance mapping to Article 12, SR 11-7 and SOC 2, and
+reproducible builds with published simulator seeds. Stage 9 has no
 repeated columns, so lists are comma-joined (safe, because no identifier's
 character set contains a comma), and no storage tiering.
 

@@ -36,6 +36,9 @@ The guarantees are stated out loud, so a report can name the one it breaks:
 - **Erasure**: after `forget`, no path recovers the payload. A path that does is a
   report, and the hostile suite in `crates/trailryx-erasure/tests/` is where a new
   one belongs.
+- **The anchor**: a timestamp token in a pack must be about that pack's root. A
+  token whose imprint is a different root and which the verifier does not report as
+  BROKEN is a report, because the pack would then be describing its own evidence.
 - **The offline verifier**: a pack it reports as VERIFIED must be internally
   consistent in every part it carries. A pack that passes while holding records
   nothing checked is a report.
@@ -66,6 +69,14 @@ Stated here so nobody spends their time on it:
   a report; the fact that one secret is one identity is not.
 - **No gRPC.** OTLP over HTTP is the specification's default protocol. That is written
   in the README's own list of what is unfinished.
+- **An RFC 3161 anchor is trusted by a pinned key, not by a certificate chain.** No
+  path building, no revocation, no extended key usage, no validity windows. A way to
+  make a token verify under a key that did not sign it is a report; the absence of
+  chain validation is not.
+- **The offline verifier reads a timestamp token and does not verify its signature.**
+  It checks the token commits to the pack's root and says so. A token whose imprint is
+  another root and which the verifier reports as anything but BROKEN is a report; the
+  unchecked signature is stated in the verifier's own output.
 - **Signing is done by an external signer.** This repository contains no signing
   code on purpose; the tests drive OpenSSL as a subprocess.
 

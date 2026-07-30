@@ -17,6 +17,11 @@ trailryx-sim = { path = "../trailryx-sim" }
 
 [dev-dependencies]
 trailryx-verify = { path = "../trailryx-verify" }
+# For `tests/anchored.rs`, which pins the two independent token readers together.
+# A dev-dependency, so the store itself still does not depend on the anchor: when
+# a store anchors is an operational decision and the seam is `Anchor`.
+trailryx-anchor = { path = "../trailryx-anchor" }
+trailryx-contracts = { path = "../trailryx-contracts" }
 
 [lints]
 workspace = true

@@ -20,7 +20,21 @@
 use crate::sha384::{HASH_BYTES, Hash};
 
 pub const MAGIC: &[u8; 7] = b"TRXEVID";
-pub const VERSION: u8 = 2;
+
+/// What this build writes.
+pub const VERSION: u8 = 3;
+
+/// The oldest version this build reads.
+///
+/// Version 3 added [`SECTION_ANCHOR`]. A version 2 pack has no anchors and is
+/// otherwise identical, so it still parses: a pack written by an older commit
+/// must keep verifying, which is the promise the frozen record format makes and
+/// the pack format has no reason to break.
+///
+/// The bump exists so that an **older** verifier meeting a newer pack says
+/// "unknown version" rather than "unknown section". Both refuse; only one says
+/// why.
+pub const MIN_VERSION: u8 = 2;
 
 pub const SECTION_END: u8 = 0;
 pub const SECTION_HEADER: u8 = 1;
@@ -29,6 +43,8 @@ pub const SECTION_SEGMENT: u8 = 3;
 pub const SECTION_RECORDS: u8 = 4;
 pub const SECTION_SIGNATURE: u8 = 5;
 pub const SECTION_WITNESS: u8 = 6;
+/// An RFC 3161 timestamp token over a root. Added in version 3.
+pub const SECTION_ANCHOR: u8 = 7;
 
 /// A ceiling on anything the pack asks us to allocate.
 ///
@@ -193,6 +209,30 @@ pub struct Witness {
     pub signature: Vec<u8>,
 }
 
+/// A timestamp token from an authority, over a root.
+///
+/// The token travels as the exact bytes the authority delivered. Nothing is
+/// re-encoded, because a re-encoded token is a different byte string and its
+/// signature no longer verifies over it.
+///
+/// The verifier reads the token to check it commits to **this** root and does not
+/// check the authority's signature: see [`crate::tsp`] for why that split is the
+/// honest one and how an auditor completes it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Anchor {
+    /// What the store calls the authority. A label for a human, never a trust
+    /// decision: the verifier draws no conclusion from it.
+    pub authority: String,
+    /// The root the store says this token is about. Checked against the token
+    /// rather than believed, and against the pack's own store root.
+    pub root: Hash,
+    /// The nonce the store sent. Without it a token cannot be shown to answer a
+    /// particular request rather than to be a replay of an older one.
+    pub nonce: u64,
+    /// The DER `TimeStampToken`, verbatim.
+    pub token: Vec<u8>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Shard {
     pub shard: u16,
@@ -235,6 +275,7 @@ pub struct Pack {
     pub header: Header,
     pub signature: Option<Signature>,
     pub witnesses: Vec<Witness>,
+    pub anchors: Vec<Anchor>,
     pub shards: Vec<Shard>,
     pub segments: Vec<Segment>,
     pub record_sets: Vec<RecordSet>,
@@ -247,13 +288,14 @@ impl Pack {
             return Err(PackError::BadMagic);
         }
         let version = r.u8("the version")?;
-        if version != VERSION {
+        if !(MIN_VERSION..=VERSION).contains(&version) {
             return Err(PackError::UnknownVersion(version));
         }
 
         let mut header = None;
         let mut signature = None;
         let mut witnesses = Vec::new();
+        let mut anchors = Vec::new();
         let mut shards = Vec::new();
         let mut segments = Vec::new();
         let mut record_sets = Vec::new();
@@ -310,6 +352,25 @@ impl Pack {
                 }
                 SECTION_SIGNATURE => signature = Some(parse_signature(&mut s)?),
                 SECTION_WITNESS => witnesses.push(parse_witness(&mut s)?),
+                SECTION_ANCHOR => {
+                    let anchor = parse_anchor(&mut s)?;
+                    // Several authorities anchoring the same root is the point:
+                    // more independent parties is a stronger claim. The same
+                    // authority answering the same nonce twice is not, it is one
+                    // question with two answers, and a format that has no two
+                    // spellings of anything has to enforce that rather than
+                    // assume it. `shard` and `records` already do.
+                    if anchors.iter().any(|a: &Anchor| {
+                        a.authority == anchor.authority && a.nonce == anchor.nonce
+                    }) {
+                        return Err(PackError::Duplicate {
+                            what: "an anchor from one authority under one nonce",
+                            shard: 0,
+                            segment: anchor.nonce,
+                        });
+                    }
+                    anchors.push(anchor);
+                }
                 // Not skipped. A verifier that ignored a section it did not
                 // understand would report success on a pack whose meaning it
                 // only partly read.
@@ -324,6 +385,7 @@ impl Pack {
             header: header.ok_or(PackError::Missing("header"))?,
             signature,
             witnesses,
+            anchors,
             shards,
             segments,
             record_sets,
@@ -366,6 +428,15 @@ fn parse_witness(r: &mut Reader<'_>) -> Result<Witness, PackError> {
         algorithm: r.string("a signature algorithm")?,
         public_key: r.bytes("a public key")?.to_vec(),
         signature: r.bytes("a signature")?.to_vec(),
+    })
+}
+
+fn parse_anchor(r: &mut Reader<'_>) -> Result<Anchor, PackError> {
+    Ok(Anchor {
+        authority: r.string("an anchor authority")?,
+        root: r.hash("an anchored root")?,
+        nonce: r.u64("an anchor nonce")?,
+        token: r.bytes("a timestamp token")?.to_vec(),
     })
 }
 

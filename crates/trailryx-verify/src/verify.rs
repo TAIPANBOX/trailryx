@@ -681,6 +681,7 @@ fn check_signature(pack: &Pack, report: &mut Report) {
 /// key this build can read. A witness under that key is the publisher attesting
 /// to their own root, which is not independence and not evidence.
 fn check_witnesses(pack: &Pack, publisher: Option<Hash>, report: &mut Report) {
+    let anchored = check_anchors(pack, report);
     // Counted rather than assumed from a non-empty list. A witness whose
     // algorithm this build cannot check, or whose key is the publisher's own,
     // used to silence the finding below simply by being present, so the pack
@@ -777,13 +778,113 @@ fn check_witnesses(pack: &Pack, publisher: Option<Hash>, report: &mut Report) {
         seen_keys.push(id);
     }
 
-    if independent == 0 {
+    if independent == 0 && anchored == 0 {
         report.weak(
             "witnesses",
             "nothing independent says when this root existed, so nothing here rules out a history \
              written later and dated earlier",
         );
     }
+}
+
+/// Timestamp tokens: does each one commit to this pack's root?
+///
+/// Returns how many did. That count is what stops the finding above from saying
+/// "nothing independent says when this root existed" when a token from an
+/// authority is sitting in the pack.
+///
+/// # What is checked here and what is not
+///
+/// The binding is checked: the token's imprint against a hash computed from the
+/// root this pack carries. The authority's **signature is not**, because that
+/// needs CMS, RSA and a certificate chain, and this verifier being readable in an
+/// hour is the answer to "who checked your code".
+///
+/// So every anchor produces a `weak` finding as well as its result, naming the
+/// command that completes the check. A verifier that reported an anchor as good
+/// when it had not verified the signature would be making exactly the kind of
+/// claim this whole crate exists to avoid.
+fn check_anchors(pack: &Pack, report: &mut Report) -> usize {
+    let mut bound = 0usize;
+    for anchor in &pack.anchors {
+        let where_ = quoted(&anchor.authority);
+
+        // An anchor over a root that is not this pack's root says nothing about
+        // this pack, however valid it is. Checked before the token is read, so a
+        // token for somebody else's history cannot even be reported on.
+        if anchor.root != pack.header.store_root {
+            report.broken(
+                "anchor",
+                format!(
+                    "the token from {where_} is over a different root than this pack's, so it \
+                     attests to another history"
+                ),
+            );
+            continue;
+        }
+
+        let stamped = match crate::tsp::read(&anchor.token) {
+            Ok(stamped) => stamped,
+            Err(why) => {
+                report.broken(
+                    "anchor",
+                    format!("the token from {where_} is not a readable timestamp token: {why}"),
+                );
+                continue;
+            }
+        };
+
+        if !stamped.covers(&anchor.root) {
+            // The store said this token was about this root and the token says
+            // otherwise. This is the case a verifier exists for: a pack cannot be
+            // allowed to describe its own evidence.
+            report.broken(
+                "anchor",
+                format!(
+                    "the token from {where_} stamps a different digest than this root, so the \
+                     pack's own description of it is false"
+                ),
+            );
+            continue;
+        }
+
+        bound += 1;
+        report.note(
+            "anchor",
+            format!(
+                "{where_} stamped this root at {} (seconds since the epoch), token {} bytes, \
+                 nonce {}",
+                stamped.at,
+                anchor.token.len(),
+                anchor.nonce
+            ),
+        );
+        report.weak(
+            "anchor-signature",
+            format!(
+                "this verifier checked that {where_}'s token is over this root and did not check \
+                 the authority's signature; verify it with `openssl ts -verify` against their \
+                 published certificate",
+            ),
+        );
+
+        // An authority cannot stamp a root before the root exists. Not a failure:
+        // two independent clocks disagree by construction, and turning skew into a
+        // verification error would be wrong. But somebody should know which clock
+        // is wrong, and by how much.
+        let generated_at_seconds = (pack.header.generated_at / 1_000_000_000) as i64;
+        if stamped.at < generated_at_seconds {
+            report.weak(
+                "anchor-clock",
+                format!(
+                    "{where_} stamped this root {} seconds before the pack says it was generated, \
+                     so a clock disagrees",
+                    generated_at_seconds - stamped.at
+                ),
+            );
+        }
+    }
+    bound
 }
 
 enum Checked {
