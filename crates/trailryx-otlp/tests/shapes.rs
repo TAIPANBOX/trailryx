@@ -160,7 +160,11 @@ fn valid_json_that_is_not_traces_data_is_still_not_a_malformed_line() {
     // error, because they parse.
     for (line, unknown) in [
         (r#"{"foo":1}"#, 1),
-        (r#"{"resourceSpansX":[]}"#, 1),
+        // An unknown member whose value is an EMPTY array costs nothing, because
+        // proto3 JSON omits an empty repeated field: `[]` and absent are the same
+        // message and the wire charges no tag for either.
+        (r#"{"resourceSpansX":[]}"#, 0),
+        (r#"{"resourceSpansX":[1,2]}"#, 2),
         (r#"{"a":1,"b":2}"#, 2),
         ("[]", 0),
         ("[1,2,3]", 0),
@@ -435,8 +439,14 @@ fn an_absent_field_is_proto3s_default_and_never_an_error() {
 
 #[test]
 fn an_unknown_member_is_skipped_and_counted_at_every_level_it_can_appear() {
-    // A newer OTLP, or a collector with an extension. Six members this version
-    // has never heard of, one at each level, and the span still decodes.
+    // A newer OTLP, or a collector with an extension. Ten members this version has
+    // never heard of, spread over every level, and the span still decodes.
+    //
+    // Nine of them are counted, not ten, and the one that is not is `newInScope`,
+    // whose value is an empty array. `unknown_fields` counts what the wire counts,
+    // and the wire charges one tag per element of a repeated field, so an unknown
+    // field with no elements costs nothing on either side: proto3 JSON omits an
+    // empty repeated field, which makes `[]` and absent the same message.
     let line = concat!(
         r#"{"newAtTheTop":{"deep":[1,2]},"resourceSpans":[{"newInResourceSpans":1,"#,
         r#""schemaUrl":"https://example.invalid/schema","#,
@@ -446,13 +456,13 @@ fn an_unknown_member_is_skipped_and_counted_at_every_level_it_can_appear() {
         r#""value":{"stringValue":"v","newInAnyValue":{}}}]}]}]}]}"#
     );
     let decoded = decode(line);
-    only(&decoded, &[("unknown_members", 10)]);
+    only(&decoded, &[("unknown_members", 9)]);
     let span = only_span(&decoded);
     assert_eq!(span.name, "chat");
     assert_eq!(span.attributes.len(), 1);
     assert_eq!(span.attributes[0].value, Value::Str("v".to_owned()));
     // The count travels in the request too, where the wire reader puts its own.
-    assert_eq!(decoded.request.unknown_fields, 10);
+    assert_eq!(decoded.request.unknown_fields, 9);
     assert_eq!(decoded.request.padded_varints, 0);
 }
 

@@ -319,16 +319,19 @@ pub fn decode_traces_data(
         bump(&mut cx.shape.bare_resource_spans);
         resource_spans.push(bare);
     }
-    cx.shape.unknown_members = stats.unknown_members;
+    // `unrecognised` has been counting as it went, per element for an array so that
+    // the figure matches the wire's tag-per-element. The reader's own tally counts
+    // members instead, which is the right answer to a different question, so it is
+    // deliberately not used here. It is still worth having: a gap between the two is
+    // exactly how many repeated unknown fields a producer sent.
+    let _ = stats;
     let request = TraceRequest {
         resource_spans,
         dropped: cx.dropped,
         // JSON has no varints to pad. Zero and not absent, so a caller
         // aggregating both transports adds up the same fields either way.
         padded_varints: 0,
-        // The reader's own tally of members it walked past, which is what
-        // `unknown_fields` counts on the wire.
-        unknown_fields: stats.unknown_members,
+        unknown_fields: cx.shape.unknown_members,
     };
 
     // The classification, in one place and only once the whole line has been
@@ -842,16 +845,58 @@ fn wrong_type<'a>(r: &mut Reader<'a>, opened: &JsonEvent<'a>, cx: &mut Ctx) -> J
 
 /// Skip a member this version does not act on, and say what kind of name it had.
 ///
-/// The reader counts the skip itself, so `unknown_members` is not touched here:
-/// counting it in both places would double every member. An underscore is the
-/// whole test for snake_case, and it is enough because OTLP/JSON has no member
-/// name containing one: an attribute *key* like `gen_ai.request.model` is a
-/// string value, not a member name, and never reaches this.
+/// # Why this counts elements and not members
+///
+/// An underscore is the whole test for snake_case, and it is enough because
+/// OTLP/JSON has no member name containing one: an attribute *key* like
+/// `gen_ai.request.model` is a string value, not a member name, and never reaches
+/// this.
+///
+/// The count is the interesting part. `unknown_fields` is documented as the measure
+/// of how much of a message we understood, and on the wire a repeated field is one
+/// tag per element, so two unknown `links` cost two. In JSON they are one member
+/// whose value is an array of two, so counting members made the same message read as
+/// 2 on the wire and 1 here, which is a hole in the whole claim that the two
+/// decoders mean the same thing: the differential test would fail on a legal message
+/// nobody had thought to write.
+///
+/// So an unknown member whose value is an array is charged per element, which maps
+/// exactly onto the wire's tag-per-element rather than approximately: an array of
+/// arrays costs one per outer element on both sides, because the wire also sees one
+/// tag per outer element. Anything that is not an array costs one.
+///
+/// `Reader::skip_value` would count the member itself, so this drives the value by
+/// hand and counts as it goes. `trailryx-json` deliberately keeps counting members,
+/// because that is the truthful statement about JSON, and knowing that a repeated
+/// field's elements are what the wire counts is OTLP's business and not the
+/// grammar's.
 fn unrecognised(name: &str, r: &mut Reader<'_>, cx: &mut Ctx) -> JsonResult<()> {
     if name.contains('_') {
         bump(&mut cx.shape.snake_case_keys);
     }
-    r.skip_value()
+    let opened = r.value()?;
+    if opened == JsonEvent::ArrayStart {
+        let mut elements = 0u32;
+        while r.next_element()? {
+            let element = r.value()?;
+            r.skip_rest(&element)?;
+            elements = elements.saturating_add(1);
+        }
+        // Exactly the element count, with no floor. A floor of one was the first
+        // answer and it was wrong the other way: proto3 JSON omits an empty
+        // repeated field, so `"links":[]` and no `links` at all are the same
+        // message, the wire charges nothing for it, and the differential test said
+        // so within the minute.
+        bump_by(&mut cx.shape.unknown_members, elements);
+        return Ok(());
+    }
+    bump(&mut cx.shape.unknown_members);
+    r.skip_rest(&opened)
+}
+
+/// Add a measured count, saturating, because `[profile.test]` checks overflow.
+fn bump_by(counter: &mut u32, by: u32) {
+    *counter = counter.saturating_add(by);
 }
 
 /// Walk past a value without calling it unknown.

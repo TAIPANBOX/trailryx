@@ -563,3 +563,170 @@ fn only_attr(decoded: &Decoded) -> &Value {
         .attr(KEY)
         .expect("the attribute must have arrived")
 }
+
+#[test]
+fn a_repeated_unknown_field_is_counted_the_same_on_both_transports() {
+    // `unknown_fields` is the measure of how much of a message we understood, and
+    // the two transports measured it differently: on the wire a repeated field is
+    // one tag per element, in JSON it is one member whose value is an array. So a
+    // span carrying two elements of an unknown repeated field read as 2 on the wire
+    // and 1 here, which is a hole in the claim that the two decoders mean the same
+    // thing, and this test is the one that would have failed for a legal message
+    // nobody had thought to write.
+    let links = |n: usize| -> (Vec<u8>, String) {
+        let mut span = common::string_field(5, "s");
+        span.extend_from_slice(&common::len_delim(1, &[0xab; 16]));
+        span.extend_from_slice(&common::len_delim(2, &[0x11; 8]));
+        span.extend_from_slice(&common::len_delim(
+            9,
+            &common::kv("gen_ai.operation.name", common::any_string("chat")),
+        ));
+        // Field 8 is `links`, repeated, and unknown to this decoder.
+        for _ in 0..n {
+            span.extend_from_slice(&common::len_delim(8, &[]));
+        }
+        let scope = {
+            let mut s = common::len_delim(1, &common::string_field(1, SCOPE));
+            s.extend_from_slice(&common::len_delim(2, &span));
+            s
+        };
+        let rs = {
+            let mut r = common::len_delim(1, &[]);
+            r.extend_from_slice(&common::len_delim(2, &scope));
+            r
+        };
+        let pb = common::len_delim(1, &rs);
+
+        let members = vec!["{}"; n].join(",");
+        let js = format!(
+            "{{\"resourceSpans\":[{{\"scopeSpans\":[{{\"scope\":{{\"name\":\"{SCOPE}\"}},\
+             \"spans\":[{{\"traceId\":\"{}\",\"spanId\":\"{}\",\"name\":\"s\",\
+             \"attributes\":[{{\"key\":\"gen_ai.operation.name\",\
+             \"value\":{{\"stringValue\":\"chat\"}}}}],\"links\":[{members}]}}]}}]}}]}}",
+            "ab".repeat(16),
+            "11".repeat(8)
+        );
+        (pb, js)
+    };
+
+    for n in [0usize, 1, 2, 5] {
+        let (pb, js) = links(n);
+        let wire = decode_trace_request(&pb, Limits::default()).expect("the wire decodes");
+        let text = decode_traces_data(js.as_bytes(), Limits::default(), JsonLimits::default(), 1)
+            .expect("the JSON decodes");
+        assert_eq!(
+            text.request.unknown_fields, wire.unknown_fields,
+            "{n} unknown repeated elements: wire says {}, json says {}",
+            wire.unknown_fields, text.request.unknown_fields
+        );
+        assert_eq!(text.request, wire, "{n} elements");
+    }
+}
+
+#[test]
+fn an_id_of_the_wrong_length_drops_the_span_on_both_transports() {
+    // The wire kept a span whose trace id was four bytes and JSON dropped it, so the
+    // two disagreed about which spans become records: measured, one record against
+    // none. Dropping is the safe side rather than merely the JSON side, because
+    // keeping it means deriving a run identifier from four bytes of something, and
+    // an unreadable parent id read as absent turns a delegation into a request
+    // arriving, which is the defect MAPPER_VERSION 2 was cut for.
+    let bad = |trace: &[u8], span_id: &[u8], parent: &[u8]| -> (Vec<u8>, String) {
+        let mut span = common::string_field(5, "s");
+        span.extend_from_slice(&common::len_delim(1, trace));
+        span.extend_from_slice(&common::len_delim(2, span_id));
+        if !parent.is_empty() {
+            span.extend_from_slice(&common::len_delim(4, parent));
+        }
+        span.extend_from_slice(&common::len_delim(
+            9,
+            &common::kv("gen_ai.operation.name", common::any_string("chat")),
+        ));
+        let scope = {
+            let mut s = common::len_delim(1, &common::string_field(1, SCOPE));
+            s.extend_from_slice(&common::len_delim(2, &span));
+            s
+        };
+        let rs = {
+            let mut r = common::len_delim(1, &[]);
+            r.extend_from_slice(&common::len_delim(2, &scope));
+            r
+        };
+        let pb = common::len_delim(1, &rs);
+        let hex = |b: &[u8]| b.iter().map(|x| format!("{x:02x}")).collect::<String>();
+        let parent_member = if parent.is_empty() {
+            String::new()
+        } else {
+            format!(",\"parentSpanId\":\"{}\"", hex(parent))
+        };
+        let js = format!(
+            "{{\"resourceSpans\":[{{\"scopeSpans\":[{{\"scope\":{{\"name\":\"{SCOPE}\"}},\
+             \"spans\":[{{\"traceId\":\"{}\",\"spanId\":\"{}\"{parent_member},\"name\":\"s\",\
+             \"attributes\":[{{\"key\":\"gen_ai.operation.name\",\
+             \"value\":{{\"stringValue\":\"chat\"}}}}]}}]}}]}}]}}",
+            hex(trace),
+            hex(span_id)
+        );
+        (pb, js)
+    };
+
+    let good_trace = [0xab; 16];
+    let good_span = [0x11; 8];
+    for (label, trace, span_id, parent) in [
+        (
+            "a four-byte trace id",
+            &[0xab; 4][..],
+            &good_span[..],
+            &[][..],
+        ),
+        (
+            "a nine-byte span id",
+            &good_trace[..],
+            &[0x11; 9][..],
+            &[][..],
+        ),
+        (
+            "a three-byte parent",
+            &good_trace[..],
+            &good_span[..],
+            &[0x22; 3][..],
+        ),
+    ] {
+        let (pb, js) = bad(trace, span_id, parent);
+        let wire = decode_trace_request(&pb, Limits::default()).expect("the wire decodes");
+        let text = decode_traces_data(js.as_bytes(), Limits::default(), JsonLimits::default(), 1)
+            .expect("the JSON decodes");
+        assert_eq!(
+            wire.span_count(),
+            0,
+            "{label}: the wire kept a span it cannot read an id from"
+        );
+        assert_eq!(text.request.span_count(), 0, "{label}");
+        assert_eq!(wire.dropped.spans, 1, "{label}: and it is counted");
+    }
+
+    // The well-formed shapes still arrive, including the three spellings of absent.
+    for (label, trace, span_id, parent) in [
+        (
+            "all present",
+            &good_trace[..],
+            &good_span[..],
+            &[0x22; 8][..],
+        ),
+        ("no parent", &good_trace[..], &good_span[..], &[][..]),
+        (
+            "an all-zero parent",
+            &good_trace[..],
+            &good_span[..],
+            &[0x00; 8][..],
+        ),
+    ] {
+        let (pb, js) = bad(trace, span_id, parent);
+        let wire = decode_trace_request(&pb, Limits::default()).expect("the wire decodes");
+        let text = decode_traces_data(js.as_bytes(), Limits::default(), JsonLimits::default(), 1)
+            .expect("the JSON decodes");
+        assert_eq!(wire.span_count(), 1, "{label}");
+        assert_eq!(text.request, wire, "{label}");
+        assert_eq!(wire.dropped.spans, 0, "{label}");
+    }
+}

@@ -527,20 +527,78 @@ fn a_full_queue_stops_reading_rather_than_growing() {
     assert_eq!(src.accept_chunk(&third, NOW), 0);
     assert_eq!(src.line_report().queue_full_stops, 1);
     assert_eq!(src.pending(), 2, "the queue did not grow");
-    assert!(
-        src.has_unreported_anomaly(),
-        "a stall an operator cannot see becomes a loss they cannot see either"
+
+    // The counter says how many times the reader STOPPED, not how many calls were
+    // refused while it was stopped. Re-feeding is the documented recovery, so a
+    // caller doing exactly the right thing five times must not be reported as five
+    // stalls: that would make the figure a property of the caller's retry loop
+    // rather than of the store, and a caller retrying every millisecond would
+    // report a thousand times what one retrying every second reports for identical
+    // conditions.
+    for _ in 0..5 {
+        assert_eq!(src.accept_chunk(&third, NOW), 0);
+    }
+    assert_eq!(
+        src.line_report().queue_full_stops,
+        1,
+        "one stall is one stall however patiently it is retried"
     );
 
-    // And nothing was lost: the same bytes were never consumed, so handing them
-    // over again after a drain produces the record.
+    // And a stall does not fabricate an anomaly record, because nothing was lost:
+    // the bytes were never read, so they are still the caller's. This assertion
+    // used to be the opposite, on the argument that a stall an operator cannot see
+    // becomes a loss they cannot see either. The argument is sound and the place
+    // was wrong. A stall is an operational condition and belongs in the reader's
+    // own report, which is what `line_report` is and what the binary prints; the
+    // record stream is evidence, and a record announcing a loss that did not happen
+    // teaches an operator to distrust the one that did. The HTTP surface already
+    // draws the line in the same place: backpressure there is a 503 to the client,
+    // not a record in the store.
+    assert!(
+        !src.has_unreported_anomaly(),
+        "a stall is not a loss and must not manufacture a record saying it was"
+    );
+
+    // Nothing was lost: the same bytes were never consumed, so handing them over
+    // again after a drain produces the record.
     assert_eq!(src.poll(16).unwrap().len(), 2);
     assert_eq!(src.accept_chunk(&third, NOW), 1);
     assert_eq!(src.poll(16).unwrap().len(), 1);
     assert_eq!(
         src.line_report().queue_full_stops,
         1,
-        "one stall, not one per retry"
+        "and the stall is still counted once after the recovery"
+    );
+
+    // Visible where it belongs: once an anomaly exists for a real reason, the stall
+    // is in its breakdown rather than being the reason.
+    let mut with_loss = JsonlSource::replay(cfg()).with_max_pending(1);
+    with_loss.accept_chunk(&first, NOW);
+    with_loss.accept_chunk(&second, NOW);
+    with_loss.accept_chunk(b"{\"resourceSpans\":[}\n", NOW);
+    assert_eq!(with_loss.line_report().queue_full_stops, 1);
+    let _ = with_loss.poll(16);
+    with_loss.accept_chunk(b"{\"resourceSpans\":[}\n", NOW);
+    assert!(
+        with_loss.has_unreported_anomaly(),
+        "a malformed line is a real loss and does produce a record"
+    );
+    let event = with_loss
+        .anomaly_event(NOW)
+        .expect("the malformed line earned an anomaly record");
+    let detail = String::from_utf8(
+        event
+            .payload
+            .iter()
+            .find(|p| p.class == PayloadClass::Diagnostic)
+            .expect("the breakdown is a diagnostic part")
+            .bytes
+            .clone(),
+    )
+    .expect("text");
+    assert!(
+        detail.contains("queue_full_stops\t1"),
+        "the stall belongs in the breakdown: {detail}"
     );
 }
 

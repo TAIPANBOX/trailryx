@@ -359,7 +359,13 @@ fn decode_scope_spans(
                     continue;
                 }
                 let mut sub = r.nested()?;
-                spans.push(decode_span(&mut sub, limits, dropped)?);
+                if let Some(span) = decode_span(&mut sub, limits, dropped)? {
+                    spans.push(span);
+                }
+                // Counted against the cap whether or not it survived, exactly as a
+                // span dropped for the cap itself is: the work of reading it was
+                // done, and a batch of a million malformed spans must not get a free
+                // pass past `max_spans`.
                 *spans_so_far += 1;
             }
             _ => r.skip(wire)?,
@@ -386,11 +392,27 @@ fn decode_scope(r: &mut Reader<'_>) -> Result<(String, String), WireError> {
     Ok((name, version))
 }
 
+/// One span, or none.
+///
+/// `None` for a span whose trace or span id is present at a length OTLP does not
+/// define. The JSON twin has always dropped that span and this one kept it, so the
+/// two transports disagreed about which spans became records: measured, a four-byte
+/// trace id gave one record on the wire and none in JSON. That is the same class as
+/// the depth bound that diverged in both directions, and the same answer, which is
+/// that the parity has to be a property of the code rather than of which reader you
+/// happened to use.
+///
+/// Dropping is the safe side of the disagreement and not merely the JSON side.
+/// Keeping a wrong-length id means deriving a run identifier from four bytes of
+/// something, and an unreadable `parent_span_id` treated as absent turns a
+/// delegation into a request arriving, which is exactly the defect `MAPPER_VERSION`
+/// 2 was cut for. A conforming emitter never sends another length: absent and
+/// all-zero are handled separately, as absent.
 fn decode_span(
     r: &mut Reader<'_>,
     limits: Limits,
     dropped: &mut Dropped,
-) -> Result<Span, WireError> {
+) -> Result<Option<Span>, WireError> {
     let mut span = Span {
         trace_id: Vec::new(),
         span_id: Vec::new(),
@@ -440,7 +462,31 @@ fn decode_span(
             _ => r.skip(wire)?,
         }
     }
-    Ok(span)
+    if !well_formed_id(&span.trace_id, TRACE_ID_BYTES)
+        || !well_formed_id(&span.span_id, SPAN_ID_BYTES)
+    {
+        dropped.spans = dropped.spans.saturating_add(1);
+        return Ok(None);
+    }
+    // A parent named at the wrong length is the reclassification hazard, so it costs
+    // the span too rather than being quietly read as no parent.
+    if !well_formed_id(&span.parent_span_id, SPAN_ID_BYTES) {
+        dropped.spans = dropped.spans.saturating_add(1);
+        return Ok(None);
+    }
+    Ok(Some(span))
+}
+
+/// Sixteen bytes for a trace, eight for a span, by the OTLP specification.
+const TRACE_ID_BYTES: usize = 16;
+const SPAN_ID_BYTES: usize = 8;
+
+/// Whether an id is absent or exactly the length OTLP defines.
+///
+/// Absent counts as well formed: an emitter omitting a parent, or writing it as all
+/// zeros, is saying there is no parent, and `is_absent` already reads both that way.
+fn well_formed_id(id: &[u8], expected: usize) -> bool {
+    is_absent(id) || id.len() == expected
 }
 
 fn decode_event(

@@ -7,7 +7,7 @@
 ![Stage](https://img.shields.io/badge/stage-9%20of%2013-blue.svg)
 ![Core](https://img.shields.io/badge/core-frozen-success.svg)
 ![Rust](https://img.shields.io/badge/rust-1.85%2B-orange.svg)
-![Tests](https://img.shields.io/badge/tests-674-success.svg)
+![Tests](https://img.shields.io/badge/tests-676-success.svg)
 ![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)
 ![Dependencies](https://img.shields.io/badge/dependencies-0-success.svg)
 ![Unsafe](https://img.shields.io/badge/unsafe-forbidden-success.svg)
@@ -249,7 +249,7 @@ and the proof shapes do not change without a version and a migration.
 | `trailryx-index` | Merkle history tree, completeness proofs, segment composition | 54 |
 | `trailryx-store` | sealing, the read surface, causal reconstruction | 58 |
 | `trailryx-json` | a strict bounded RFC 8259 reader and a JSON Lines framer. Depends on nothing | 116 |
-| `trailryx-otlp` | two OTLP transports, one mapper: protobuf and JSON, the GenAI semconv, the file source | 138 |
+| `trailryx-otlp` | two OTLP transports, one mapper: protobuf and JSON, the GenAI semconv, the file source | 140 |
 | `trailryx-assemble` | what a source handed over, made into records | 27 |
 | `trailryx-erasure` | payload envelopes, the key hierarchy, erasure | 35 |
 | `trailryx-verify` | the offline verifier, including its own ECDSA. Depends on nothing | 20 |
@@ -263,7 +263,7 @@ and the proof shapes do not change without a version and a migration.
 ## Try it
 
 ```bash
-cargo test                                    # 674 tests
+cargo test                                    # 676 tests
 cargo run --bin trailryx-sim-run -- --help
 ```
 
@@ -695,9 +695,15 @@ The skeptics ran on the second attempt, and three more findings survived them an
 are fixed here: one line with no terminator was counted as two unterminated tails,
 a repeated attribute key lost every value after the first to neither plane, and the
 `prompt_hash` fix above turned out to be half a fix, because the collision was still
-live one nesting level down in the shape the conventions actually use. Three candidates remain open, each measured against the code rather than counted, and
-listed in the roadmap rather than quietly dropped. That number read six until somebody
-checked it, which is the same staleness this README complains about elsewhere.
+live one nesting level down in the shape the conventions actually use. Nothing from that review is open now. The last three were closed the same day, and two
+of them were decisions about meaning rather than defects in code: a full queue counts
+the times the reader *stopped* rather than the times a caller politely retried, and is
+a diagnostic rather than a loss, because nothing was lost; `unknown_fields` counts per
+element on both transports, because that is what a repeated field is on the wire; and
+an identifier at a length OTLP does not define now drops the span on the wire as well
+as in JSON, because the alternative is deriving a run identifier from four bytes of
+something. The roadmap keeps the record of all of them, including the one that closed
+itself and the count that read six until somebody checked it.
 
 ## Erasing one person without breaking the audit trail
 

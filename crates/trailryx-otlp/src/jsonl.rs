@@ -177,10 +177,24 @@ pub struct LineReport {
     pub leading_bom: bool,
     /// Chunks refused because the queue was full.
     ///
-    /// Not yet a loss, and the last moment at which an operator can act before
-    /// it becomes one: the bytes were not read, so they are still the caller's,
-    /// but a live file that rotates while the reader is stalled takes them with
-    /// it. Charged as a loss for that reason.
+    /// How many times the reader **stopped accepting**, not how many calls were
+    /// refused while it was stopped.
+    ///
+    /// Both halves of that sentence were wrong once and both mattered. It counted
+    /// every call, so filling the queue and re-feeding the same chunk five times,
+    /// which is exactly the recovery the doc above describes, reported five stalls
+    /// where there was one. That made the number a property of the caller's retry
+    /// loop rather than of the store: a caller retrying every millisecond and one
+    /// retrying every second would report wildly different figures for identical
+    /// conditions, which is the same defect as a test that pins the machine it ran
+    /// on instead of the thing it tests.
+    ///
+    /// And it was classified a loss, which it is not. The bytes were never read, so
+    /// they are still the caller's and the same chunk goes in after a drain. A
+    /// diagnostic that says the drain is too slow is useful; an anomaly record
+    /// announcing data loss that did not happen teaches an operator to ignore the
+    /// counter that means it. If a caller gives up rather than re-feeding, the loss
+    /// is the caller's to report, because only the caller knows it happened.
     pub queue_full_stops: u64,
     /// Lines whose records went in without their clock being compared with ours,
     /// because the file is an archive.
@@ -312,7 +326,7 @@ impl Counters {
             ),
             counter("blank_lines", blank_lines, Diagnostic),
             counter("leading_bom", u64::from(leading_bom), Diagnostic),
-            counter("queue_full_stops", queue_full_stops, Loss),
+            counter("queue_full_stops", queue_full_stops, Diagnostic),
             counter("skew_not_assessed", skew_not_assessed, Diagnostic),
             // Everything a bound cost. Each one is a span, an attribute or a
             // value that a record does not have.
@@ -418,6 +432,9 @@ pub struct JsonlSource {
     tail_noted_at: Option<u64>,
     /// A byte-order mark said this stream is not UTF-8, so nothing more is read.
     stream_refused: bool,
+    /// Whether the reader is currently refusing chunks for a full queue, so the
+    /// counter can charge the transition rather than every call.
+    stalled: bool,
 }
 
 impl JsonlSource {
@@ -459,6 +476,7 @@ impl JsonlSource {
             anomalies_reported: 0,
             tail_noted_at: None,
             stream_refused: false,
+            stalled: false,
         }
     }
 
@@ -495,9 +513,17 @@ impl JsonlSource {
         // records can carry the queue over it; peak is `max_pending` plus one
         // chunk's worth, which is why a caller reads in fixed-size pieces.
         if self.pending.len() >= self.max_pending {
-            bump(&mut self.counters.lines.queue_full_stops);
+            // The edge, not the state. Counted only on the transition into being
+            // stalled, so a caller that re-feeds ten times while the queue is still
+            // full adds nothing: one stall is one stall however patiently it is
+            // retried.
+            if !self.stalled {
+                self.stalled = true;
+                bump(&mut self.counters.lines.queue_full_stops);
+            }
             return 0;
         }
+        self.stalled = false;
 
         let mut produced = 0usize;
         // The framer travels out and back because `push` borrows it while the
