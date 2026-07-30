@@ -14,9 +14,41 @@
 
 </div>
 
-Trailryx stores what AI agents did, and can **prove** it: show the full chain
-behind a decision, confirm no record was altered, prove that what you are
-looking at is **all** of it, and still erase one person on request.
+An agent refuses a refund. It emails a customer. It spends nine tenths of a budget
+in four minutes. Months later somebody asks what happened, and that somebody is a
+customer, an auditor, a regulator, or the engineer on call at 3am.
+
+Today the answer is logs, and the honest thing to say about logs is that anyone with
+access could have edited them, and that nobody can tell whether the lines you were
+shown are all the lines there were.
+
+Trailryx is a database built for that question. It keeps what agents did, and it can
+prove four things about what it hands back.
+
+**Nothing was altered.** Each record is sealed together with the one before it, so
+the records form a chain. Change a single field, or quietly drop a record from the
+middle, and every seal after it stops matching. The check is arithmetic on the data
+itself, so it does not depend on trusting whoever runs the database, and it can be
+run by someone who does not.
+
+**Nothing is missing.** Any database can show you five records. Showing that five is
+all there ever was is a different and much harder claim, and it is the one an auditor
+actually needs. So every answer arrives with a completeness proof: a short receipt,
+checkable on its own, saying these are all the records matching this question, for
+the fields Trailryx indexes.
+
+**The whole story, not one line.** A decision is not a single event. The record of
+one carries what led to it: which policy version was in force, what the budget was at
+each step, which model and settings, the prompt by its hash, which tools were within
+reach, what was retrieved. Ask why the refund was refused and you get the chain that
+produced it, not a line saying it was refused.
+
+**One person can still be erased.** People have the right to have their data deleted,
+and a ledger that cannot honour that is not lawful in Europe, whatever else it
+proves. Here each payload is encrypted under its own key, and erasing a person
+destroys their keys. The content becomes unrecoverable, every earlier proof still
+verifies, and the record itself shows that an erasure happened and when. Gone, and
+still provable that nothing else quietly went with it.
 
 Two sentences carry the whole design.
 
