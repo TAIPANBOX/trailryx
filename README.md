@@ -7,7 +7,7 @@
 ![Stage](https://img.shields.io/badge/stage-9%20of%2013-blue.svg)
 ![Core](https://img.shields.io/badge/core-frozen-success.svg)
 ![Rust](https://img.shields.io/badge/rust-1.85%2B-orange.svg)
-![Tests](https://img.shields.io/badge/tests-912-success.svg)
+![Tests](https://img.shields.io/badge/tests-917-success.svg)
 ![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)
 ![Dependencies](https://img.shields.io/badge/deps-0%20in%20the%20core-success.svg)
 ![Unsafe](https://img.shields.io/badge/unsafe-forbidden-success.svg)
@@ -244,7 +244,7 @@ and the proof shapes do not change without a version and a migration.
 | `trailryx-record` | the canonical record, its schema, and the plane boundary | 26 |
 | `trailryx-crypto` | SHA-384 and the hash chain | 14 |
 | `trailryx-core` | the simulated store the determinism criterion runs against | 15 |
-| `trailryx-contracts` | eight adapter traits and a conformance suite | 21 |
+| `trailryx-contracts` | eight adapter traits and a conformance suite | 22 |
 | `trailryx-journal` | wire format, append-only write path, recovery | 28 |
 | `trailryx-index` | Merkle history tree, completeness proofs, segment composition | 54 |
 | `trailryx-store` | sealing, the read surface, causal reconstruction | 67 |
@@ -285,7 +285,7 @@ thing an auditor reads.
 ## Try it
 
 ```bash
-cargo test                                    # 912 tests
+cargo test                                    # 917 tests
 cargo run --bin trailryx-sim-run -- --help
 ```
 
@@ -384,6 +384,41 @@ store holds events, so the name says which of the two is on offer.
 `trailryx_proof()` reports "none" before any query has been answered, not "full". A
 session that has proved nothing must not report the strongest value for the absence of
 an answer.
+
+### WORM protects a version, not a key, and that changes the design
+
+The architecture says object-store immutability means "even an administrator with
+rights cannot overwrite the segment". Read against what S3 Object Lock actually
+documents, that is true in one retention mode and only if the reader asks for a
+version:
+
+> Retention periods and legal holds **don't prevent new versions of the object from
+> being created**, or delete markers to be added on top of the object.
+
+So an actor with credentials can always `PUT` a new version over the key, and every
+reader that asks for the key alone gets their bytes. A plain `DELETE` is worse: it
+returns **200 OK**, inserts a delete marker, and the object vanishes from an ordinary
+read while the locked version sits underneath, intact and unreachable to anybody who
+does not know to ask for it.
+
+That is not a documentation nitpick, it is the difference between Object Lock
+protecting something and protecting nobody: the actor it exists to stop is the one with
+credentials. So `ObjectStore::put_if_absent` now returns **what the store called the
+object**, and `get_version` reads that one back regardless of what has been written
+over it since. A store with no versioning returns no token and refuses a version read,
+so a deployment learns it does not have the protection rather than assuming it does.
+"We enabled Object Lock" is a sentence that ends up in a compliance document.
+
+The two retention modes are also not interchangeable, and only one supports the
+architecture's sentence. In **governance** mode a user holding
+`s3:BypassGovernanceRetention` deletes the object, and the AWS console sends that
+header by default. Only **compliance** mode refuses everybody including the root
+account.
+
+`crates/trailryx-contracts/tests/object_lock.rs` runs the attack rather than describing
+it, against a fake that models S3's documented behaviour: the conditional write refuses
+a second publisher, an administrator writes a new version anyway, a plain read returns
+the forgery, and the published version still reads back by token.
 
 ### The raw journal, shaped the way PostgreSQL shaped the same problem
 
@@ -1128,7 +1163,7 @@ that is the part an auditor cannot do without the pack. It then says out loud th
 it did not check the authority's signature, and prints the command that does:
 
 ```
-[note]  anchor: "digicert" stamped this root at 1785421800, token 738 bytes, nonce 912344827
+[note]  anchor: "digicert" stamped this root at 1785421800, token 738 bytes, nonce 917344827
 [weak]  anchor-signature: this verifier checked that "digicert"'s token is over this
         root and did not check the authority's signature; verify it with
         `openssl ts -verify` against their published certificate

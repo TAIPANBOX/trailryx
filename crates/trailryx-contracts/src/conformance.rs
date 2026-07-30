@@ -171,14 +171,15 @@ pub fn object_store<S: ObjectStore>(s: &mut S) -> Report {
     let first = s.put_if_absent(key, b"first writer");
     r.check(
         "first write is accepted",
-        first == Ok(PutOutcome::Written),
+        matches!(first, Ok((PutOutcome::Written, _))),
         format!("expected Written, got {first:?}"),
     );
+    let published = first.ok().and_then(|(_, version)| version);
 
     let second = s.put_if_absent(key, b"second writer");
     r.check(
         "second write is refused",
-        second == Ok(PutOutcome::AlreadyExists),
+        matches!(second, Ok((PutOutcome::AlreadyExists, _))),
         format!("expected AlreadyExists, got {second:?}: two nodes could publish one segment"),
     );
 
@@ -209,6 +210,21 @@ pub fn object_store<S: ObjectStore>(s: &mut S) -> Report {
         !unrelated.iter().any(|k| k == key),
         "the prefix filter is not applied",
     );
+
+    // A store that versions must be able to hand back the version it published, and
+    // that version must be the bytes that were published, whatever has happened to the
+    // key since. A store that does not version says so by returning no token, and the
+    // check does not apply: what it must not do is return a token it cannot honour.
+    if let Some(version) = published {
+        let pinned = s.get_version(key, &version);
+        r.check(
+            "a published version reads back by its own token",
+            matches!(&pinned, Ok(Some(bytes)) if bytes.as_slice() == b"first writer"),
+            format!(
+                "the store gave a version token and then could not honour it: {pinned:?}.                  Object Lock protects a version, so a store that cannot read one back                  offers no protection against an actor with credentials"
+            ),
+        );
+    }
 
     r
 }

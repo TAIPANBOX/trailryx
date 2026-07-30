@@ -73,6 +73,10 @@ Stated here so nobody spends their time on it:
   `Aead::is_validated()` returns false and `Vault::new` refuses them. A deployment
   is expected to supply a validated implementation behind that seam. Breaking
   `Sha384Ctr` is not a finding; a way to bypass the `is_validated` check is.
+- **A published object read back by key rather than by version.** S3 Object Lock
+  protects a version, so an actor with credentials can put a new version over the key
+  and a reader that does not pin the version gets it. A path in this store that reads a
+  published segment or manifest without its version token is a report.
 - **An unauthenticated read of the trail over the Postgres port.** The facade's
   startup handler consults the deployment's `AuthProvider` for `Action::Query`, a
   routable bind with no provider refuses to start, and a poisoned provider denies for

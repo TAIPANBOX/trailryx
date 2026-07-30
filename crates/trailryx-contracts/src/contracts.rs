@@ -144,20 +144,70 @@ pub enum PutOutcome {
     AlreadyExists,
 }
 
+/// What a store called a written object, so it can be asked for that one again.
+///
+/// Opaque and store-specific: an S3 version id, a GCS generation, an Azure ETag. It
+/// is a token to hand back, never a value to compare or to order.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct VersionId(pub String);
+
 /// Cold storage for sealed segments.
 ///
-/// **Guarantee to preserve:** [`ObjectStore::put_if_absent`] is atomic. That
-/// single conditional write is what lets a segment be published without any
-/// coordinator: no etcd, no Consul, no lock service. S3 gives it via
-/// `If-None-Match`, GCS via `ifGenerationMatch`, Azure via ETag preconditions,
-/// a filesystem via `rename` within one volume.
+/// # Two guarantees, and the second one is the one that is easy to miss
 ///
-/// An implementation that overwrites instead would let two nodes publish
-/// different bytes under one name, and every proof built on that segment would
-/// depend on which one you happened to read.
+/// **Atomic publication.** [`ObjectStore::put_if_absent`] is atomic. That single
+/// conditional write is what lets a segment be published without any coordinator: no
+/// etcd, no Consul, no lock service. S3 gives it via `If-None-Match`, GCS via
+/// `ifGenerationMatch`, Azure via ETag preconditions, a filesystem via `rename`
+/// within one volume. An implementation that overwrote instead would let two nodes
+/// publish different bytes under one name, and every proof built on that segment
+/// would depend on which one you happened to read.
+///
+/// **A published object is read back by version, not by key.** This is not
+/// belt-and-braces, it is the difference between WORM protecting anything and
+/// protecting nothing, and it comes from reading what S3 Object Lock actually does:
+///
+/// > Retention periods and legal holds **don't prevent new versions of the object
+/// > from being created**, or delete markers to be added on top of the object.
+///
+/// Object Lock protects a **version**. An administrator can always `PUT` a new
+/// version over the key, and every reader that asks for the key alone sees the new
+/// one. A plain `DELETE` is worse: it returns `200 OK`, inserts a delete marker, and
+/// the object disappears from an ordinary read while the locked version sits
+/// underneath, intact and unreachable to anybody who does not know to ask for it.
+///
+/// So the store records the version it published and reads that version back. Without
+/// that, turning Object Lock on defends against exactly nobody: the actor it exists
+/// to stop is the one with credentials, and that actor can put a new version.
+///
+/// A store with no versioning returns `None` and the caller loses the protection
+/// rather than silently believing it has it. Said out loud, because "we enabled
+/// Object Lock" is the sentence somebody puts in a compliance document.
 pub trait ObjectStore {
-    fn put_if_absent(&mut self, key: &str, bytes: &[u8]) -> AdapterResult<PutOutcome>;
+    /// Write only if the key is absent, and say what the store called the result.
+    ///
+    /// `None` for a version means this store does not version objects, which is a
+    /// fact about the deployment and not an error.
+    fn put_if_absent(
+        &mut self,
+        key: &str,
+        bytes: &[u8],
+    ) -> AdapterResult<(PutOutcome, Option<VersionId>)>;
+
+    /// The current object under a key, whatever version that is now.
+    ///
+    /// For reads where a later version is the right answer. Never for reading back
+    /// something this store published: see [`ObjectStore::get_version`].
     fn get(&mut self, key: &str) -> AdapterResult<Option<Vec<u8>>>;
+
+    /// One specific version, whatever has been written over it since.
+    ///
+    /// The read that survives an administrator, a delete marker, and a second
+    /// publisher. A store without versioning answers `Unsupported`, which a caller
+    /// must treat as "this deployment cannot offer that protection" rather than as a
+    /// transient failure.
+    fn get_version(&mut self, key: &str, version: &VersionId) -> AdapterResult<Option<Vec<u8>>>;
+
     fn list(&mut self, prefix: &str) -> AdapterResult<Vec<String>>;
 }
 

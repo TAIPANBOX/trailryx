@@ -475,7 +475,11 @@ impl<O: ObjectStore, K: KeyProvider, A: Aead, S: KeySource> Vault<O, K, A, S> {
         // second erasure's manifest was never stored anywhere while its record
         // committed to the hash of it.
         let object_key = format!("erasure/{}", manifest_hash.to_hex());
-        if self.store.put_if_absent(&object_key, &manifest)? == PutOutcome::AlreadyExists {
+        // The version is not kept here: an erasure manifest is content-addressed, so
+        // its key already commits to its bytes and a substituted version fails the
+        // hash check below rather than needing a token to detect.
+        let (outcome, _version) = self.store.put_if_absent(&object_key, &manifest)?;
+        if outcome == PutOutcome::AlreadyExists {
             // Content-addressed, so this is the same bytes by construction
             // unless the store handed back something else, and that is worth
             // finding out about rather than assuming.

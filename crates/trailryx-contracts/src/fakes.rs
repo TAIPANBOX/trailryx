@@ -18,7 +18,7 @@ use crate::contracts::{
     Action, AdapterError, AdapterResult, Anchor, AnchorReceipt, AuthProvider, Decision, Delivery,
     Destroyed, ForeignColumn, ForeignTable, KeyId, KeyProvider, Lossiness, ObjectStore, Ordering,
     Peer, PeerDescriptor, PeerResponse, Principal, ProofStatus, PutOutcome, Sink, SinkDescriptor,
-    Source, SourceDescriptor, Trust,
+    Source, SourceDescriptor, Trust, VersionId,
 };
 use crate::ingest::{Cursor, Ingest};
 use std::collections::{BTreeMap, BTreeSet};
@@ -38,16 +38,29 @@ pub struct MemoryObjectStore {
 }
 
 impl ObjectStore for MemoryObjectStore {
-    fn put_if_absent(&mut self, key: &str, bytes: &[u8]) -> AdapterResult<PutOutcome> {
+    fn put_if_absent(
+        &mut self,
+        key: &str,
+        bytes: &[u8],
+    ) -> AdapterResult<(PutOutcome, Option<VersionId>)> {
         if self.objects.contains_key(key) {
-            return Ok(PutOutcome::AlreadyExists);
+            return Ok((PutOutcome::AlreadyExists, None));
         }
         self.objects.insert(key.to_owned(), bytes.to_vec());
-        Ok(PutOutcome::Written)
+        // No versioning, and it says so with `None` rather than inventing a token it
+        // could not honour. A caller then knows this deployment cannot offer the
+        // protection a version-pinned read gives.
+        Ok((PutOutcome::Written, None))
     }
 
     fn get(&mut self, key: &str) -> AdapterResult<Option<Vec<u8>>> {
         Ok(self.objects.get(key).cloned())
+    }
+
+    fn get_version(&mut self, _key: &str, _version: &VersionId) -> AdapterResult<Option<Vec<u8>>> {
+        Err(AdapterError::Unsupported(
+            "this store does not version objects, so a version cannot be read back",
+        ))
     }
 
     fn list(&mut self, prefix: &str) -> AdapterResult<Vec<String>> {
@@ -71,13 +84,21 @@ pub struct OverwritingObjectStore {
 }
 
 impl ObjectStore for OverwritingObjectStore {
-    fn put_if_absent(&mut self, key: &str, bytes: &[u8]) -> AdapterResult<PutOutcome> {
+    fn put_if_absent(
+        &mut self,
+        key: &str,
+        bytes: &[u8],
+    ) -> AdapterResult<(PutOutcome, Option<VersionId>)> {
         self.objects.insert(key.to_owned(), bytes.to_vec());
-        Ok(PutOutcome::Written)
+        Ok((PutOutcome::Written, None))
     }
 
     fn get(&mut self, key: &str) -> AdapterResult<Option<Vec<u8>>> {
         Ok(self.objects.get(key).cloned())
+    }
+
+    fn get_version(&mut self, _key: &str, _version: &VersionId) -> AdapterResult<Option<Vec<u8>>> {
+        Err(AdapterError::Unsupported("no versioning here either"))
     }
 
     fn list(&mut self, prefix: &str) -> AdapterResult<Vec<String>> {
@@ -85,6 +106,101 @@ impl ObjectStore for OverwritingObjectStore {
             .objects
             .keys()
             .filter(|k| k.starts_with(prefix))
+            .cloned()
+            .collect())
+    }
+}
+
+/// A store that versions objects the way S3 does, so the attack can be run.
+///
+/// Modelled on what the S3 documentation actually says rather than on what Object Lock
+/// is assumed to do:
+///
+/// - A `PUT` over an existing key **succeeds** and creates a new version. Retention
+///   and legal holds do not prevent it.
+/// - A plain read returns the **newest** version.
+/// - A delete returns success and hides the object from a plain read, while every
+///   earlier version remains.
+/// - A read by version id returns that version regardless of any of the above.
+///
+/// `put_if_absent` still refuses a second publication, because that is what the
+/// conditional write is for. What this fake exists to show is that refusing the
+/// conditional write is **not enough**: an actor with credentials does not need
+/// `put_if_absent`, they can write the key directly, and a reader that asks for the
+/// key alone gets their bytes.
+#[derive(Debug, Default, Clone)]
+pub struct VersioningObjectStore {
+    /// Every version ever written, oldest first, per key.
+    versions: BTreeMap<String, Vec<(VersionId, Vec<u8>)>>,
+    /// Keys hidden by a delete marker. The versions stay.
+    deleted: BTreeSet<String>,
+    next: u64,
+}
+
+impl VersioningObjectStore {
+    /// Write a new version regardless of what is there, the way an administrator with
+    /// credentials can, and the way Object Lock does not prevent.
+    pub fn overwrite(&mut self, key: &str, bytes: &[u8]) -> VersionId {
+        self.next += 1;
+        let version = VersionId(format!("v{}", self.next));
+        self.versions
+            .entry(key.to_owned())
+            .or_default()
+            .push((version.clone(), bytes.to_vec()));
+        self.deleted.remove(key);
+        version
+    }
+
+    /// A simple `DELETE`: succeeds, hides the key from a plain read, and destroys
+    /// nothing.
+    pub fn delete_marker(&mut self, key: &str) {
+        self.deleted.insert(key.to_owned());
+    }
+
+    pub fn version_count(&self, key: &str) -> usize {
+        self.versions.get(key).map_or(0, Vec::len)
+    }
+}
+
+impl ObjectStore for VersioningObjectStore {
+    fn put_if_absent(
+        &mut self,
+        key: &str,
+        bytes: &[u8],
+    ) -> AdapterResult<(PutOutcome, Option<VersionId>)> {
+        if self.versions.contains_key(key) {
+            return Ok((PutOutcome::AlreadyExists, None));
+        }
+        let version = self.overwrite(key, bytes);
+        Ok((PutOutcome::Written, Some(version)))
+    }
+
+    fn get(&mut self, key: &str) -> AdapterResult<Option<Vec<u8>>> {
+        if self.deleted.contains(key) {
+            return Ok(None);
+        }
+        Ok(self
+            .versions
+            .get(key)
+            .and_then(|v| v.last())
+            .map(|(_, bytes)| bytes.clone()))
+    }
+
+    fn get_version(&mut self, key: &str, version: &VersionId) -> AdapterResult<Option<Vec<u8>>> {
+        // A delete marker does not reach a version, which is the entire point.
+        Ok(self.versions.get(key).and_then(|versions| {
+            versions
+                .iter()
+                .find(|(id, _)| id == version)
+                .map(|(_, bytes)| bytes.clone())
+        }))
+    }
+
+    fn list(&mut self, prefix: &str) -> AdapterResult<Vec<String>> {
+        Ok(self
+            .versions
+            .keys()
+            .filter(|k| k.starts_with(prefix) && !self.deleted.contains(*k))
             .cloned()
             .collect())
     }
