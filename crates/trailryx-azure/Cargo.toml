@@ -1,0 +1,18 @@
+[package]
+name = "trailryx-azure"
+description = "Azure Blob Storage over the workspace's own HTTP client, with Shared Key signing"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+# Zero third-party dependencies, like the S3 adapter. Azure's Shared Key signature
+# is one HMAC and two canonicalisations, both of which the workspace already has.
+[dependencies]
+trailryx-contracts = { path = "../trailryx-contracts" }
+trailryx-crypto = { path = "../trailryx-crypto" }
+trailryx-http = { path = "../trailryx-http" }
+
+[lints]
+workspace = true
