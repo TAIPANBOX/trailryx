@@ -22,7 +22,7 @@ fifteen plus `cargo audit`, so a green push is a green pull request.
 
 | What | Number | Command |
 |---|---|---|
-| Tests | 1,026 across 28 crates | `cargo test --workspace` |
+| Tests | 1,028 across 28 crates | `cargo test --workspace` |
 | Third-party dependencies in the verifier | 0 | `cargo tree -p trailryx-verify` |
 | Third-party dependencies in the core | 0 | `./scripts/declared-deps.sh` |
 | `unsafe` | forbidden at the workspace level, and grepped for | `grep -rn unsafe crates` |
@@ -186,6 +186,34 @@ fake we wrote agreeing with a client we wrote.
 under contention, throttling, or a real TLS chain, and this bucket has no versioning.
 A run against a live bucket is in *not yet measured*, and it needs a credential and
 costs money.
+
+### The Azure adapter against Microsoft's own emulator
+
+Shared Key signing is a harder version of the same risk than SigV4: the string to
+sign is a fixed run of lines whose emptiness rules are documented in prose. Ours was
+already pinned to Microsoft's two published worked examples, which is a strong check
+on the algorithm and no check at all on everything around it.
+
+```
+docker run -d -p 10000:10000 mcr.microsoft.com/azure-storage/azurite \
+  azurite-blob --blobHost 0.0.0.0
+TRAILRYX_AZURE_ENDPOINT=http://devstoreaccount1.blob.localhost:10000 \
+TRAILRYX_AZURE_CONTAINER=trailryx TRAILRYX_AZURE_ACCOUNT=devstoreaccount1 \
+TRAILRYX_AZURE_KEY=... cargo test -p trailryx-azure --test live -- --nocapture
+```
+
+Put, get and list pass, and so does the one that matters: **Azurite refuses the
+second conditional write and keeps the first blob's bytes.** No `Host` bug here, the
+Azure client never added one, and the signature was accepted first time.
+
+Two things the run pinned down that no fake would have:
+
+- **The endpoint must be production-shaped**, with the account in the host. Aimed at
+  Azurite's path-shaped default the signature is *accepted* and the answer is `404
+  ResourceNotFound`, which sends a reader to the signer for an afternoon.
+- **Azurite's debug log prints the string to sign it expected**, the same way the AWS
+  CLI's debug output settles a SigV4 argument. That is what caught a `Content-Type`
+  header a helper library had added on its own.
 
 ### Fuzzing depth
 

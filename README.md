@@ -7,7 +7,7 @@
 ![Stage](https://img.shields.io/badge/stage-13%20of%2013-blue.svg)
 ![Core](https://img.shields.io/badge/core-frozen-success.svg)
 ![Rust](https://img.shields.io/badge/rust-1.85%2B-orange.svg)
-![Tests](https://img.shields.io/badge/tests-1026-success.svg)
+![Tests](https://img.shields.io/badge/tests-1028-success.svg)
 ![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)
 ![Dependencies](https://img.shields.io/badge/deps-0%20in%20the%20verifier-success.svg)
 ![Unsafe](https://img.shields.io/badge/unsafe-forbidden-success.svg)
@@ -294,7 +294,7 @@ migration. What stage 13 still wants is measured absence rather than a guess, an
 | `trailryx-sign` | what gets signed, and what a witness attests to | 4 |
 | `trailryx-http` | the workspace's one HTTP/1.1 client. No TLS, no redirects, no reuse | 11 |
 | `trailryx-s3` | SigV4, S3 and Google Cloud Storage over that client. No cloud SDK | 35 |
-| `trailryx-azure` | Azure Blob Storage: Shared Key signing, and the four operations | 16 |
+| `trailryx-azure` | Azure Blob Storage: Shared Key signing, and the four operations | 18 |
 | `trailryx-federation` | composing an answer across environments, and refusing to call it complete when it is not | 7 |
 | `trailryx-fuzz` | every hand-written parser, fed bytes it did not expect, from a seed | 5 |
 | `trailryx-publish` | atomic publication of a sealed segment, and the fault model for it | 11 |
@@ -389,7 +389,7 @@ are different questions, and until this week that step answered only the second.
 ## Try it
 
 ```bash
-cargo test                                    # 1026 tests
+cargo test                                    # 1028 tests
 cargo run --bin trailryx-sim-run -- --help
 ```
 
@@ -1482,7 +1482,7 @@ that is the part an auditor cannot do without the pack. It then says out loud th
 it did not check the authority's signature, and prints the command that does:
 
 ```
-[note]  anchor: "digicert" stamped this root at 1785421800, token 738 bytes, nonce 1026344827
+[note]  anchor: "digicert" stamped this root at 1785421800, token 738 bytes, nonce 1028344827
 [weak]  anchor-signature: this verifier checked that "digicert"'s token is over this
         root and did not check the authority's signature; verify it with
         `openssl ts -verify` against their published certificate
@@ -1533,7 +1533,7 @@ failure mode the verifier exists to catch. And the exit code follows the pack's
 verdict, not the table, because a table of obligations means nothing about a pack
 that does not verify.
 
-The mapping covers the AI Act, **prEN ISO/IEC 241026** (the profile document for AI
+The mapping covers the AI Act, **prEN ISO/IEC 241028** (the profile document for AI
 system logging, still a draft, so its clauses are quoted nowhere), SR 11-7 and the
 SOC 2 criteria. It lists the obligations this store does nothing for, by name,
 because a mapping that shows only its wins reads as complete. `docs/compliance.md`
