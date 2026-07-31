@@ -15,6 +15,7 @@ pub mod cold;
 pub mod evidence;
 pub mod query;
 pub mod seal;
+pub mod tier;
 
 pub use causal::{Bounds, Hop, Reconstruction, Stopped, reconstruct};
 pub use evidence::PackBuilder;
