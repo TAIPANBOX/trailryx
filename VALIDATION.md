@@ -288,11 +288,22 @@ its JSON upload handler and answers `400 invalid uploadType`, with or without
 publishes emulators for Pub/Sub, Firestore, Bigtable, Datastore and Spanner, and none
 for Cloud Storage.
 
-So **GCS is checked against our own fake and against Google's documentation, and
-against nothing that Google wrote**, which is exactly the position the S3 adapter was
-in the morning of the day its `Host` bug was found. Closing it needs a real bucket and
-an interoperability HMAC key, which is credentials and money, and it is in *not yet
-measured* with the others.
+That left GCS checked against our own fake and against Google's documentation and
+against nothing Google wrote, which was exactly the position the S3 adapter was in on
+the morning of the day its `Host` bug was found.
+
+**It did not stay there. That gap was closed the same day**, by the live run recorded
+under *Both clouds, for real, over TLS* above: a real bucket, an interoperability HMAC
+key, generation `1785506773704642` read back, and Google itself refusing the second
+conditional write. It found two defects in the first minutes, and neither was findable
+without a real endpoint, which is the argument for the run in one sentence.
+
+This paragraph used to end by saying the gap needed credentials and money and was
+listed in *not yet measured*. Both halves were wrong by the time anyone read them: the
+run had happened, and that section names GCS among the clouds already exercised. The
+paragraph was written before the run and never revisited, which is the ordinary way a
+validation record starts lying: not by inventing a measurement, but by keeping the
+sentence that described the world before one.
 
 ### Fuzzing depth
 
