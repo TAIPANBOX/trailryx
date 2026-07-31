@@ -16,9 +16,13 @@
 //!
 //! # What it deliberately does not do
 //!
-//! - **No TLS.** `https` is refused by name rather than attempted and failed, so a
-//!   configuration problem reads as one. Transport security here is the deployment's
-//!   job, the same seam as ingest and the SQL port: a terminator in front.
+//! - **TLS only with the `tls` feature.** Without it `https` is refused by name
+//!   rather than attempted and failed, so a configuration problem reads as one.
+//!   Inbound transport security stays the deployment's job, a terminator in front,
+//!   the same seam as ingest and the SQL port. Outbound has no such seam: nothing
+//!   sits in front of a client reaching somebody else's object store, so the client
+//!   has to do it. `rustls` on the same `aws-lc-rs` backend as the cryptographic
+//!   provider, so a deployment links one implementation rather than two.
 //! - **No redirects.** S3 answers `301` with `PermanentRedirect` when the region is
 //!   wrong, and following it silently would move a write to a bucket the operator
 //!   did not name. The status is returned and the caller decides.
@@ -41,6 +45,9 @@
 use std::io::{Read, Write};
 use std::net::{TcpStream, ToSocketAddrs};
 use std::time::Duration;
+
+#[cfg(feature = "tls")]
+pub mod tls;
 
 /// The header section's ceiling, counted while reading rather than after.
 const MAX_HEADERS: usize = 16 * 1024;
@@ -141,7 +148,8 @@ pub trait Http {
 
 #[derive(Debug)]
 pub enum UrlError {
-    /// Not an `http://` URL. `https` is refused by name: this client has no TLS.
+    /// Not a URL this build can reach. Without the `tls` feature that means
+    /// anything but `http://`, and with it, anything but `http://` or `https://`.
     NotHttp,
     /// No host between the scheme and the path.
     NoHost,
@@ -152,7 +160,12 @@ pub enum UrlError {
 impl std::fmt::Display for UrlError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::NotHttp => f.write_str("only http:// is supported here; this client has no TLS"),
+            #[cfg(not(feature = "tls"))]
+            Self::NotHttp => f.write_str(
+                "only http:// is supported: this build has no TLS, which is the `tls` feature",
+            ),
+            #[cfg(feature = "tls")]
+            Self::NotHttp => f.write_str("only http:// and https:// are supported"),
             Self::NoHost => f.write_str("the URL has no host"),
             Self::BadPort => f.write_str("the URL's port is not a usable number"),
         }
@@ -161,9 +174,27 @@ impl std::fmt::Display for UrlError {
 
 impl std::error::Error for UrlError {}
 
+/// Whether a connection is wrapped in TLS.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Scheme {
+    Plain,
+    #[cfg(feature = "tls")]
+    Tls,
+}
+
 /// An HTTP/1.1 client bound to one origin.
 #[derive(Debug, Clone)]
 pub struct Client {
+    // Both fields exist in every build so the two differ by as little as possible.
+    // Without TLS nothing reads them, and a build that carried different fields
+    // would be a second client to keep correct.
+    #[cfg_attr(not(feature = "tls"), allow(dead_code))]
+    scheme: Scheme,
+    /// The host on its own, which TLS verifies the certificate against. Kept apart
+    /// from `host` because that one carries the port when it is not the default,
+    /// and a certificate is issued for a name, not for a name and a port.
+    #[cfg_attr(not(feature = "tls"), allow(dead_code))]
+    server_name: String,
     /// `host:port`, resolved per call rather than at construction, so a long-lived
     /// process follows DNS instead of pinning whatever it saw at startup.
     authority: String,
@@ -172,6 +203,8 @@ pub struct Client {
     connect_timeout: Duration,
     io_timeout: Duration,
     max_response: usize,
+    #[cfg(feature = "tls")]
+    tls: tls::Tls,
 }
 
 impl Client {
@@ -179,7 +212,22 @@ impl Client {
     /// purpose: the path belongs to the request, and an origin carrying one is
     /// usually a base URL somebody meant to join and did not.
     pub fn new(origin: &str) -> Result<Self, UrlError> {
-        let rest = origin.strip_prefix("http://").ok_or(UrlError::NotHttp)?;
+        #[cfg(feature = "tls")]
+        let (scheme, rest, default_port) = match origin.strip_prefix("https://") {
+            Some(rest) => (Scheme::Tls, rest, 443u16),
+            None => (
+                Scheme::Plain,
+                origin.strip_prefix("http://").ok_or(UrlError::NotHttp)?,
+                80,
+            ),
+        };
+        #[cfg(not(feature = "tls"))]
+        let (scheme, rest, default_port) = (
+            Scheme::Plain,
+            origin.strip_prefix("http://").ok_or(UrlError::NotHttp)?,
+            80u16,
+        );
+
         let authority = rest.split('/').next().unwrap_or(rest);
         if authority.is_empty() {
             return Err(UrlError::NoHost);
@@ -192,14 +240,17 @@ impl Client {
                 }
                 (host, port)
             }
-            None => (authority, 80),
+            None => (authority, default_port),
         };
         if host.is_empty() {
             return Err(UrlError::NoHost);
         }
         Ok(Self {
+            scheme,
+            server_name: host.to_owned(),
             authority: format!("{host}:{port}"),
-            host: if port == 80 {
+            // RFC 9110: the default port for the scheme is omitted from Host.
+            host: if port == default_port {
                 host.to_owned()
             } else {
                 format!("{host}:{port}")
@@ -207,6 +258,8 @@ impl Client {
             connect_timeout: Duration::from_secs(10),
             io_timeout: Duration::from_secs(30),
             max_response: DEFAULT_MAX_RESPONSE,
+            #[cfg(feature = "tls")]
+            tls: tls::Tls::new(),
         })
     }
 
@@ -221,12 +274,36 @@ impl Client {
         self
     }
 
+    /// Verify certificates against a private authority instead of the compiled-in
+    /// public roots, which is the normal arrangement inside a bank.
+    #[cfg(feature = "tls")]
+    pub fn with_tls(mut self, tls: tls::Tls) -> Self {
+        self.tls = tls;
+        self
+    }
+
     /// The `Host` header this client will send, which a signature has to agree with.
     pub fn host(&self) -> &str {
         &self.host
     }
 
+    #[cfg(feature = "tls")]
+    fn connect(&self) -> Result<tls::Stream, String> {
+        let socket = self.connect_tcp()?;
+        match self.scheme {
+            Scheme::Plain => Ok(tls::Stream::Plain(socket)),
+            Scheme::Tls => Ok(tls::Stream::Tls(Box::new(
+                self.tls.wrap(&self.server_name, socket)?,
+            ))),
+        }
+    }
+
+    #[cfg(not(feature = "tls"))]
     fn connect(&self) -> Result<TcpStream, String> {
+        self.connect_tcp()
+    }
+
+    fn connect_tcp(&self) -> Result<TcpStream, String> {
         let mut last = "no address resolved".to_owned();
         let addresses = self
             .authority
@@ -432,11 +509,19 @@ mod tests {
     }
 
     #[test]
-    fn https_and_other_schemes_are_refused_by_name() {
-        for origin in ["https://s3.amazonaws.com", "s3.amazonaws.com", "ftp://x"] {
+    fn schemes_this_build_cannot_reach_are_refused_by_name() {
+        // `https` belongs in this list only when the build has no TLS. Attempting
+        // it and failing at the handshake would report a connection problem for
+        // what is a build-configuration problem.
+        #[cfg(not(feature = "tls"))]
+        let refused = ["https://s3.amazonaws.com", "s3.amazonaws.com", "ftp://x"];
+        #[cfg(feature = "tls")]
+        let refused = ["s3.amazonaws.com", "ftp://x"];
+
+        for origin in refused {
             assert!(
                 matches!(Client::new(origin), Err(UrlError::NotHttp)),
-                "{origin} should be refused as not http"
+                "{origin} should be refused as unreachable by this build"
             );
         }
         assert!(matches!(Client::new("http://"), Err(UrlError::NoHost)));
@@ -446,6 +531,33 @@ mod tests {
                 "{origin} should be refused for its port"
             );
         }
+    }
+
+    /// The two things a scheme decides: the default port, and what `Host` omits.
+    /// Both are easy to get half right, and a `Host` carrying `:443` is refused by
+    /// several stores that are otherwise perfectly happy.
+    #[cfg(feature = "tls")]
+    #[test]
+    fn an_https_origin_takes_the_port_and_the_host_header_its_scheme_implies() {
+        let c = Client::new("https://s3.eu-central-1.amazonaws.com").expect("a valid origin");
+        assert_eq!(c.authority, "s3.eu-central-1.amazonaws.com:443");
+        assert_eq!(
+            c.host, "s3.eu-central-1.amazonaws.com",
+            "443 is the default for https and is omitted from Host"
+        );
+        assert_eq!(c.server_name, "s3.eu-central-1.amazonaws.com");
+        assert_eq!(c.scheme, Scheme::Tls);
+
+        let c = Client::new("https://minio.internal:9000").expect("a valid origin");
+        assert_eq!(c.host, "minio.internal:9000", "a non-default port stays");
+        assert_eq!(
+            c.server_name, "minio.internal",
+            "the certificate is verified against the name, never the authority"
+        );
+
+        // And plain http still takes 80, in the same build.
+        let c = Client::new("http://127.0.0.1:9000").expect("a valid origin");
+        assert_eq!(c.scheme, Scheme::Plain);
     }
 
     #[test]

@@ -507,14 +507,24 @@ Three rules in SigV4 are the ones that bite, and each has its own test:
 - **The signing key starts from `"AWS4" + secret`**, not the secret. Getting that
   wrong produces a valid-looking signature that is simply refused.
 
-**There is no TLS in it, and that is a limit rather than a position.** The client
-speaks `http://` and refuses `https://` by name, so today this reaches a store over a
-private network or through a terminator the deployment provides, the same seam as
-ingest and the SQL port. Signing a request does protect it from being altered in
-flight, but it does not hide the object, so a public endpoint over plain HTTP is not
-a deployment anybody should run. Writing a TLS stack by hand is exactly the line this
-project does not cross, so this one ends with a dependency or a proxy, and until it
-is decided the README says so rather than letting the word S3 imply the rest.
+**TLS is a feature of the HTTP client, off by default.** Without it the client speaks
+`http://` and refuses `https://` by name, which suits a store on a private network and
+keeps the default build at no dependencies at all. With `--features tls` it takes
+`rustls` on the same `aws-lc-rs` backend the cryptographic provider uses, so a
+deployment links one implementation of AES rather than two.
+
+This is the one place transport security could not be left to a terminator in front,
+which is how ingest and the SQL port handle it: nothing sits in front of a client
+reaching somebody else's object store. Signing a request protects it from being
+altered in flight and does not hide the object, so a public endpoint over plain HTTP
+was never a deployment anybody should run.
+
+Certificates are verified against the Mozilla root set compiled into the binary rather
+than the host's store. That is deliberate in both directions: the same binary trusts
+the same roots everywhere, which is what makes a reproducible build mean something,
+and a corporate root installed on one machine is not picked up silently. A deployment
+with its own certificate authority, which in a bank is most of them, supplies it
+explicitly.
 
 ### A successful publication that nobody was told about
 
@@ -1546,16 +1556,17 @@ proves and erases. That is the test of whose engine it is.
 git config core.hooksPath .githooks   # once
 ```
 
-`.githooks/pre-push` runs thirteen checks and refuses the push if any fails:
+`.githooks/pre-push` runs fourteen checks and refuses the push if any fails:
 formatting, clippy with warnings as errors, the tests, a standalone build of the
 substrate crate, a zero-dependency check on every crate outside the SQL facade, a
 build and test of the core with the facade absent, an `unsafe` check, the determinism
 criterion, the published seed corpus, the two verifiers agreeing on the same packs, a
-reproducible build of the verifier from two different paths, every number this README
-states about the repository, and a 200-seed durability sweep. About a minute and a
+reproducible build of the verifier from two different paths, the TLS build of the HTTP
+client, every number this README states about the repository, and a 200-seed
+durability sweep. About a minute and a
 half, most of it the facade's dependency tree.
 
-The thirteenth is the newest and the least glamorous. An audit of this page on 30
+The one about numbers is the least glamorous and the most useful. An audit of this page on 30
 July 2026 found six crate test counts that had drifted as tests were added, a
 dependency figure behind the facade that no reading of the tree reproduced, and a
 description of the verifier's token reader that was off by a factor of two. None of
@@ -1564,7 +1575,7 @@ is a claim with no owner. So the badge, the totals and every row of the crate ta
 are now checked against what the suite actually runs, and the push fails when they
 disagree.
 
-`.github/workflows/ci.yml` runs the same thirteen plus `cargo audit`, which stopped being trivially green the day the facade arrived and is now a real check with real work behind it, so a green push
+`.github/workflows/ci.yml` runs the same fourteen plus `cargo audit`, which stopped being trivially green the day the facade arrived and is now a real check with real work behind it, so a green push
 is a green pull request. It keeps a guard that skips every job while the repository
 is private, because Actions minutes are metered there and free here. The repository
 went public on 30 July 2026 and the condition released itself, which is why it was

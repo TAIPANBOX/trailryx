@@ -1,16 +1,28 @@
 [package]
 name = "trailryx-http"
-description = "The workspace's one HTTP/1.1 client. No TLS, no redirects, no reuse"
+description = "The workspace's one HTTP/1.1 client. TLS behind a feature, no redirects, no reuse"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 repository.workspace = true
 rust-version.workspace = true
 
-# Zero third-party dependencies. This crate is the whole reason writing the S3
-# adapter by hand is defensible rather than reckless: the cost of not taking
-# `aws-sdk-s3` is this file plus a signature.
+# Zero third-party dependencies in the default build, which is what the gate
+# measures and what the anchor gets. TLS is optional because the two callers want
+# different things: a timestamp authority is reached over a private network or not
+# at all, and an object store on the public internet cannot be.
 [dependencies]
+rustls = { version = "0.23", optional = true, default-features = false, features = [
+  "aws-lc-rs",
+  "std",
+  "tls12",
+] }
+webpki-roots = { version = "0.26", optional = true }
+
+[features]
+# The same backend the cryptographic provider uses, so a deployment links one
+# implementation of AES and one of the post-quantum key exchange rather than two.
+tls = ["dep:rustls", "dep:webpki-roots"]
 
 [lints]
 workspace = true

@@ -157,6 +157,13 @@ step "two verifiers agree" cargo test -p trailryx-store --test two_verifiers --q
 # other exit criterion, and it takes about three seconds.
 step "verifier build is reproducible" ./scripts/reproduce.sh
 
+# A feature nobody builds is a feature that rots. The default build of the HTTP
+# client has no dependencies, which is what the check above measures, so the TLS
+# build has to be exercised separately or it would break silently and only in a
+# deployment.
+step "the TLS build still works" \
+  cargo test -p trailryx-http --features tls --quiet
+
 # Every number the README states about this repository, against the repository.
 # Added after an audit found six drifted crate counts, a dependency figure no reading
 # of the tree reproduced, and a line off by a factor of two. None of them was a lie
