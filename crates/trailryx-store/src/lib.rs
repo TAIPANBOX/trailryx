@@ -11,6 +11,7 @@
 //! links it produced.** Nothing here invents a leaf.
 
 pub mod causal;
+pub mod cold;
 pub mod evidence;
 pub mod query;
 pub mod seal;

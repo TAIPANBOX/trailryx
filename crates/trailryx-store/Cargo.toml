@@ -8,7 +8,9 @@ repository.workspace = true
 rust-version.workspace = true
 
 [dependencies]
+trailryx-contracts = { path = "../trailryx-contracts" }
 trailryx-crypto = { path = "../trailryx-crypto" }
+trailryx-publish = { path = "../trailryx-publish" }
 trailryx-index = { path = "../trailryx-index" }
 trailryx-journal = { path = "../trailryx-journal" }
 trailryx-record = { path = "../trailryx-record" }
@@ -21,7 +23,6 @@ trailryx-verify = { path = "../trailryx-verify" }
 # A dev-dependency, so the store itself still does not depend on the anchor: when
 # a store anchors is an operational decision and the seam is `Anchor`.
 trailryx-anchor = { path = "../trailryx-anchor" }
-trailryx-contracts = { path = "../trailryx-contracts" }
 # For the coverage assertions in `tests/anchored.rs`: the mapping is derived from a
 # verifier report, so a real pack is the only honest input to it.
 trailryx-compliance = { path = "../trailryx-compliance" }

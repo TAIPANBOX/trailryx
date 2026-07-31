@@ -20,9 +20,10 @@
 //! pack carrying prompts would turn every audit into a data export, and the
 //! erasure guarantees would have to follow it out of the building.
 
+use trailryx_index::Dimension;
 use trailryx_index::segment::{Segment, SegmentManifest, ShardTree, StoreTree};
 use trailryx_journal::wire::encode_record;
-use trailryx_record::{Hash, TenantId, Timestamp};
+use trailryx_record::{Hash, SegmentId, ShardIx, TenantId, Timestamp};
 use trailryx_sign::{RootSignature, WitnessAttestation};
 
 pub const MAGIC: &[u8; 7] = b"TRXEVID";
@@ -295,7 +296,11 @@ fn put_str(out: &mut Vec<u8>, s: &str) {
     put_bytes(out, s.as_bytes());
 }
 
-fn encode_manifest(m: &SegmentManifest) -> Vec<u8> {
+/// The manifest's bytes inside a pack, and the same bytes the cold tier publishes.
+///
+/// Public so that one encoding serves both, rather than a second one drifting from
+/// this one in a way nobody notices until a pack and an object disagree.
+pub fn encode_manifest(m: &SegmentManifest) -> Vec<u8> {
     let mut out = Vec::new();
     out.extend_from_slice(&m.format_version.to_be_bytes());
     out.extend_from_slice(&m.segment.0.to_be_bytes());
@@ -336,4 +341,111 @@ fn algorithm_code(m: &SegmentManifest) -> [u8; 3] {
             KemAlg::X25519MlKem768 => 1,
         },
     ]
+}
+
+/// The inverse of [`encode_manifest`], for reading a manifest back out of cold
+/// storage.
+///
+/// `None` on anything it cannot read, without saying which field: these bytes come
+/// from a bucket, and a decoder that narrated where it stopped would be describing
+/// somebody else's object to them.
+///
+/// Every read is bounded before it happens. A declared count is not an allocation
+/// and a declared length is not a slice, which is the same rule every other parser
+/// in this workspace follows for the same reason.
+pub fn decode_manifest(bytes: &[u8]) -> Option<SegmentManifest> {
+    use trailryx_record::{Algorithms, HashAlg, KemAlg, SigAlg};
+
+    let mut r = Reader { b: bytes, at: 0 };
+    let format_version = r.u16()?;
+    let segment = SegmentId(r.u64()?);
+    let shard = ShardIx(r.u16()?);
+    let records = r.u64()?;
+    let history_root = r.hash()?;
+    let chain_before = r.hash()?;
+    let chain_after = r.hash()?;
+
+    let count = r.u64()?;
+    // Bounded by what is left rather than by what was declared: each entry costs at
+    // least four bytes of name and forty-eight of root.
+    if count > (bytes.len() as u64) / 52 {
+        return None;
+    }
+    let mut index_roots = Vec::with_capacity(count as usize);
+    for _ in 0..count {
+        let name = r.str()?;
+        let dimension = Dimension::ALL
+            .iter()
+            .copied()
+            .find(|d| d.as_str() == name)?;
+        index_roots.push((dimension, r.hash()?));
+    }
+
+    let first_recorded_at = Timestamp(r.u64()?);
+    let last_recorded_at = Timestamp(r.u64()?);
+    let algorithms = Algorithms {
+        hash: match r.u8()? {
+            1 => HashAlg::Sha384,
+            _ => return None,
+        },
+        signature: match r.u8()? {
+            1 => SigAlg::Es256,
+            2 => SigAlg::MlDsa65,
+            3 => SigAlg::SlhDsa,
+            4 => SigAlg::Es384,
+            _ => return None,
+        },
+        kem: match r.u8()? {
+            1 => KemAlg::X25519MlKem768,
+            _ => return None,
+        },
+    };
+    if r.at != bytes.len() {
+        return None;
+    }
+    Some(SegmentManifest {
+        format_version,
+        segment,
+        shard,
+        records,
+        history_root,
+        index_roots,
+        chain_before,
+        chain_after,
+        first_recorded_at,
+        last_recorded_at,
+        algorithms,
+    })
+}
+
+struct Reader<'a> {
+    b: &'a [u8],
+    at: usize,
+}
+
+impl Reader<'_> {
+    fn take(&mut self, n: usize) -> Option<&[u8]> {
+        let end = self.at.checked_add(n)?;
+        let out = self.b.get(self.at..end)?;
+        self.at = end;
+        Some(out)
+    }
+    fn u8(&mut self) -> Option<u8> {
+        Some(self.take(1)?[0])
+    }
+    fn u16(&mut self) -> Option<u16> {
+        Some(u16::from_be_bytes(self.take(2)?.try_into().ok()?))
+    }
+    fn u64(&mut self) -> Option<u64> {
+        Some(u64::from_be_bytes(self.take(8)?.try_into().ok()?))
+    }
+    fn hash(&mut self) -> Option<Hash> {
+        let mut out = [0u8; 48];
+        out.copy_from_slice(self.take(48)?);
+        Some(Hash(out))
+    }
+    fn str(&mut self) -> Option<String> {
+        let len = u32::from_be_bytes(self.take(4)?.try_into().ok()?) as usize;
+        String::from_utf8(self.take(len)?.to_vec()).ok()
+    }
 }

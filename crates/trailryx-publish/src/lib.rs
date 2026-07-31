@@ -92,11 +92,20 @@ impl Publication {
     /// back and compare, and a retry of a half-finished publication costs one
     /// refused write rather than a re-upload.
     pub fn body_key(&self) -> String {
+        self.body_key_for(&digest(&self.body))
+    }
+
+    /// The body's key for a digest somebody else already holds.
+    ///
+    /// A reader coming back later has the digest from the manifest and does not have
+    /// the body, which is exactly the case [`Publication::body_key`] cannot serve:
+    /// it derives the digest from bytes the reader is trying to fetch.
+    pub fn body_key_for(&self, body_digest: &Hash) -> String {
         format!(
             "segments/{}/{:016x}-{}.trx",
             self.shard,
             self.segment.0,
-            digest(&self.body).to_hex()
+            body_digest.to_hex()
         )
     }
 
@@ -105,6 +114,17 @@ impl Publication {
     pub fn manifest_key(&self) -> String {
         format!("manifests/{}/{:016x}.mf", self.shard, self.segment.0)
     }
+}
+
+/// The digest a body's key is built from.
+///
+/// Public because a reader coming back later needs the same value from the same
+/// function. Two places computing "the digest of the body" with their own domain
+/// separation is how a publisher and a reader end up naming two different keys for
+/// one object, which is exactly what happened the first time the cold tier was
+/// written against a private copy of this.
+pub fn body_digest(bytes: &[u8]) -> Hash {
+    digest(bytes)
 }
 
 fn digest(bytes: &[u8]) -> Hash {

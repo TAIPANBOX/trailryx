@@ -3875,6 +3875,7 @@ dependencies = [
  "trailryx-crypto",
  "trailryx-index",
  "trailryx-journal",
+ "trailryx-publish",
  "trailryx-record",
  "trailryx-sign",
  "trailryx-sim",
