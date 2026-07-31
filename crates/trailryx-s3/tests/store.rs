@@ -17,7 +17,7 @@ use std::sync::mpsc;
 use std::thread;
 
 use trailryx_contracts::{ObjectStore, PutOutcome, VersionId};
-use trailryx_s3::{Addressing, Conditional, Credentials, FixedClock, S3};
+use trailryx_s3::{Addressing, Conditional, Credentials, FixedClock, Flavour, S3};
 
 /// What the fake understood a request to be, so a test can assert on what was sent
 /// and not only on what came back.
@@ -37,6 +37,14 @@ impl Seen {
     }
 }
 
+/// Which cloud the fake is pretending to be. The two differ in four places and
+/// nowhere else, which is the claim the GCS tests exist to check.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Cloud {
+    Aws,
+    Gcs,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Honesty {
     /// Honours `If-None-Match: *` the way AWS documents.
@@ -52,8 +60,12 @@ struct Fake {
 }
 
 impl Fake {
-    /// Serve `requests` exchanges and then stop.
     fn start(honesty: Honesty, requests: usize) -> Self {
+        Self::start_as(Cloud::Aws, honesty, requests)
+    }
+
+    /// Serve `requests` exchanges and then stop.
+    fn start_as(cloud: Cloud, honesty: Honesty, requests: usize) -> Self {
         let listener = TcpListener::bind("127.0.0.1:0").expect("a port");
         let port = listener.local_addr().expect("an address").port();
         let (tx, seen) = mpsc::channel();
@@ -65,10 +77,15 @@ impl Fake {
                 let Ok((stream, _)) = listener.accept() else {
                     return;
                 };
-                serve(stream, &mut objects, honesty, &tx);
+                serve(stream, &mut objects, cloud, honesty, &tx);
             }
         });
         Self { port, seen }
+    }
+
+    fn gcs_store(&self) -> S3 {
+        self.store(Conditional::IfNoneMatchStar)
+            .with_flavour(Flavour::Gcs)
     }
 
     fn store(&self, conditional: Conditional) -> S3 {
@@ -90,6 +107,7 @@ impl Fake {
 fn serve(
     mut stream: TcpStream,
     objects: &mut HashMap<String, Vec<Vec<u8>>>,
+    cloud: Cloud,
     honesty: Honesty,
     tx: &mpsc::Sender<Seen>,
 ) {
@@ -152,33 +170,50 @@ fn serve(
         .map(|(_bucket, key)| key.to_owned())
         .unwrap_or_default();
 
+    let listing = match cloud {
+        Cloud::Aws => query.contains("list-type=2"),
+        Cloud::Gcs => method == "GET" && key.is_empty(),
+    };
     let response: Vec<u8> = if key.starts_with("forbidden/") {
         xml_error(
             403,
             "SignatureDoesNotMatch",
             "the request signature does not match",
         )
-    } else if query.contains("list-type=2") {
-        list(objects, query)
+    } else if listing {
+        list(objects, query, cloud)
     } else if method == "PUT" {
         let exists = objects.contains_key(&key);
-        let conditional = seen.header("if-none-match").is_some();
+        let conditional = match cloud {
+            Cloud::Aws => seen.header("if-none-match").is_some(),
+            // Google's own header, and the value it documents as "only if the
+            // object does not currently exist".
+            Cloud::Gcs => seen.header("x-goog-if-generation-match") == Some("0"),
+        };
         if exists && conditional && honesty == Honesty::Conditional {
             xml_error(412, "PreconditionFailed", "the key was already taken")
         } else {
             let versions = objects.entry(key).or_default();
             versions.push(body);
+            let header = match cloud {
+                Cloud::Aws => "x-amz-version-id",
+                Cloud::Gcs => "x-goog-generation",
+            };
             format!(
-                "HTTP/1.1 200 OK\r\nx-amz-version-id: v{}\r\nETag: \"{}\"\r\nContent-Length: 0\r\n\r\n",
+                "HTTP/1.1 200 OK\r\n{header}: v{}\r\nETag: \"{}\"\r\nContent-Length: 0\r\n\r\n",
                 versions.len(),
                 versions.len()
             )
             .into_bytes()
         }
     } else if method == "GET" {
+        let param = match cloud {
+            Cloud::Aws => "versionId=",
+            Cloud::Gcs => "generation=",
+        };
         let wanted = query
             .split('&')
-            .find_map(|p| p.strip_prefix("versionId="))
+            .find_map(|p| p.strip_prefix(param))
             .map(percent_decode);
         match (objects.get(&key), wanted) {
             (Some(versions), None) => body_response(versions.last().cloned().unwrap_or_default()),
@@ -202,7 +237,7 @@ fn serve(
 
 /// A listing, two keys per page and chunked, because that is how S3 answers one and
 /// a client that cannot decode chunked cannot list a bucket at all.
-fn list(objects: &HashMap<String, Vec<Vec<u8>>>, query: &str) -> Vec<u8> {
+fn list(objects: &HashMap<String, Vec<Vec<u8>>>, query: &str, cloud: Cloud) -> Vec<u8> {
     let param = |name: &str| -> Option<String> {
         query
             .split('&')
@@ -210,7 +245,11 @@ fn list(objects: &HashMap<String, Vec<Vec<u8>>>, query: &str) -> Vec<u8> {
             .map(percent_decode)
     };
     let prefix = param("prefix").unwrap_or_default();
-    let after = param("continuation-token").unwrap_or_default();
+    let after = match cloud {
+        Cloud::Aws => param("continuation-token"),
+        Cloud::Gcs => param("marker"),
+    }
+    .unwrap_or_default();
 
     let mut keys: Vec<String> = objects
         .keys()
@@ -234,10 +273,17 @@ fn list(objects: &HashMap<String, Vec<Vec<u8>>>, query: &str) -> Vec<u8> {
     }
     body.push_str(&format!("<IsTruncated>{truncated}</IsTruncated>"));
     if truncated {
-        body.push_str(&format!(
-            "<NextContinuationToken>{}</NextContinuationToken>",
-            escape(page.last().expect("a non-empty page"))
-        ));
+        match cloud {
+            Cloud::Aws => body.push_str(&format!(
+                "<NextContinuationToken>{}</NextContinuationToken>",
+                escape(page.last().expect("a non-empty page"))
+            )),
+            // Deliberately absent: without a delimiter the marker-based listing
+            // returns no NextMarker and the client is expected to continue from the
+            // last key it received. A client that only read NextMarker would page
+            // correctly until the day somebody stopped using a delimiter.
+            Cloud::Gcs => {}
+        }
     }
     body.push_str("</ListBucketResult>");
 
@@ -510,5 +556,88 @@ fn a_refusal_keeps_the_stores_own_code_and_message() {
             .expect("kept for the operator")
             .to_string()
             .contains("SignatureDoesNotMatch")
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Google Cloud Storage, which speaks the same API through four different names.
+
+/// The claim this whole flavour rests on: the XML API is the S3 API, so the same
+/// signer, the same client and the same XML reach both. What differs is the header
+/// that makes a write conditional and the header that names the version.
+#[test]
+fn a_segment_publishes_atomically_to_google_too() {
+    let fake = Fake::start_as(Cloud::Gcs, Honesty::Conditional, 3);
+    let mut store = fake.gcs_store();
+
+    let (first, version) = store
+        .put_if_absent("segments/000001.trx", b"the winner's bytes")
+        .expect("the first write");
+    assert_eq!(first, PutOutcome::Written);
+    assert_eq!(
+        version,
+        Some(VersionId("v1".to_owned())),
+        "the generation comes back from x-goog-generation, not x-amz-version-id"
+    );
+
+    let (second, _) = store
+        .put_if_absent("segments/000001.trx", b"a different segment")
+        .expect("the second write is an outcome, not an error");
+    assert_eq!(second, PutOutcome::AlreadyExists);
+    assert_eq!(
+        store.get("segments/000001.trx").expect("a read"),
+        Some(b"the winner's bytes".to_vec())
+    );
+
+    let sent = fake.seen.recv().expect("the first request");
+    assert_eq!(
+        sent.header("x-goog-if-generation-match"),
+        Some("0"),
+        "Google's condition is a generation of zero, not an ETag wildcard"
+    );
+    assert!(
+        sent.header("authorization").expect("a signature").contains(
+            "SignedHeaders=host;x-amz-content-sha256;x-amz-date;x-goog-if-generation-match"
+        ),
+        "the condition has to be signed here too, or a proxy could strip it"
+    );
+}
+
+/// The version read that survives an administrator, under Google's parameter name.
+#[test]
+fn a_generation_is_readable_after_the_key_has_moved_on() {
+    let fake = Fake::start_as(Cloud::Gcs, Honesty::IgnoresPreconditions, 3);
+    let mut store = fake.gcs_store();
+
+    let (_, first) = store.put_if_absent("k", b"one").expect("the first write");
+    store.put_if_absent("k", b"two").expect("the second write");
+    assert_eq!(
+        store
+            .get_version("k", &first.expect("a generation"))
+            .expect("a versioned read"),
+        Some(b"one".to_vec()),
+        "asked for with ?generation=, which is what this store answers to"
+    );
+}
+
+/// The marker-based listing, and the case that catches a client written only
+/// against the documented happy path: no NextMarker comes back, so continuing means
+/// continuing from the last key received.
+#[test]
+fn a_listing_pages_by_marker_when_nothing_hands_back_a_token() {
+    let fake = Fake::start_as(Cloud::Gcs, Honesty::Conditional, 5 + 3);
+    let mut store = fake.gcs_store();
+    for n in 1..=5 {
+        store
+            .put_if_absent(&format!("runs/2026-07-31/{n:06}.trx"), b"x")
+            .expect("a write");
+    }
+    let keys = store.list("runs/2026-07-31/").expect("a listing");
+    assert_eq!(
+        keys,
+        (1..=5)
+            .map(|n| format!("runs/2026-07-31/{n:06}.trx"))
+            .collect::<Vec<_>>(),
+        "all five, across three pages, with no continuation token in sight"
     );
 }

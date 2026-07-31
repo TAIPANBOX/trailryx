@@ -52,6 +52,52 @@ use crate::sigv4::{self, Credentials, Request as SignedRequest};
 use crate::time::amz_timestamp;
 use crate::xml;
 
+/// Which cloud is on the other end.
+///
+/// Google Cloud Storage's XML API **is** the S3 API: the same verbs, the same
+/// signature, the same XML. That is why this adapter reaches both rather than
+/// existing twice. Four things differ, and each one is here rather than scattered:
+/// the header that makes a write conditional, the response header that names the
+/// version, the query parameter that asks for one, and how a listing pages.
+///
+/// Reaching GCS this way needs an **interoperability HMAC key** on the Google side,
+/// which an operator creates deliberately and some organisations disable. That is a
+/// deployment prerequisite rather than something this code can arrange, and it is
+/// the honest cost of not writing a second adapter with OAuth and JWT signing in it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Flavour {
+    Aws,
+    Gcs,
+}
+
+impl Flavour {
+    /// The header that makes a write happen only if the key is free.
+    fn conditional_header(self) -> (&'static str, &'static str) {
+        match self {
+            // AWS documents `*` as the only value it accepts here.
+            Self::Aws => ("if-none-match", "*"),
+            // Google documents 0 as "only if the object does not currently exist".
+            Self::Gcs => ("x-goog-if-generation-match", "0"),
+        }
+    }
+
+    /// The response header carrying what the store called the written version.
+    fn version_header(self) -> &'static str {
+        match self {
+            Self::Aws => "x-amz-version-id",
+            Self::Gcs => "x-goog-generation",
+        }
+    }
+
+    /// The query parameter that asks for one specific version.
+    fn version_param(self) -> &'static str {
+        match self {
+            Self::Aws => "versionId",
+            Self::Gcs => "generation",
+        }
+    }
+}
+
 /// How a bucket is named in a request.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Addressing {
@@ -173,6 +219,7 @@ pub struct S3 {
     credentials: Credentials,
     addressing: Addressing,
     conditional: Conditional,
+    flavour: Flavour,
     /// Kept so an operator can print the last refusal after the contract has
     /// narrowed it to a `&'static str`.
     last_failure: Option<Failure>,
@@ -187,6 +234,7 @@ impl std::fmt::Debug for S3 {
             .field("region", &self.region)
             .field("addressing", &self.addressing)
             .field("conditional", &self.conditional)
+            .field("flavour", &self.flavour)
             .finish_non_exhaustive()
     }
 }
@@ -234,6 +282,7 @@ impl S3 {
             credentials,
             addressing,
             conditional,
+            flavour: Flavour::Aws,
             last_failure: None,
         })
     }
@@ -257,8 +306,15 @@ impl S3 {
             credentials,
             addressing,
             conditional,
+            flavour: Flavour::Aws,
             last_failure: None,
         }
+    }
+
+    /// Point this adapter at Google Cloud Storage's XML API instead of S3.
+    pub fn with_flavour(mut self, flavour: Flavour) -> Self {
+        self.flavour = flavour;
+        self
     }
 
     pub fn with_clock(mut self, clock: Box<dyn Clock + Send>) -> Self {
@@ -367,14 +423,14 @@ impl S3 {
             Method::Put,
             &path,
             &[],
-            &[("if-none-match", "*")],
+            &[self.flavour.conditional_header()],
             bytes.to_vec(),
         )?;
         match response.status {
             200 => Ok((
                 PutOutcome::Written,
                 response
-                    .header("x-amz-version-id")
+                    .header(self.flavour.version_header())
                     .map(|v| VersionId(v.to_owned())),
             )),
             // The race was lost. A normal outcome, not a failure: the loser now
@@ -402,7 +458,7 @@ impl S3 {
         version: &VersionId,
     ) -> Result<Option<Vec<u8>>, Failure> {
         let path = self.path_for(key);
-        let query = vec![("versionId".to_owned(), version.0.clone())];
+        let query = vec![(self.flavour.version_param().to_owned(), version.0.clone())];
         let response = self.send(Method::Get, &path, &query, &[], Vec::new())?;
         match response.status {
             200 => Ok(Some(response.body)),
@@ -435,12 +491,23 @@ impl S3 {
         let mut keys = Vec::new();
         let mut token: Option<String> = None;
         loop {
-            let mut query = vec![
-                ("list-type".to_owned(), "2".to_owned()),
-                ("prefix".to_owned(), prefix.to_owned()),
-            ];
+            // Two pagination styles, because the two clouds page differently and
+            // pretending otherwise means a listing that silently stops after one
+            // page on one of them. AWS has the newer continuation tokens; Google's
+            // XML API is the original marker-based listing.
+            let mut query = match self.flavour {
+                Flavour::Aws => vec![
+                    ("list-type".to_owned(), "2".to_owned()),
+                    ("prefix".to_owned(), prefix.to_owned()),
+                ],
+                Flavour::Gcs => vec![("prefix".to_owned(), prefix.to_owned())],
+            };
             if let Some(token) = &token {
-                query.push(("continuation-token".to_owned(), token.clone()));
+                let name = match self.flavour {
+                    Flavour::Aws => "continuation-token",
+                    Flavour::Gcs => "marker",
+                };
+                query.push((name.to_owned(), token.clone()));
             }
             let response = self.send(Method::Get, &path, &query, &[], Vec::new())?;
             if response.status != 200 {
@@ -466,11 +533,21 @@ impl S3 {
             if xml::text_of(&body, "IsTruncated").as_deref() != Some("true") {
                 return Ok(keys);
             }
-            match xml::text_of(&body, "NextContinuationToken") {
+            let next = match self.flavour {
+                Flavour::Aws => xml::text_of(&body, "NextContinuationToken"),
+                // The marker-based listing returns `NextMarker` only when a
+                // delimiter was used, and otherwise expects the client to continue
+                // from the last key it received. Both cases are handled, because
+                // taking only the first would page correctly right up until the
+                // day somebody stops using a delimiter.
+                Flavour::Gcs => xml::text_of(&body, "NextMarker").or_else(|| keys.last().cloned()),
+            };
+            match next {
                 Some(next) => token = Some(next),
                 None => {
                     return Err(Failure::Malformed(
-                        "the store said the listing was truncated and gave no continuation token"
+                        "the store said the listing was truncated and gave nothing to \
+                         continue from"
                             .to_owned(),
                     ));
                 }

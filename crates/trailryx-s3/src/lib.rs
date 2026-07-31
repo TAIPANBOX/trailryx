@@ -11,5 +11,5 @@ pub mod sigv4;
 pub mod time;
 pub mod xml;
 
-pub use client::{Addressing, Clock, Conditional, Failure, FixedClock, S3, SystemClock};
+pub use client::{Addressing, Clock, Conditional, Failure, FixedClock, Flavour, S3, SystemClock};
 pub use sigv4::Credentials;
