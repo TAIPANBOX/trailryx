@@ -4,7 +4,7 @@
 
 Everything below is a rule, not a description. Each one says what holds it today:
 
-- `(gate: <path>)` a check that refuses the push. Most live in `scripts/`; a few are still written inline in `.githooks/pre-push`, and that difference matters, see the debt list.
+- `(gate: <path>)` a check that refuses the push, written once in `scripts/` and called by both `.githooks/pre-push` and CI.
 - `(test: <name>)` a test, and nothing else.
 - `(not checked)` this line is the only thing holding it. Treat those as the fragile ones.
 
@@ -12,13 +12,13 @@ Everything below is a rule, not a description. Each one says what holds it today
 
 ## Invariants
 
-1. **Never write `unsafe`.** The workspace lint forbids it and the gate greps for it anyway. *(gate: .githooks/pre-push)*
+1. **Never write `unsafe`.** The workspace lint forbids it and the gate greps for it anyway, because a lint can be relaxed in a manifest by somebody who meant well. *(gate: scripts/no-unsafe.sh)*
 
 2. **Never add a third-party dependency to the core or to `trailryx-verify`.** A dependency belongs in an L2 adapter, and that adapter's crate name must be added to the allow-list in the gate script before its dependency will build. The reason is not minimalism: an auditor reads the verifier, and every crate pulled into it is a crate they are asked to trust instead of read. Everything else (a validated cipher, a post-quantum KEM, TLS, a SQL engine) is taken from whoever does it better than we would, because nobody buys a proof store for its author's AES. *(gate: scripts/declared-deps.sh)*
 
 3. **The core must build and pass its tests with every adapter absent.** If it cannot, an adapter has got into the foundation. *(gate: scripts/declared-deps.sh)*
 
-4. **Never read a clock, a random number, a disk or a socket directly from the core.** Go through `Clock`, `Rng`, `Io`, `Net`, or deterministic simulation stops working and every guarantee built on it stops meaning anything. *(gate: .githooks/pre-push, determinism)*
+4. **Never read a clock, a random number, a disk or a socket directly from the core.** Go through `Clock`, `Rng`, `Io`, `Net`, or deterministic simulation stops working and every guarantee built on it stops meaning anything; breaking this does not announce itself, it shows up as two runs of one seed that no longer agree. *(gate: scripts/determinism.sh)*
 
 5. **Never put free text in the metadata plane.** Typed fields only: identifiers, enums, hashes, numbers, timestamps. Any prose lives in the encrypted payload plane under the subject's key, or `forget` leaves personal data behind and the promise is false. *(test: no_prompt_text_reaches_the_metadata_plane)*
 
@@ -44,7 +44,7 @@ Everything below is a rule, not a description. Each one says what holds it today
 
 16. **If two places need the same value, export it from one and import it in both.** Two functions computing what is meant to be one number is how a publisher and a reader end up disagreeing about the same object. *(not checked)*
 
-17. **If a check exists in two places, it is one file that both call.** *(not checked, and currently violated: see the debt list)*
+17. **A check with any logic or parameters of its own goes in `scripts/`, and both the hook and CI call it.** Bare `cargo` invocations may stay written out in both; anything carrying a seed, a flag, a pattern or a list may not, because that is what drifts. *(not checked, and it is a rule because a drifted copy once made CI refuse a push the hook had passed)*
 
 18. **Never let a test wait without a bound.** A hanging test reports nothing at all: no failure, no name, no output, which is less than a wrong answer tells you. *(not checked)*
 
@@ -61,7 +61,7 @@ Everything below is a rule, not a description. Each one says what holds it today
 **Decisions with no gate yet.** This list is debt, and it is here so it stays visible:
 
 - Invariants 9, 10, 15, 16, 17 and 18 above are held by nothing but their own sentence.
-- Three checks are written inline in both `.githooks/pre-push` and `.github/workflows/ci.yml` rather than in one file both call: `no unsafe`, `determinism`, and the durability sweep. The dependency check was in that same shape until its two copies disagreed and CI failed a push the hook had passed, which is why it now lives in `scripts/declared-deps.sh` and why invariant 17 exists. These three have not drifted yet.
+- The fuzz step differs between the hook and CI on purpose, 300 cases against 3,000: the hook is fast and CI is thorough. Do not "fix" it into agreement.
 - `qryx scan --policy cnsa` is run on demand, not on push.
 - The federation transport (gRPC with mutual TLS, decision A2) is specified and unbuilt: the completeness rule exists, the wires do not.
 

@@ -61,25 +61,15 @@ jobs:
       - name: core builds without adapters
         run: cargo test --workspace $(./scripts/declared-deps.sh list) --quiet
 
-      # The workspace lint forbids it, so this is a second pair of eyes on the lint.
+      # One file, shared with .githooks/pre-push, so the two cannot drift.
       - name: no unsafe
-        run: |
-          if grep -rIn --include='*.rs' -E '^\s*unsafe\b|[^a-z_]unsafe\s*\{' crates; then
-            echo "::error::unsafe found"
-            exit 1
-          fi
+        run: ./scripts/no-unsafe.sh
 
       # The exit criterion of stage 0, checked on every push rather than once. If a
       # seed stops reproducing a run, every guarantee built on the simulator stops
       # meaning anything.
       - name: determinism, same seed twice
-        run: |
-          run() { cargo run --quiet --bin trailryx-sim-run -- \
-                    --seed 20260729 --steps 800 --shards 3 --sync-every 4 \
-                    --crash-ppm 12000 --hostile --honest-disk; }
-          a=$(run); b=$(run)
-          [ -n "$a" ] && [ "$a" = "$b" ] || { printf 'run 1: %s\nrun 2: %s\n' "$a" "$b"; exit 1; }
-          echo "$a"
+        run: ./scripts/determinism.sh
 
       # Trivially green today, and that is the point rather than an excuse: with zero
       # dependencies there is nothing to audit, so this check exists for the day one
@@ -95,7 +85,7 @@ jobs:
       # the violation count written down for it. A determinism check, not a
       # correctness one, and `sim/corpus.tsv` says so in its own header.
       - name: seed corpus reproduces
-        run: cargo run --quiet --release --bin trailryx-sim-run -- --corpus sim/corpus.tsv
+        run: ./scripts/seed-corpus.sh
 
       # Two verifiers, one pack: the Rust one and `verifier-py/trailryx_verify.py`.
       # Two implementations that agree prove the format rather than the author.
@@ -127,7 +117,4 @@ jobs:
 
       # Enough to catch a write-path regression. The long sweep belongs in a nightly.
       - name: durability sweep, 200 seeds
-        run: |
-          cargo run --quiet --release --bin trailryx-sim-run -- \
-            --seed 1 --sweep 200 --steps 300 --shards 3 --sync-every 4 \
-            --crash-ppm 15000 --hostile --honest-disk
+        run: ./scripts/durability-sweep.sh

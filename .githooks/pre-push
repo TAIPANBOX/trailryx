@@ -32,6 +32,25 @@ step() {
   fi
 }
 
+# The same, but printing what the check measured rather than only that it passed.
+# For the three that produce a number somebody compares against something: a digest,
+# a corpus line, a sweep result. A check that only says "ok" is a check nobody can
+# compare against anything, and these three said more than "ok" before they moved
+# into scripts.
+say() {
+  local name="$1"
+  shift
+  printf '  %-34s' "$name"
+  if out=$("$@" 2>&1); then
+    printf 'ok  %s\n' "$(printf '%s' "$out" | tail -1)"
+    pass=$((pass + 1))
+  else
+    printf 'FAIL\n'
+    fail=$((fail + 1))
+    printf '%s\n' "$out" | sed 's/^/      /' | tail -25
+  fi
+}
+
 echo "pre-push gate"
 
 # Formatting and lints. Warnings are failures: a warning nobody fixes is a
@@ -79,56 +98,21 @@ step "zero deps outside the declared" ./scripts/declared-deps.sh
 step "core builds without adapters" \
   cargo test --workspace $(./scripts/declared-deps.sh list) --quiet
 
-# No unsafe. The workspace lint forbids it, so this is a second pair of eyes on
-# the lint itself rather than on the code.
-printf '  %-34s' "no unsafe"
-if grep -rIn --include='*.rs' -E '^\s*unsafe\b|[^a-z_]unsafe\s*\{' crates >/dev/null 2>&1; then
-  printf 'FAIL\n'
-  grep -rIn --include='*.rs' -E '^\s*unsafe\b|[^a-z_]unsafe\s*\{' crates | sed 's/^/      /' | head
-  fail=$((fail + 1))
-else
-  printf 'ok\n'
-  pass=$((pass + 1))
-fi
+# No unsafe, in one file this hook and CI both call.
+step "no unsafe" ./scripts/no-unsafe.sh
 
-# The exit criterion of stage 0, checked on every push rather than once.
-# A seed must reproduce a run exactly; if that stops holding, every other
-# guarantee built on the simulator stops meaning anything.
-printf '  %-34s' "determinism (same seed, twice)"
-run_once() {
-  cargo run --quiet --bin trailryx-sim-run -- \
-    --seed 20260729 --steps 800 --shards 3 --sync-every 4 \
-    --crash-ppm 12000 --hostile --honest-disk 2>/dev/null
-}
-a=$(run_once)
-b=$(run_once)
-if [ -n "$a" ] && [ "$a" = "$b" ]; then
-  printf 'ok  %s\n' "$(printf '%s' "$a" | tr ' ' '\n' | grep '^digest=')"
-  pass=$((pass + 1))
-else
-  printf 'FAIL\n'
-  printf '      run 1: %s\n      run 2: %s\n' "$a" "$b"
-  fail=$((fail + 1))
-fi
+# The exit criterion of stage 0, checked on every push rather than once, in one
+# file this hook and CI both call. A seed must reproduce a run exactly; if that
+# stops holding, every other guarantee built on the simulator stops meaning
+# anything.
+say "determinism (same seed, twice)" ./scripts/determinism.sh
 
-# The published seed corpus: every recorded run must still produce the digest and
-# the violation count written down for it. This is a DETERMINISM check and not a
-# correctness one, and the file says so: a wrong implementation reproduces
-# perfectly. Its value is that a change in behaviour cannot arrive quietly.
-printf '  %-34s' "seed corpus reproduces"
-if corpus=$(cargo run --quiet --release --bin trailryx-sim-run -- \
-              --corpus sim/corpus.tsv 2>&1); then
-  printf 'ok  %s\n' "$(printf '%s' "$corpus" | head -1)"
-  pass=$((pass + 1))
-else
-  printf 'FAIL\n'
-  printf '%s\n' "$corpus" | sed 's/^/      /' | head -14
-  fail=$((fail + 1))
-fi
+# The published seed corpus, in one file this hook and CI both call. A DETERMINISM
+# check and not a correctness one, and the corpus file says so: a wrong
+# implementation reproduces perfectly. Its value is that a change in behaviour
+# cannot arrive quietly.
+say "seed corpus reproduces" ./scripts/seed-corpus.sh
 
-# Two verifiers, one pack. The plan asks for a second independent implementation in
-# another language because two that agree prove the FORMAT rather than the author,
-# and this is where they are held to the same verdict on the same bytes.
 step "two verifiers agree" cargo test -p trailryx-store --test two_verifiers --quiet
 
 # The same source must produce the same verifier binary from any directory, or an
@@ -155,19 +139,10 @@ step "parsers survive hostile bytes" \
 # when written, which is exactly why a person cannot be the check.
 step "README numbers are true" ./scripts/readme-numbers.sh
 
-# A short hunt for a durability violation. Not the long run, which belongs in a
-# nightly sweep: enough to catch a write-path regression before it is pushed.
-printf '  %-34s' "durability sweep (200 seeds)"
-if sweep=$(cargo run --quiet --release --bin trailryx-sim-run -- \
-             --seed 1 --sweep 200 --steps 300 --shards 3 --sync-every 4 \
-             --crash-ppm 15000 --hostile --honest-disk 2>/dev/null); then
-  printf 'ok  %s\n' "$sweep"
-  pass=$((pass + 1))
-else
-  printf 'FAIL\n'
-  printf '%s\n' "$sweep" | sed 's/^/      /' | head -10
-  fail=$((fail + 1))
-fi
+# A short hunt for a durability violation, in one file this hook and CI both call.
+# Not the long run, which lives in VALIDATION.md: enough to catch a write-path
+# regression before it is pushed.
+say "durability sweep (200 seeds)" ./scripts/durability-sweep.sh
 
 echo
 if [ "$fail" -gt 0 ]; then
