@@ -143,6 +143,13 @@ step "verifier build is reproducible" ./scripts/reproduce.sh
 step "the TLS build still works" \
   cargo test -p trailryx-http --features tls --quiet
 
+# Every hand-written parser, fed bytes it did not expect, from a seed anybody can
+# rerun. Stage 13 asks for this; the usual answer needs a nightly compiler and
+# produces a corpus nobody can replay from a commit message, and this project
+# already had the better half of that machinery.
+step "parsers survive hostile bytes" \
+  cargo test -p trailryx-fuzz --quiet
+
 # Every number the README states about this repository, against the repository.
 # Added after an audit found six drifted crate counts, a dependency figure no reading
 # of the tree reproduced, and a line off by a factor of two. None of them was a lie

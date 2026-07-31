@@ -1,0 +1,30 @@
+[package]
+name = "trailryx-fuzz"
+description = "Every hand-written parser, fed bytes it did not expect, from a seed anybody can rerun"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+# The generator is the simulator's, so a failing case is a seed rather than a file
+# in somebody's directory. The parsers under test are the rest.
+[dependencies]
+trailryx-sim = { path = "../trailryx-sim" }
+
+[dev-dependencies]
+trailryx-anchor = { path = "../trailryx-anchor" }
+trailryx-asn1 = { path = "../trailryx-asn1" }
+trailryx-azure = { path = "../trailryx-azure" }
+trailryx-http = { path = "../trailryx-http" }
+trailryx-index = { path = "../trailryx-index" }
+trailryx-journal = { path = "../trailryx-journal" }
+trailryx-json = { path = "../trailryx-json" }
+trailryx-otlp = { path = "../trailryx-otlp" }
+trailryx-record = { path = "../trailryx-record" }
+trailryx-s3 = { path = "../trailryx-s3" }
+trailryx-store = { path = "../trailryx-store" }
+trailryx-verify = { path = "../trailryx-verify" }
+
+[lints]
+workspace = true

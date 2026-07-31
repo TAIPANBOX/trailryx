@@ -7,7 +7,7 @@
 ![Stage](https://img.shields.io/badge/stage-11%20of%2013-blue.svg)
 ![Core](https://img.shields.io/badge/core-frozen-success.svg)
 ![Rust](https://img.shields.io/badge/rust-1.85%2B-orange.svg)
-![Tests](https://img.shields.io/badge/tests-1017-success.svg)
+![Tests](https://img.shields.io/badge/tests-1022-success.svg)
 ![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)
 ![Dependencies](https://img.shields.io/badge/deps-0%20in%20the%20verifier-success.svg)
 ![Unsafe](https://img.shields.io/badge/unsafe-forbidden-success.svg)
@@ -60,7 +60,7 @@ Two sentences carry the whole design.
 
 <div align="center">
 
-<img src="assets/flow.svg" alt="One span arrives and the mapper splits it into typed metadata and an encrypted payload; the metadata becomes a link in a hash chain, the chain is sealed into a Merkle tree, the root is signed and witnessed and checked by a verifier with no dependencies, and then the payload key is destroyed while the verdict still stands" width="1017">
+<img src="assets/flow.svg" alt="One span arrives and the mapper splits it into typed metadata and an encrypted payload; the metadata becomes a link in a hash chain, the chain is sealed into a Merkle tree, the root is signed and witnessed and checked by a verifier with no dependencies, and then the payload key is destroyed while the verdict still stands" width="1022">
 
 <sub>One record, start to finish: it arrives, it splits, it chains, it seals, it gets signed and checked, and then its payload key is destroyed and the tick still stands. The animation loops every sixteen seconds.</sub>
 
@@ -191,7 +191,7 @@ harmonised standards that would say *how* are still not cited in the Official Jo
 
 <div align="center">
 
-<img src="docs/assets/where-it-sits.svg" alt="A positioning map with two axes: whether one person can be erased on request, and what can be proved about an answer. Tamper-evident ledgers sit high on proof and cannot remove history; observability and SIEM tools delete freely and prove nothing; Trailryx sits in the corner that does both" width="1017">
+<img src="docs/assets/where-it-sits.svg" alt="A positioning map with two axes: whether one person can be erased on request, and what can be proved about an answer. Tamper-evident ledgers sit high on proof and cannot remove history; observability and SIEM tools delete freely and prove nothing; Trailryx sits in the corner that does both" width="1022">
 
 <sub>Two properties that usually cost each other. The interesting question is not who is better, it is which corner a tool had to give up.</sub>
 
@@ -263,7 +263,7 @@ A tool that has moved since should be re-checked rather than argued with.</sub>
 
 <div align="center">
 
-<img src="assets/diagram.svg" alt="Two OTLP transports feed one mapper, which splits every event into typed metadata and an encrypted payload; the journal chains records, the segment commits to them in a Merkle history and five sorted indexes, and an evidence pack hands an auditor a signed root a verifier with no dependencies recomputes" width="1017">
+<img src="assets/diagram.svg" alt="Two OTLP transports feed one mapper, which splits every event into typed metadata and an encrypted payload; the journal chains records, the segment commits to them in a Merkle history and five sorted indexes, and an evidence pack hands an auditor a signed root a verifier with no dependencies recomputes" width="1022">
 
 <sub>The same thing as a still map, for reading rather than watching: two ways in, one mapper, one plane boundary, and the chain of commitments above them.</sub>
 
@@ -294,6 +294,7 @@ and the proof shapes do not change without a version and a migration.
 | `trailryx-s3` | SigV4, S3 and Google Cloud Storage over that client. No cloud SDK | 31 |
 | `trailryx-azure` | Azure Blob Storage: Shared Key signing, and the four operations | 16 |
 | `trailryx-federation` | composing an answer across environments, and refusing to call it complete when it is not | 7 |
+| `trailryx-fuzz` | every hand-written parser, fed bytes it did not expect, from a seed | 5 |
 | `trailryx-publish` | atomic publication of a sealed segment, and the fault model for it | 11 |
 | `trailryx-crypto-aws` | the validated cipher and ML-KEM, behind the erasure seam. The one adapter with a dependency | 7 |
 | `trailryx-asn1` | a bounded DER reader, enough for RFC 3161 and nothing more. Depends on nothing | 30 |
@@ -386,7 +387,7 @@ are different questions, and until this week that step answered only the second.
 ## Try it
 
 ```bash
-cargo test                                    # 1017 tests
+cargo test                                    # 1022 tests
 cargo run --bin trailryx-sim-run -- --help
 ```
 
@@ -766,6 +767,35 @@ context, does not expose it, and gates before the engine is asked. A server auth
 reaching for `SessionContext::sql` would reintroduce the hole with no warning, so that
 door is not there.
 
+## Fuzzing, without a nightly compiler or a corpus nobody can replay
+
+Every parser here reads bytes somebody else wrote: an agent's telemetry, a timestamp
+authority's answer, an object fetched from a bucket, a pack handed to a verifier.
+Somebody who wants this store to lose records will send it bytes, and one of those
+functions is what the bytes reach first.
+
+The usual answer is `cargo-fuzz`, which needs a nightly compiler and produces a
+corpus that lives in one directory on one machine. This project already had the
+better half of that machinery: a seeded generator whose whole purpose is that a
+failure is **a number somebody else can rerun**. So the fuzzer is that generator
+pointed at thirteen parsers, and it runs in the gate, which a nightly-only tool
+cannot.
+
+Most of the value is not in random bytes, which any parser rejects at its first
+field. It is in mutating something valid: flip a bit, truncate anywhere, replace a
+byte, append rubbish, repeat a chunk to make plausible nesting. That produces input
+which is valid right up until it is not, which is where length fields and depth
+limits live.
+
+**The measurement that keeps it honest** is how many inputs each target *accepts*. A
+suite whose inputs all die at byte one runs fast and proves nothing, and that is
+exactly what the first version did: five of the thirteen accepted nothing, because
+their corpora were made of zero bytes. With real corpora built from the project's own
+encoders, eleven of thirteen now reach past the first check. The two that do not are
+the timestamp token and the evidence pack, whose valid inputs need an authority and a
+sealing run respectively; they are exercised for rejection only, and the number is
+printed so that stays visible.
+
 ## A forgotten node is the easiest way to shrink an answer
 
 Agents run in AWS, in Google Cloud and on somebody's own hardware, and the question
@@ -843,7 +873,7 @@ seed=777 steps=20000 digest=42c29db84fa0d604 lines=37394 crashes=95 violations=0
 
 <div align="center">
 
-<img src="docs/assets/completeness.svg" alt="A sorted index of nine entries: four answered the query and each carries an inclusion proof, and the entry immediately either side of them is carried too, with a key that must fall outside the range" width="1017">
+<img src="docs/assets/completeness.svg" alt="A sorted index of nine entries: four answered the query and each carries an inclusion proof, and the entry immediately either side of them is carried too, with a key that must fall outside the range" width="1022">
 
 <sub>The two dashed entries are what makes the answer complete rather than merely true. Without them, a store could hand over four real records and keep a fifth.</sub>
 
@@ -1149,7 +1179,7 @@ is a file.
 
 <div align="center">
 
-<img src="docs/assets/two-decoders.svg" alt="Protobuf bytes and one JSON line decode into the same in-memory types and call the same mapper, producing the same record, and a differential test encodes one fixture twice with two independently written encoders and compares the results as whole structures" width="1017">
+<img src="docs/assets/two-decoders.svg" alt="Protobuf bytes and one JSON line decode into the same in-memory types and call the same mapper, producing the same record, and a differential test encodes one fixture twice with two independently written encoders and compares the results as whole structures" width="1022">
 
 <sub>The middle box is the whole argument for reading OTLP/JSON rather than inventing a line format: one set of types, one mapper, one place where the plane boundary is decided.</sub>
 
@@ -1306,7 +1336,7 @@ itself and the count that read six until somebody checked it.
 
 <div align="center">
 
-<img src="docs/assets/erasure.svg" alt="A record commits to four fields about its payload and does not contain it: hash, size, class and key id. The payload is sealed under a key of its own, forgetting destroys every key in the subject's row before dropping the row, and none of the four fields moves, so every chain, root and proof still verifies" width="1017">
+<img src="docs/assets/erasure.svg" alt="A record commits to four fields about its payload and does not contain it: hash, size, class and key id. The payload is sealed under a key of its own, forgetting destroys every key in the subject's row before dropping the row, and none of the four fields moves, so every chain, root and proof still verifies" width="1022">
 
 <sub>The banner is the property the product turns on, and it is a test rather than a claim: seal, prove, erase, prove again.</sub>
 
@@ -1450,7 +1480,7 @@ that is the part an auditor cannot do without the pack. It then says out loud th
 it did not check the authority's signature, and prints the command that does:
 
 ```
-[note]  anchor: "digicert" stamped this root at 1785421800, token 738 bytes, nonce 1017344827
+[note]  anchor: "digicert" stamped this root at 1785421800, token 738 bytes, nonce 1022344827
 [weak]  anchor-signature: this verifier checked that "digicert"'s token is over this
         root and did not check the authority's signature; verify it with
         `openssl ts -verify` against their published certificate
@@ -1501,7 +1531,7 @@ failure mode the verifier exists to catch. And the exit code follows the pack's
 verdict, not the table, because a table of obligations means nothing about a pack
 that does not verify.
 
-The mapping covers the AI Act, **prEN ISO/IEC 241017** (the profile document for AI
+The mapping covers the AI Act, **prEN ISO/IEC 241022** (the profile document for AI
 system logging, still a draft, so its clauses are quoted nowhere), SR 11-7 and the
 SOC 2 criteria. It lists the obligations this store does nothing for, by name,
 because a mapping that shows only its wins reads as complete. `docs/compliance.md`
@@ -1640,14 +1670,14 @@ proves and erases. That is the test of whose engine it is.
 git config core.hooksPath .githooks   # once
 ```
 
-`.githooks/pre-push` runs fourteen checks and refuses the push if any fails:
+`.githooks/pre-push` runs fifteen checks and refuses the push if any fails:
 formatting, clippy with warnings as errors, the tests, a standalone build of the
 substrate crate, a zero-dependency check on every crate outside the SQL facade, a
 build and test of the core with the facade absent, an `unsafe` check, the determinism
 criterion, the published seed corpus, the two verifiers agreeing on the same packs, a
 reproducible build of the verifier from two different paths, the TLS build of the HTTP
-client, every number this README states about the repository, and a 200-seed
-durability sweep. About a minute and a
+client, every parser against hostile bytes, every number this README states about the
+repository, and a 200-seed durability sweep. About a minute and a
 half, most of it the facade's dependency tree.
 
 The one about numbers is the least glamorous and the most useful. An audit of this page on 30
@@ -1659,7 +1689,7 @@ is a claim with no owner. So the badge, the totals and every row of the crate ta
 are now checked against what the suite actually runs, and the push fails when they
 disagree.
 
-`.github/workflows/ci.yml` runs the same fourteen plus `cargo audit`, which stopped being trivially green the day the facade arrived and is now a real check with real work behind it, so a green push
+`.github/workflows/ci.yml` runs the same fifteen plus `cargo audit`, which stopped being trivially green the day the facade arrived and is now a real check with real work behind it, so a green push
 is a green pull request. It keeps a guard that skips every job while the repository
 is private, because Actions minutes are metered there and free here. The repository
 went public on 30 July 2026 and the condition released itself, which is why it was

@@ -1,6 +1,6 @@
 name: ci
 
-# The same fourteen checks `.githooks/pre-push` runs, so a green push is a green pull
+# The same fifteen checks `.githooks/pre-push` runs, so a green push is a green pull
 # request and neither can drift from the other.
 #
 # THE GUARD ON `if:` STAYS, and it is not decoration. Actions minutes are metered on
@@ -111,6 +111,12 @@ jobs:
       # in a deployment when it breaks.
       - name: the TLS build still works
         run: cargo test -p trailryx-http --features tls --quiet
+
+      # Every hand-written parser, fed bytes it did not expect. Ten times the
+      # gate's volume here, because CI has the minutes and a fuzzer's value is
+      # roughly linear in cases.
+      - name: parsers survive hostile bytes
+        run: TRAILRYX_FUZZ_CASES=3000 cargo test -p trailryx-fuzz --release --quiet
 
       # Every number the README states about this repository, against the repository.
       # A README number is a claim with no owner, and an audit on 30 July 2026 found

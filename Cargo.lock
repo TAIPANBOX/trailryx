@@ -3770,6 +3770,25 @@ dependencies = [
 ]
 
 [[package]]
+name = "trailryx-fuzz"
+version = "0.0.1"
+dependencies = [
+ "trailryx-anchor",
+ "trailryx-asn1",
+ "trailryx-azure",
+ "trailryx-http",
+ "trailryx-index",
+ "trailryx-journal",
+ "trailryx-json",
+ "trailryx-otlp",
+ "trailryx-record",
+ "trailryx-s3",
+ "trailryx-sim",
+ "trailryx-store",
+ "trailryx-verify",
+]
+
+[[package]]
 name = "trailryx-http"
 version = "0.0.1"
 dependencies = [
