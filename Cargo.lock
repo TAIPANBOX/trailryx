@@ -3734,6 +3734,7 @@ name = "trailryx-demo"
 version = "0.0.1"
 dependencies = [
  "trailryx-assemble",
+ "trailryx-azure",
  "trailryx-contracts",
  "trailryx-crypto",
  "trailryx-crypto-aws",
@@ -3743,6 +3744,7 @@ dependencies = [
  "trailryx-journal",
  "trailryx-otlp",
  "trailryx-record",
+ "trailryx-s3",
  "trailryx-sign",
  "trailryx-sim",
  "trailryx-store",

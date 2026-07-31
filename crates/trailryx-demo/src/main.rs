@@ -29,7 +29,9 @@ use std::process::ExitCode;
 use std::sync::Arc;
 use trailryx_assemble::Assembler;
 use trailryx_contracts::contracts::{ObjectStore, Source};
-use trailryx_contracts::fakes::{MemoryKeyProvider, MemoryObjectStore};
+use trailryx_contracts::fakes::MemoryKeyProvider;
+
+mod store;
 use trailryx_contracts::ingest::{MetaDraft, PayloadPart};
 use trailryx_crypto_aws::AwsAead;
 use trailryx_erasure::PredictableKeys;
@@ -55,7 +57,7 @@ use trailryx_store::evidence::PackBuilder;
 use trailryx_store::query::{ProofStatus, Query, query_segment};
 use trailryx_store::seal::{SealOutcome, seal_segment};
 
-type Vaults = Vault<MemoryObjectStore, MemoryKeyProvider, AwsAead, PredictableKeys>;
+type Vaults = Vault<store::Chosen, MemoryKeyProvider, AwsAead, PredictableKeys>;
 
 const TENANT: &str = "acme";
 const TRUST_DOMAIN: &str = "acme.example";
@@ -80,7 +82,10 @@ fn main() -> ExitCode {
                 println!(
                     "trailryx-demo [--runs N] [--keep]\n\n\
                      Walks the eight acceptance steps. Each run uses a fresh directory,\n\
-                     so --runs 2 is the criterion: twice in a row, from nothing."
+                     so --runs 2 is the criterion: twice in a row, from nothing.\n\n\
+                     TRAILRYX_DEMO_STORE=memory|s3|gcs|azure chooses where segments\n\
+                     are published; everything else comes from the environment, so no\n\
+                     credential reaches a command line. Default is memory."
                 );
                 return ExitCode::SUCCESS;
             }
@@ -141,10 +146,13 @@ fn walk(dir: &Path) -> Result<(), Failure> {
     let tenant = TenantId::parse(TENANT).map_err(|e| e.to_string())?;
     let subject = SubjectHandle::parse(SUBJECT).map_err(|e| e.to_string())?;
 
+    let chosen = store::from_environment()?;
+    println!("   publishing to: {}", chosen.describe());
+
     let mut vault: Vaults = Vault::unvalidated(
         tenant.clone(),
         TRUST_DOMAIN,
-        MemoryObjectStore::default(),
+        chosen,
         MemoryKeyProvider::default(),
         // A real cipher, and keys that are deliberately not. The cipher has to be
         // real or this run demonstrates nothing about encryption; the keys have to

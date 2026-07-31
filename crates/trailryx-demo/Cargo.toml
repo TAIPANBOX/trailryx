@@ -9,6 +9,7 @@ description = "The eight acceptance steps, walked end to end"
 
 [dependencies]
 trailryx-assemble = { path = "../trailryx-assemble" }
+trailryx-azure = { path = "../trailryx-azure" }
 trailryx-contracts = { path = "../trailryx-contracts" }
 trailryx-crypto = { path = "../trailryx-crypto" }
 trailryx-crypto-aws = { path = "../trailryx-crypto-aws" }
@@ -18,6 +19,7 @@ trailryx-ingest = { path = "../trailryx-ingest" }
 trailryx-journal = { path = "../trailryx-journal" }
 trailryx-otlp = { path = "../trailryx-otlp" }
 trailryx-record = { path = "../trailryx-record" }
+trailryx-s3 = { path = "../trailryx-s3" }
 trailryx-sign = { path = "../trailryx-sign" }
 trailryx-sim = { path = "../trailryx-sim" }
 trailryx-store = { path = "../trailryx-store" }
@@ -40,6 +42,11 @@ path = "src/jsonl_main.rs"
 [[bin]]
 name = "trailryx-kill"
 path = "src/kill_main.rs"
+
+[features]
+# Reaching a real cloud endpoint from the acceptance run, which every one of them
+# is `https`. Off by default: the run against an emulator needs nothing.
+tls = ["trailryx-s3/tls", "trailryx-azure/tls"]
 
 [lints]
 workspace = true

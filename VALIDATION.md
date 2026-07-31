@@ -131,7 +131,7 @@ The two together are the claim: with a disk that keeps its word, 800 million
 operations lose nothing, and the check that says so is a check that fails when the
 disk stops keeping it.
 
-### The acceptance demo
+### The acceptance demo, including against real object stores
 
 ```
 cargo run --release --bin trailryx-demo -- --runs 2
@@ -139,6 +139,28 @@ cargo run --release --bin trailryx-demo -- --runs 2
 
 Eight steps, twice in a row, from an empty directory, in **10.5 seconds**. Nothing in
 it is narrated: each step does the thing and fails the run if it did not.
+
+Stage 13 asks for that run to be **multi-cloud**, and until now it was not: the demo
+always published into memory, and this file's *not yet measured* section did not say
+so, which made it read as done. `TRAILRYX_DEMO_STORE` now chooses, with everything
+else coming from the environment so no credential reaches a command line, and the run
+prints where it published so a pass cannot later be mistaken for a pass against
+memory.
+
+| Store | Result |
+|---|---|
+| memory | eight steps, twice |
+| **MinIO** over a real socket | eight steps, **twice** |
+| **Azurite**, Microsoft's own emulator | eight steps, **twice** |
+
+The second run is the one that matters and it was checked rather than assumed: the
+bucket holds ten objects after two runs, with the two runs' payload keys distinct, so
+the second genuinely published rather than meeting the first run's objects and
+passing on them.
+
+**What this still is not.** Both are emulators on this machine. The adapters
+themselves have been run against real AWS and real Google Cloud Storage, above, but
+the eight steps have not.
 
 ### The S3 adapter against somebody else's server
 
@@ -444,11 +466,10 @@ Stated so the absence is visible rather than inferred:
   standard library's blocking file API, behind the same trait the simulator fills.
   `io_uring` and `epoll` are a decision the architecture records and nobody has
   implemented, so there is nothing to run side by side yet.
-- **The eight-step demo against a cloud.** The acceptance demo runs twice from an
-  empty directory, above, and it runs entirely locally. The live cloud runs are the
-  adapter's own suite, four operations, not the eight steps. So "a multi-cloud demo
-  run, twice from scratch" is not done, and until this line existed it was not
-  visible either, which is the more useful half of the finding.
+- **The eight-step demo against a real cloud.** It now runs twice against MinIO and
+  twice against Azurite, above, which is two real servers and no real cloud. Pointing
+  it at the AWS and GCS buckets that the adapter suite used would need them to exist
+  again, and they were deleted.
 - **Azure against real Blob Storage: decided against**, not pending. S3 and GCS have
   been run against their own clouds; Azure has met Azurite and will not be taken
   further. Recorded as a decision so nobody reads it later as unfinished work.
