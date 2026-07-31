@@ -34,5 +34,12 @@ path = "src/main.rs"
 name = "trailryx-jsonl"
 path = "src/jsonl_main.rs"
 
+# The kill run: a real process killed by the operating system on a real filesystem.
+# Its own binary because it spawns itself, and a flag on another binary would make
+# that confusing to read in a process list.
+[[bin]]
+name = "trailryx-kill"
+path = "src/kill_main.rs"
+
 [lints]
 workspace = true

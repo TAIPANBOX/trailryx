@@ -1664,6 +1664,21 @@ what is being sold), the SQL engine, and the interchange formats.
 Turn off SQL, Parquet and the external KMS, and the database still writes,
 proves and erases. That is the test of whose engine it is.
 
+## What has actually been measured
+
+[`VALIDATION.md`](VALIDATION.md) holds every number this project quotes, each with the
+command that produced it and the date it was run, split into the ones the gate
+re-measures on every push and the ones somebody has to run.
+
+It also has a section called *not yet measured*, which is the more useful half: no
+ext4 or xfs kill run, no side-by-side of the two I/O backends, no run against a live
+bucket, no years of simulated time, no external audit of the cryptographic layer.
+
+The headline from the half that is measured: **forty processes killed with `SIGKILL`
+mid-write on a real filesystem, and not one acked record lost.** That is the sentence
+the whole design is built on, tested by something other than the simulator that was
+written to believe it.
+
 ## Working on it
 
 ```bash
