@@ -317,6 +317,60 @@ rest arrive to build and to test it. Everything outside the facade, the cryptogr
 provider and the demo has none, and the verifier has none by design: an auditor reads
 it, and every crate pulled in is a crate they are asked to trust instead.
 
+### The cryptographic inventory, and the scan that was passing for the wrong reason
+
+Stage 13 asks for `qryx scan --policy cnsa` on this repository with no violations.
+
+```
+qryx scan --policy cnsa .
+```
+
+| | |
+|---|---|
+| Sources scanned | 211 |
+| Findings | 58, in 10 unique assets |
+| Policy `cnsa` | **PASS**, exit 0 |
+
+**The first run of this passed, and the pass was worthless.** It reported 3 findings
+in 2 assets, and both were in a Python script that generates test vectors. Not one
+came from the 169 Rust files, including the one that implements ECDSA P-384 and
+contains the string `ECDSA` three times. The reason: qryx's crypto detector carried
+patterns for Python and JS/TS, Go had its own AST detector, and **there was nothing
+for Rust at all**. A pass from not looking is worse than no scan, because somebody
+files it as evidence.
+
+That is fixed in qryx rather than worked around here: a Rust detector that strips
+comments and string literals before matching, so a doc comment explaining that ECDSA
+is quantum-vulnerable is not counted as using it. It also turned up a false positive
+worth its own fix: a comment in `trailryx-store/Cargo.toml` ending "...pins the two
+independent token readers together" was reported as a dependency on the **Together AI
+SDK**, in a workspace whose store crate has no dependencies at all.
+
+**What the honest inventory says.** Ten assets: SHA-384 (26 occurrences), SHA-256,
+AES, HMAC, ML-DSA, ML-KEM, SLH-DSA, and three quantum-vulnerable ones, ECDSA, ECDH
+and RSA. The last three are not a surprise and not a defect:
+
+- **ECDSA P-384** is what a segment root is signed with, and there is no
+  post-quantum signature in v1 by decision: the verifier has to stay short enough to
+  read.
+- **RSA** is in the anchor, which verifies an RFC 3161 timestamp authority's
+  certificate, and the authority chooses that, not this project.
+- **ECDH** is the X25519 half of `X25519MlKem768`, the hybrid key exchange. qryx has
+  no way to say "hybrid", so it reports the classical half on its own, which is
+  correct as an inventory line and misleading as a risk line.
+
+`cnsa` passes because the builtin policy forbids MD5, SHA-1, DES, 3DES, RC4, RC2, DSA
+and RSA under 3072 bits, none of which appear, and deliberately does not gate on
+quantum-vulnerability, which has a 2030 deadline rather than an immediate one. Asked
+the strict question instead, the answer is the one above:
+
+```
+qryx scan --policy pq-strict.json .     # forbidQuantumVulnerable: true
+```
+
+**FAIL, 3 violations**: ECDSA, ECDH, RSA. That is the true position of the signature
+layer today, and it is the same thing the architecture already says in prose.
+
 ### What was changed so this class stops recurring
 
 Three defects in one day, all the same shape: **a fake written from the same reading
@@ -390,9 +444,14 @@ Stated so the absence is visible rather than inferred:
   standard library's blocking file API, behind the same trait the simulator fills.
   `io_uring` and `epoll` are a decision the architecture records and nobody has
   implemented, so there is nothing to run side by side yet.
-- **Azure against real Blob Storage.** S3 and GCS have now been run against their
-  own clouds, above; Azure has only met Azurite. The account for it is the one thing
-  in this list that nobody has tried yet rather than the one thing that costs money.
+- **The eight-step demo against a cloud.** The acceptance demo runs twice from an
+  empty directory, above, and it runs entirely locally. The live cloud runs are the
+  adapter's own suite, four operations, not the eight steps. So "a multi-cloud demo
+  run, twice from scratch" is not done, and until this line existed it was not
+  visible either, which is the more useful half of the finding.
+- **Azure against real Blob Storage: decided against**, not pending. S3 and GCS have
+  been run against their own clouds; Azure has met Azurite and will not be taken
+  further. Recorded as a decision so nobody reads it later as unfinished work.
 - **Contention, throttling and failure modes.** Every live run above was one client
   doing one thing at a time. Two publishers racing for the same key against a real
   endpoint, and what a throttled or half-failed request does to a publication, are
