@@ -342,6 +342,20 @@ impl Http for Client {
             if value.contains(['\r', '\n']) || name.contains(['\r', '\n']) {
                 return Err(format!("the header {name} contains a line break"));
             }
+            // This client writes `Host` itself, from the origin it was built with,
+            // and a second one is not a duplicate to tidy up: RFC 9112 requires a
+            // server to refuse the whole request, and the refusal arrives from the
+            // HTTP layer with no application code and no useful body. A caller that
+            // needs the host in a signature, as SigV4 does, signs it without sending
+            // it. Refused here rather than dropped silently, because a caller that
+            // set a *different* host meant something by it and deserves to be told
+            // the request cannot carry it.
+            if name.eq_ignore_ascii_case("host") {
+                return Err(format!(
+                    "the header {name} is written by this client from the origin it \
+                     was built with, so a request must not carry its own"
+                ));
+            }
             head.push_str(name);
             head.push_str(": ");
             head.push_str(value);

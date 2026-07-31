@@ -22,7 +22,7 @@ fifteen plus `cargo audit`, so a green push is a green pull request.
 
 | What | Number | Command |
 |---|---|---|
-| Tests | 1,022 across 28 crates | `cargo test --workspace` |
+| Tests | 1,026 across 28 crates | `cargo test --workspace` |
 | Third-party dependencies in the verifier | 0 | `cargo tree -p trailryx-verify` |
 | Third-party dependencies in the core | 0 | `./scripts/declared-deps.sh` |
 | `unsafe` | forbidden at the workspace level, and grepped for | `grep -rn unsafe crates` |
@@ -51,21 +51,36 @@ one written by the same people who wrote the code it tests.
 ./target/release/trailryx-kill run 40
 ```
 
-| | |
-|---|---|
-| Rounds | 40 |
-| Filesystem | **apfs** on `/dev/disk3s5` |
-| Highest acked sequence | 648 |
-| Acked records lost | **0** |
-| Recovered beyond the ack | 4 records per round, which is the sync interval |
+| Filesystem | Rounds | Highest acked | Acked records lost |
+|---|---|---|---|
+| **apfs** on `/dev/disk3s5` | 40 | 648 | **0** |
+| **ext4** on `/dev/loop0` | 40 | 2,788 | **0** |
+| **xfs** on `/dev/loop0` | 40 | 4,388 | **0** |
 
+Each run recovers exactly four records beyond the ack, which is the sync interval.
 Recovering more than was acked is expected: a write can land without its
 acknowledgement being seen, and under-promising is the safe direction. Recovering
 less would be the product being false about the sentence it is built on.
 
-**What this is not.** The roadmap asks for ext4 and xfs. This machine has neither, so
-the run above is APFS and says so in its own output. It is worth more than nothing
-and less than what stage 13 asks for, and both of those are true at once.
+ext4 and xfs are real filesystems on loopback devices inside a Linux container on the
+same Mac, made with `mkfs.ext4` and `mkfs.xfs` and mounted by the kernel:
+
+```
+docker run --privileged -v "$PWD":/src rust:1-bookworm sh /scripts/kill-linux.sh
+```
+
+**What the container costs the claim, stated rather than left to be discovered.** It
+would weaken a power-loss test badly, because the barrier below the filesystem is a
+file on APFS and a virtual block device rather than a platter. It costs this test very
+little, because **this test kills a process, not a machine**: the kernel survives, the
+page cache survives, and what is under examination is our recovery from a write torn
+in the middle, which is filesystem and page-cache behaviour and is real Linux code
+here. Buying a cloud machine would not change that either, since it is also
+virtualised storage.
+
+**What is still missing is the machine dying**, on every filesystem including APFS.
+That needs a real power cut or a block layer that can be told to forget, and it is in
+*not yet measured* below rather than implied by the table above.
 
 ### The long simulation run, and the run that proves it can see
 
@@ -124,6 +139,53 @@ cargo run --release --bin trailryx-demo -- --runs 2
 
 Eight steps, twice in a row, from an empty directory, in **10.5 seconds**. Nothing in
 it is narrated: each step does the thing and fails the run if it did not.
+
+### The S3 adapter against somebody else's server
+
+The suite in `store.rs` runs the adapter over a real socket against a fake that
+speaks S3. The fake cannot disagree with us: it was written from the same reading of
+the same documentation as the client, so wherever that reading is wrong, both are
+wrong together and the tests pass. So the adapter was pointed at **MinIO
+RELEASE.2025-09-07**, an implementation nobody here wrote, running locally.
+
+```
+docker run -d --name trailryx-minio -p 9000:9000 \
+  -e MINIO_ROOT_USER=... -e MINIO_ROOT_PASSWORD=... minio/minio server /data
+TRAILRYX_S3_ENDPOINT=http://127.0.0.1:9000 TRAILRYX_S3_BUCKET=trailryx \
+TRAILRYX_S3_KEY=... TRAILRYX_S3_SECRET=... \
+  cargo test -p trailryx-s3 --test live -- --nocapture
+```
+
+**It failed on the first request, and the reason is the point of the exercise.** The
+adapter was sending **two `Host` headers**. SigV4 has to sign the host, so the signer
+put `host` in its header list; `trailryx-http` writes `Host` for every request because
+it owns the connection. Each was right alone. RFC 9112 requires a server to refuse a
+request carrying two, and Go's HTTP layer does it before any S3 code runs, so the
+answer was a bare `400 Bad Request` with a plain-text body, no error code, nothing in
+the server's log.
+
+That means the adapter had **never worked against a real S3 endpoint**, and the whole
+suite was green. The fakes parsed headers into a list and never minded the duplicate.
+A regression test now asserts exactly one `Host` reaches the wire, and the HTTP client
+refuses a request that brings its own rather than silently sending a second.
+
+With that fixed, against MinIO:
+
+| | |
+|---|---|
+| The four operations | put, get, get by version, list |
+| A second conditional write | **refused by the server**, and the first bytes survived |
+| Listing across pages | 12 objects in pages of 5: 3 requests, 2 continuation tokens |
+| Versioning | not enabled on this bucket, so `get_version` is untested and says so |
+
+The conditional write is the one that matters. Atomic publication with no coordinator
+rests on the store refusing the second writer, and until this run that rested on a
+fake we wrote agreeing with a client we wrote.
+
+**What this still is not.** MinIO is not AWS. It does not reproduce real error codes
+under contention, throttling, or a real TLS chain, and this bucket has no versioning.
+A run against a live bucket is in *not yet measured*, and it needs a credential and
+costs money.
 
 ### Fuzzing depth
 
@@ -210,15 +272,21 @@ opposite.
 
 Stated so the absence is visible rather than inferred:
 
-- **ext4 and xfs kill runs.** Only APFS so far, above.
+- **A machine dying rather than a process.** Every kill run above is a `SIGKILL`,
+  so the kernel and its page cache survive it. Power loss, where the disk's own cache
+  is allowed to forget what it acknowledged, is a different and harsher test. The
+  simulator models it (that is what the lying-`fsync` sweep is), but nothing has run
+  it against a real block layer, for instance under `dm-log-writes`.
 - **Both I/O backends.** Not "not measured", which is what this line used to say and
   which was flattering: **neither exists**. There is one `Io` implementation, on the
   standard library's blocking file API, behind the same trait the simulator fills.
   `io_uring` and `epoll` are a decision the architecture records and nobody has
   implemented, so there is nothing to run side by side yet.
-- **A multi-cloud demo run.** The three adapters are tested against fakes over real
-  sockets and against published worked examples; none has been run against a live
-  bucket, which needs credentials and costs money.
+- **A live cloud bucket.** The S3 adapter now runs against MinIO, above, and the
+  Azure and GCS adapters still only meet fakes and published worked examples. Nothing
+  has touched a real AWS, Azure or Google endpoint, which needs a credential and
+  costs money. The `Host` bug is the argument for doing it: a real server said in one
+  request what a year of our own tests did not.
 - **Years of simulated time.** The long run above covers nine days, not years, and
   the arithmetic for closing that gap is in its own section.
 - **An external audit of the cryptographic layer.** Planned before the first

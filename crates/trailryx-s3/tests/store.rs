@@ -641,3 +641,36 @@ fn a_listing_pages_by_marker_when_nothing_hands_back_a_token() {
         "all five, across three pages, with no continuation token in sight"
     );
 }
+
+/// Exactly one `Host` header reaches the wire.
+///
+/// RFC 9112 requires a server to refuse a request carrying more than one, and Go's
+/// HTTP server does it before any S3 code runs: the answer is a bare
+/// `400 Bad Request` with a plain-text body, so the adapter cannot even report a
+/// code and says `unknown`.
+///
+/// This was real. The signer needs `host` in the signed set, so it put it in the
+/// header list, and `trailryx-http` writes `Host` for every request because it owns
+/// the connection. Both were right on their own. The fake here parsed headers into a
+/// list and never minded the duplicate, so the whole suite passed against a client
+/// that **no real S3 endpoint would have accepted**. It took MinIO to say so.
+#[test]
+fn the_request_carries_exactly_one_host_header() {
+    let fake = Fake::start(Honesty::Conditional, 1);
+    let mut store = fake.store(Conditional::IfNoneMatchStar);
+    let _ = store.put_if_absent("segments/000002.trx", b"bytes");
+
+    let sent = fake.seen.recv().expect("the request");
+    let hosts: Vec<&(String, String)> = sent
+        .headers
+        .iter()
+        .filter(|(name, _)| name.eq_ignore_ascii_case("host"))
+        .collect();
+    assert_eq!(
+        hosts.len(),
+        1,
+        "{} Host headers went out, and a compliant server refuses the request \
+         before reading a byte of S3: {hosts:?}",
+        hosts.len()
+    );
+}

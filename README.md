@@ -7,7 +7,7 @@
 ![Stage](https://img.shields.io/badge/stage-13%20of%2013-blue.svg)
 ![Core](https://img.shields.io/badge/core-frozen-success.svg)
 ![Rust](https://img.shields.io/badge/rust-1.85%2B-orange.svg)
-![Tests](https://img.shields.io/badge/tests-1022-success.svg)
+![Tests](https://img.shields.io/badge/tests-1026-success.svg)
 ![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)
 ![Dependencies](https://img.shields.io/badge/deps-0%20in%20the%20verifier-success.svg)
 ![Unsafe](https://img.shields.io/badge/unsafe-forbidden-success.svg)
@@ -293,7 +293,7 @@ migration. What stage 13 still wants is measured absence rather than a guess, an
 | `trailryx-projection` | Thrift, a Parquet writer with real lists, and columnar projections | 19 |
 | `trailryx-sign` | what gets signed, and what a witness attests to | 4 |
 | `trailryx-http` | the workspace's one HTTP/1.1 client. No TLS, no redirects, no reuse | 11 |
-| `trailryx-s3` | SigV4, S3 and Google Cloud Storage over that client. No cloud SDK | 31 |
+| `trailryx-s3` | SigV4, S3 and Google Cloud Storage over that client. No cloud SDK | 35 |
 | `trailryx-azure` | Azure Blob Storage: Shared Key signing, and the four operations | 16 |
 | `trailryx-federation` | composing an answer across environments, and refusing to call it complete when it is not | 7 |
 | `trailryx-fuzz` | every hand-written parser, fed bytes it did not expect, from a seed | 5 |
@@ -389,7 +389,7 @@ are different questions, and until this week that step answered only the second.
 ## Try it
 
 ```bash
-cargo test                                    # 1022 tests
+cargo test                                    # 1026 tests
 cargo run --bin trailryx-sim-run -- --help
 ```
 
@@ -1482,7 +1482,7 @@ that is the part an auditor cannot do without the pack. It then says out loud th
 it did not check the authority's signature, and prints the command that does:
 
 ```
-[note]  anchor: "digicert" stamped this root at 1785421800, token 738 bytes, nonce 1022344827
+[note]  anchor: "digicert" stamped this root at 1785421800, token 738 bytes, nonce 1026344827
 [weak]  anchor-signature: this verifier checked that "digicert"'s token is over this
         root and did not check the authority's signature; verify it with
         `openssl ts -verify` against their published certificate
@@ -1533,7 +1533,7 @@ failure mode the verifier exists to catch. And the exit code follows the pack's
 verdict, not the table, because a table of obligations means nothing about a pack
 that does not verify.
 
-The mapping covers the AI Act, **prEN ISO/IEC 241022** (the profile document for AI
+The mapping covers the AI Act, **prEN ISO/IEC 241026** (the profile document for AI
 system logging, still a draft, so its clauses are quoted nowhere), SR 11-7 and the
 SOC 2 criteria. It lists the obligations this store does nothing for, by name,
 because a mapping that shows only its wins reads as complete. `docs/compliance.md`
@@ -1673,15 +1673,25 @@ command that produced it and the date it was run, split into the ones the gate
 re-measures on every push and the ones somebody has to run.
 
 It also has a section called *not yet measured*, which is the more useful half: no
-ext4 or xfs kill run, no second I/O backend to compare the first against, no run
-against a live bucket, no years of simulated time, no external audit of the
-cryptographic layer.
+machine ever died as opposed to a process, no second I/O backend to compare the first
+against, no run against a live cloud bucket, no years of simulated time, no external
+audit of the cryptographic layer.
 
 Two headlines from the half that is measured, and they only mean anything together.
 
-**Forty processes killed with `SIGKILL` mid-write on a real filesystem, and not one
-acked record lost.** That is the sentence the whole design is built on, tested by
-something other than the simulator that was written to believe it.
+**A hundred and twenty processes killed with `SIGKILL` mid-write, forty each on
+apfs, ext4 and xfs, and not one acked record lost.** That is the sentence the whole
+design is built on, tested by something other than the simulator that was written to
+believe it. The limit is named in the same place as the number: a `SIGKILL` is a
+process dying, not a machine, so the page cache survives it and power loss is a
+harsher test that has not been run.
+
+**The S3 adapter, pointed at a server nobody here wrote, failed on its first
+request.** It had been sending two `Host` headers, which RFC 9112 requires a server to
+refuse, so it had never worked against a real endpoint while every test passed. The
+fakes were written from the same reading of the same documentation as the client, and
+agreed with it. That is the argument for oracles in one sentence, and it is in the
+file with the fix and the regression test.
 
 **Eight hundred million shard ticks across 400,000 seeded runs, roughly twelve million
 crashes, zero durability violations.** On its own that number is worth very little,

@@ -224,9 +224,6 @@ fn run(rounds: usize) {
 /// substitution this project spends its time refusing.
 fn filesystem(path: &std::path::Path) -> String {
     let _ = std::fs::create_dir_all(path);
-    // `mount` names the type on every platform this runs on; `df -T` is GNU and
-    // says nothing useful here, which is how the first version printed "unknown"
-    // next to a durability claim.
     let device = Command::new("df")
         .arg(path)
         .output()
@@ -238,19 +235,38 @@ fn filesystem(path: &std::path::Path) -> String {
                 .and_then(|l| l.split_whitespace().next().map(str::to_owned))
         })
         .unwrap_or_default();
-    let kind = Command::new("mount")
-        .output()
-        .ok()
-        .and_then(|out| {
-            String::from_utf8_lossy(&out.stdout)
-                .lines()
-                .find(|l| !device.is_empty() && l.starts_with(&device))
-                .and_then(|l| {
-                    l.split_once('(')
-                        .and_then(|(_, rest)| rest.split(&[',', ')'][..]).next())
-                        .map(str::to_owned)
-                })
-        })
+    let kind = proc_mounts(&device)
+        .or_else(|| mount_command(&device))
         .unwrap_or_else(|| "unknown filesystem".to_owned());
     format!("{kind} on {device}")
+}
+
+/// Linux: the kernel's own table, in fixed columns, in a fixed order.
+///
+/// Worth preferring over parsing `mount`, and not for tidiness. The two platforms
+/// print different things and the difference is silent: macOS puts the type first
+/// inside the brackets, `apfs on /dev/disk3s5 (apfs, local, ...)`, while Linux puts
+/// mount options there and the type after the word `type`. The macOS parser applied
+/// to Linux does not fail, it returns `rw`, and this whole function exists because a
+/// wrong filesystem name next to a durability claim is worth less than none.
+fn proc_mounts(device: &str) -> Option<String> {
+    let table = std::fs::read_to_string("/proc/mounts").ok()?;
+    table
+        .lines()
+        .find(|l| l.split_whitespace().next() == Some(device))
+        .and_then(|l| l.split_whitespace().nth(2))
+        .map(str::to_owned)
+}
+
+/// macOS, and anything else with a BSD-shaped `mount`.
+fn mount_command(device: &str) -> Option<String> {
+    let out = Command::new("mount").output().ok()?;
+    String::from_utf8_lossy(&out.stdout)
+        .lines()
+        .find(|l| !device.is_empty() && l.starts_with(device))
+        .and_then(|l| {
+            l.split_once('(')
+                .and_then(|(_, rest)| rest.split(&[',', ')'][..]).next())
+                .map(str::to_owned)
+        })
 }

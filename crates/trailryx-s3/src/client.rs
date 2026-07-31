@@ -220,6 +220,14 @@ pub struct S3 {
     addressing: Addressing,
     conditional: Conditional,
     flavour: Flavour,
+    /// `max-keys` on a listing, when something needs the pages small.
+    ///
+    /// `None` leaves it to the store, which is right in production: the server's
+    /// default is a thousand and a smaller number only means more round trips. It
+    /// exists because the continuation path is the likeliest place a hand-written
+    /// client is wrong, and against a real bucket the only other way to reach it is
+    /// to write a thousand and one objects, where every one is a billed request.
+    page_size: Option<u32>,
     /// Kept so an operator can print the last refusal after the contract has
     /// narrowed it to a `&'static str`.
     last_failure: Option<Failure>,
@@ -283,6 +291,7 @@ impl S3 {
             addressing,
             conditional,
             flavour: Flavour::Aws,
+            page_size: None,
             last_failure: None,
         })
     }
@@ -307,11 +316,18 @@ impl S3 {
             addressing,
             conditional,
             flavour: Flavour::Aws,
+            page_size: None,
             last_failure: None,
         }
     }
 
     /// Point this adapter at Google Cloud Storage's XML API instead of S3.
+    /// Bound a listing page, so the continuation path can be reached cheaply.
+    pub fn with_page_size(mut self, keys: u32) -> Self {
+        self.page_size = Some(keys);
+        self
+    }
+
     pub fn with_flavour(mut self, flavour: Flavour) -> Self {
         self.flavour = flavour;
         self
@@ -386,6 +402,18 @@ impl S3 {
 
         let mut request = HttpRequest::new(method, target).body(payload);
         for (name, value) in headers {
+            // `host` is signed and must not be sent from here. SigV4 requires it in
+            // the canonical request, and the HTTP client writes the real `Host`
+            // because it owns the connection, so adding it again put two of them on
+            // the wire. RFC 9112 has a server refuse that outright, which Go's HTTP
+            // layer does before any S3 code runs: a bare `400 Bad Request` with a
+            // plain-text body, no code to report, nothing in the store's log. The
+            // fakes in this crate's tests parsed headers into a list and never
+            // minded, so every test passed against a client no real endpoint would
+            // have accepted. MinIO is what said so.
+            if name.eq_ignore_ascii_case("host") {
+                continue;
+            }
             request = request.header(name, value);
         }
         request = request.header("Authorization", signed.authorization);
@@ -502,6 +530,9 @@ impl S3 {
                 ],
                 Flavour::Gcs => vec![("prefix".to_owned(), prefix.to_owned())],
             };
+            if let Some(keys) = self.page_size {
+                query.push(("max-keys".to_owned(), keys.to_string()));
+            }
             if let Some(token) = &token {
                 let name = match self.flavour {
                     Flavour::Aws => "continuation-token",
