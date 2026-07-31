@@ -215,6 +215,26 @@ Two things the run pinned down that no fake would have:
   CLI's debug output settles a SigV4 argument. That is what caught a `Content-Type`
   header a helper library had added on its own.
 
+### GCS: the one with no free second implementation
+
+The GCS support is not a second adapter. Google Cloud Storage's XML API *is* the S3
+API, so `Flavour::Gcs` changes four things and reuses the rest: the header that makes
+a write conditional, the header naming the version, the parameter asking for one, and
+the older marker-based pagination.
+
+The obvious way to check it the way MinIO and Azurite checked the others is
+`fake-gcs-server`, and it cannot do the job. It routes a `PUT` on the XML path into
+its JSON upload handler and answers `400 invalid uploadType`, with or without
+`x-goog-if-generation-match`, so it never reaches the behaviour under test. Google
+publishes emulators for Pub/Sub, Firestore, Bigtable, Datastore and Spanner, and none
+for Cloud Storage.
+
+So **GCS is checked against our own fake and against Google's documentation, and
+against nothing that Google wrote**, which is exactly the position the S3 adapter was
+in the morning of the day its `Host` bug was found. Closing it needs a real bucket and
+an interoperability HMAC key, which is credentials and money, and it is in *not yet
+measured* with the others.
+
 ### Fuzzing depth
 
 The number that keeps the fuzz suite honest is not how many cases ran, it is how many
@@ -310,11 +330,12 @@ Stated so the absence is visible rather than inferred:
   standard library's blocking file API, behind the same trait the simulator fills.
   `io_uring` and `epoll` are a decision the architecture records and nobody has
   implemented, so there is nothing to run side by side yet.
-- **A live cloud bucket.** The S3 adapter now runs against MinIO, above, and the
-  Azure and GCS adapters still only meet fakes and published worked examples. Nothing
-  has touched a real AWS, Azure or Google endpoint, which needs a credential and
-  costs money. The `Host` bug is the argument for doing it: a real server said in one
-  request what a year of our own tests did not.
+- **A live cloud bucket.** S3 now runs against MinIO and Azure against Azurite, both
+  above, and neither is the cloud it stands for: no real error codes under
+  contention, no throttling, no real TLS chain, no versioned bucket. GCS has nothing
+  at all, for want of an emulator that implements its XML API. The `Host` bug is the
+  argument for spending the few cents this would cost: one request to a real server
+  said what our whole suite could not.
 - **Years of simulated time.** The long run above covers nine days, not years, and
   the arithmetic for closing that gap is in its own section.
 - **An external audit of the cryptographic layer.** Planned before the first
