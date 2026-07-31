@@ -1,0 +1,16 @@
+[package]
+name = "trailryx-federation"
+description = "Composing an answer across environments, and refusing to call it complete when it is not"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+trailryx-contracts = { path = "../trailryx-contracts" }
+trailryx-record = { path = "../trailryx-record" }
+trailryx-store = { path = "../trailryx-store" }
+
+[lints]
+workspace = true

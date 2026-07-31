@@ -7,7 +7,7 @@
 ![Stage](https://img.shields.io/badge/stage-11%20of%2013-blue.svg)
 ![Core](https://img.shields.io/badge/core-frozen-success.svg)
 ![Rust](https://img.shields.io/badge/rust-1.85%2B-orange.svg)
-![Tests](https://img.shields.io/badge/tests-1010-success.svg)
+![Tests](https://img.shields.io/badge/tests-1017-success.svg)
 ![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)
 ![Dependencies](https://img.shields.io/badge/deps-0%20in%20the%20verifier-success.svg)
 ![Unsafe](https://img.shields.io/badge/unsafe-forbidden-success.svg)
@@ -60,7 +60,7 @@ Two sentences carry the whole design.
 
 <div align="center">
 
-<img src="assets/flow.svg" alt="One span arrives and the mapper splits it into typed metadata and an encrypted payload; the metadata becomes a link in a hash chain, the chain is sealed into a Merkle tree, the root is signed and witnessed and checked by a verifier with no dependencies, and then the payload key is destroyed while the verdict still stands" width="1010">
+<img src="assets/flow.svg" alt="One span arrives and the mapper splits it into typed metadata and an encrypted payload; the metadata becomes a link in a hash chain, the chain is sealed into a Merkle tree, the root is signed and witnessed and checked by a verifier with no dependencies, and then the payload key is destroyed while the verdict still stands" width="1017">
 
 <sub>One record, start to finish: it arrives, it splits, it chains, it seals, it gets signed and checked, and then its payload key is destroyed and the tick still stands. The animation loops every sixteen seconds.</sub>
 
@@ -191,7 +191,7 @@ harmonised standards that would say *how* are still not cited in the Official Jo
 
 <div align="center">
 
-<img src="docs/assets/where-it-sits.svg" alt="A positioning map with two axes: whether one person can be erased on request, and what can be proved about an answer. Tamper-evident ledgers sit high on proof and cannot remove history; observability and SIEM tools delete freely and prove nothing; Trailryx sits in the corner that does both" width="1010">
+<img src="docs/assets/where-it-sits.svg" alt="A positioning map with two axes: whether one person can be erased on request, and what can be proved about an answer. Tamper-evident ledgers sit high on proof and cannot remove history; observability and SIEM tools delete freely and prove nothing; Trailryx sits in the corner that does both" width="1017">
 
 <sub>Two properties that usually cost each other. The interesting question is not who is better, it is which corner a tool had to give up.</sub>
 
@@ -263,7 +263,7 @@ A tool that has moved since should be re-checked rather than argued with.</sub>
 
 <div align="center">
 
-<img src="assets/diagram.svg" alt="Two OTLP transports feed one mapper, which splits every event into typed metadata and an encrypted payload; the journal chains records, the segment commits to them in a Merkle history and five sorted indexes, and an evidence pack hands an auditor a signed root a verifier with no dependencies recomputes" width="1010">
+<img src="assets/diagram.svg" alt="Two OTLP transports feed one mapper, which splits every event into typed metadata and an encrypted payload; the journal chains records, the segment commits to them in a Merkle history and five sorted indexes, and an evidence pack hands an auditor a signed root a verifier with no dependencies recomputes" width="1017">
 
 <sub>The same thing as a still map, for reading rather than watching: two ways in, one mapper, one plane boundary, and the chain of commitments above them.</sub>
 
@@ -293,6 +293,7 @@ and the proof shapes do not change without a version and a migration.
 | `trailryx-http` | the workspace's one HTTP/1.1 client. No TLS, no redirects, no reuse | 11 |
 | `trailryx-s3` | SigV4, S3 and Google Cloud Storage over that client. No cloud SDK | 31 |
 | `trailryx-azure` | Azure Blob Storage: Shared Key signing, and the four operations | 16 |
+| `trailryx-federation` | composing an answer across environments, and refusing to call it complete when it is not | 7 |
 | `trailryx-publish` | atomic publication of a sealed segment, and the fault model for it | 11 |
 | `trailryx-crypto-aws` | the validated cipher and ML-KEM, behind the erasure seam. The one adapter with a dependency | 7 |
 | `trailryx-asn1` | a bounded DER reader, enough for RFC 3161 and nothing more. Depends on nothing | 30 |
@@ -385,7 +386,7 @@ are different questions, and until this week that step answered only the second.
 ## Try it
 
 ```bash
-cargo test                                    # 1010 tests
+cargo test                                    # 1017 tests
 cargo run --bin trailryx-sim-run -- --help
 ```
 
@@ -765,6 +766,38 @@ context, does not expose it, and gates before the engine is asked. A server auth
 reaching for `SessionContext::sql` would reintroduce the hole with no warning, so that
 door is not there.
 
+## A forgotten node is the easiest way to shrink an answer
+
+Agents run in AWS, in Google Cloud and on somebody's own hardware, and the question
+is always the same: show me everything this agent did in March, everywhere. Fanning
+the query out and merging the rows is the easy half.
+
+The half that matters is what the merged answer may claim, because **forgetting one
+node produces a smaller answer that looks exactly like a complete one**. A federation
+that says "here is everything" while a node was left out turns a proof into a
+decoration.
+
+So the rule is one sentence: a federated answer is complete **if and only if** the
+peer set itself is attested, every peer in that set answered, and every one of those
+answers was itself complete.
+
+The first clause is the one that gets skipped. Without a signed list of who the peers
+are, "everybody answered" only means "everybody I happened to ask", which is not a
+statement about the world. A registry is therefore versioned and signed, or it is
+marked unattested and can never yield a full proof, and the answer carries the
+registry version so a reader can ask later which set it was complete for.
+
+Two smaller cases are named rather than swallowed. A peer that **errors** is silent
+rather than empty, because treating a failure as an empty answer is how a broken
+environment becomes an environment with no records. And a peer that answers **without
+being in the registry** is reported, because rows from an unlisted node make an answer
+that may be bigger than complete, which is not something anybody can act on.
+
+None of this is new machinery. It is the composition already used between shards
+inside one node, one level up: records into a segment, segments into a shard, shards
+into a store, stores into a federation, each step asking whether the set it combined
+is the set that exists.
+
 ## Two verifiers, so the format is what is proved
 
 `verifier-py/trailryx_verify.py` reads the same pack in Python, standard library
@@ -810,7 +843,7 @@ seed=777 steps=20000 digest=42c29db84fa0d604 lines=37394 crashes=95 violations=0
 
 <div align="center">
 
-<img src="docs/assets/completeness.svg" alt="A sorted index of nine entries: four answered the query and each carries an inclusion proof, and the entry immediately either side of them is carried too, with a key that must fall outside the range" width="1010">
+<img src="docs/assets/completeness.svg" alt="A sorted index of nine entries: four answered the query and each carries an inclusion proof, and the entry immediately either side of them is carried too, with a key that must fall outside the range" width="1017">
 
 <sub>The two dashed entries are what makes the answer complete rather than merely true. Without them, a store could hand over four real records and keep a fifth.</sub>
 
@@ -1116,7 +1149,7 @@ is a file.
 
 <div align="center">
 
-<img src="docs/assets/two-decoders.svg" alt="Protobuf bytes and one JSON line decode into the same in-memory types and call the same mapper, producing the same record, and a differential test encodes one fixture twice with two independently written encoders and compares the results as whole structures" width="1010">
+<img src="docs/assets/two-decoders.svg" alt="Protobuf bytes and one JSON line decode into the same in-memory types and call the same mapper, producing the same record, and a differential test encodes one fixture twice with two independently written encoders and compares the results as whole structures" width="1017">
 
 <sub>The middle box is the whole argument for reading OTLP/JSON rather than inventing a line format: one set of types, one mapper, one place where the plane boundary is decided.</sub>
 
@@ -1273,7 +1306,7 @@ itself and the count that read six until somebody checked it.
 
 <div align="center">
 
-<img src="docs/assets/erasure.svg" alt="A record commits to four fields about its payload and does not contain it: hash, size, class and key id. The payload is sealed under a key of its own, forgetting destroys every key in the subject's row before dropping the row, and none of the four fields moves, so every chain, root and proof still verifies" width="1010">
+<img src="docs/assets/erasure.svg" alt="A record commits to four fields about its payload and does not contain it: hash, size, class and key id. The payload is sealed under a key of its own, forgetting destroys every key in the subject's row before dropping the row, and none of the four fields moves, so every chain, root and proof still verifies" width="1017">
 
 <sub>The banner is the property the product turns on, and it is a test rather than a claim: seal, prove, erase, prove again.</sub>
 
@@ -1417,7 +1450,7 @@ that is the part an auditor cannot do without the pack. It then says out loud th
 it did not check the authority's signature, and prints the command that does:
 
 ```
-[note]  anchor: "digicert" stamped this root at 1785421800, token 738 bytes, nonce 1010344827
+[note]  anchor: "digicert" stamped this root at 1785421800, token 738 bytes, nonce 1017344827
 [weak]  anchor-signature: this verifier checked that "digicert"'s token is over this
         root and did not check the authority's signature; verify it with
         `openssl ts -verify` against their published certificate
@@ -1468,7 +1501,7 @@ failure mode the verifier exists to catch. And the exit code follows the pack's
 verdict, not the table, because a table of obligations means nothing about a pack
 that does not verify.
 
-The mapping covers the AI Act, **prEN ISO/IEC 241010** (the profile document for AI
+The mapping covers the AI Act, **prEN ISO/IEC 241017** (the profile document for AI
 system logging, still a draft, so its clauses are quoted nowhere), SR 11-7 and the
 SOC 2 criteria. It lists the obligations this store does nothing for, by name,
 because a mapping that shows only its wins reads as complete. `docs/compliance.md`

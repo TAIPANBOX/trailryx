@@ -3761,6 +3761,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "trailryx-federation"
+version = "0.0.1"
+dependencies = [
+ "trailryx-contracts",
+ "trailryx-record",
+ "trailryx-store",
+]
+
+[[package]]
 name = "trailryx-http"
 version = "0.0.1"
 dependencies = [
