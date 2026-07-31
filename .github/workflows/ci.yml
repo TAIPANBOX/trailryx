@@ -51,25 +51,15 @@ jobs:
       # to read, and every crate pulled in is a crate somebody has to trust. Narrowed
       # from "workspace-wide" on 30 July 2026, when the SQL facade took DataFusion.
       # The claim follows the reality rather than the other way round.
-      - name: zero deps outside the facade
-        run: |
-          offenders=""
-          for dir in crates/*/; do
-            crate=$(basename "$dir")
-            [ "$crate" = "trailryx-sql" ] && continue
-            n=$(cargo tree -p "$crate" --prefix none 2>/dev/null | grep -v '^trailryx' | grep -c . || true)
-            [ "$n" -ne 0 ] && offenders="$offenders $crate($n)"
-          done
-          if [ -n "$offenders" ]; then
-            echo "::error::third-party dependencies outside the facade:$offenders"
-            exit 1
-          fi
+      - name: zero deps outside the declared
+        run: ./scripts/declared-deps.sh
 
-      # §3.2a requires this by name: if the core cannot build and pass its tests
-      # without the facade, the facade has got into the foundation. It is also what
-      # protects the core's determinism, and with it DST, from tokio's scheduler.
-      - name: core builds without the facade
-        run: cargo test --workspace --exclude trailryx-sql --quiet
+      # The core has to stand up with every adapter absent, which §3.2a requires by
+      # name for the facade and §2a extends to the rest. The exclusions come from the
+      # same file as the check above, because these two held their own copies of the
+      # list once and drifted the first time it changed.
+      - name: core builds without adapters
+        run: cargo test --workspace $(./scripts/declared-deps.sh list) --quiet
 
       # The workspace lint forbids it, so this is a second pair of eyes on the lint.
       - name: no unsafe

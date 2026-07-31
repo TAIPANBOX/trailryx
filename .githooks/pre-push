@@ -69,36 +69,15 @@ step "sim crate builds standalone" cargo test -p trailryx-sim --quiet
 # What the list must never contain, and this is the part that carries the argument:
 # the core and `trailryx-verify`. An auditor reads the verifier. Every crate pulled
 # into it is a crate that auditor is asked to trust instead.
-FACADE="trailryx-sql"
-ALLOWED="trailryx-sql trailryx-crypto-aws trailryx-demo"
-printf '  %-34s' "zero deps outside the declared"
-offenders=""
-for dir in crates/*/; do
-  crate=$(basename "$dir")
-  case " $ALLOWED " in *" $crate "*) continue ;; esac
-  n=$(cargo tree -p "$crate" --prefix none 2>/dev/null | grep -v '^trailryx' | grep -c . || true)
-  if [ "$n" -ne 0 ]; then
-    offenders="$offenders $crate($n)"
-  fi
-done
-if [ -z "$offenders" ]; then
-  printf 'ok\n'
-  pass=$((pass + 1))
-else
-  printf 'FAIL%s\n' "$offenders"
-  fail=$((fail + 1))
-fi
+step "zero deps outside the declared" ./scripts/declared-deps.sh
 
 # The core has to stand up with every adapter absent, which §3.2a requires by name
 # for the facade and §2a extends to the rest: if the core cannot build and pass its
 # tests without them, an adapter has got into the foundation. This is also what protects the core's determinism, and
 # with it deterministic simulation testing, from tokio's scheduler.
-excludes=""
-for crate in $ALLOWED; do
-  excludes="$excludes --exclude $crate"
-done
-# shellcheck disable=SC2086
-step "core builds without adapters" cargo test --workspace $excludes --quiet
+# shellcheck disable=SC2046,SC2086
+step "core builds without adapters" \
+  cargo test --workspace $(./scripts/declared-deps.sh list) --quiet
 
 # No unsafe. The workspace lint forbids it, so this is a second pair of eyes on
 # the lint itself rather than on the code.
