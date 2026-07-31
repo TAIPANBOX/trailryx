@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["crates/trailryx-sim", "crates/trailryx-record", "crates/trailryx-crypto", "crates/trailryx-contracts", "crates/trailryx-journal", "crates/trailryx-index", "crates/trailryx-store", "crates/trailryx-json", "crates/trailryx-otlp", "crates/trailryx-erasure", "crates/trailryx-verify", "crates/trailryx-projection", "crates/trailryx-sign", "crates/trailryx-ingest", "crates/trailryx-assemble", "crates/trailryx-demo", "crates/trailryx-core", "crates/trailryx-asn1", "crates/trailryx-anchor", "crates/trailryx-compliance", "crates/trailryx-sql", "crates/trailryx-s3", "crates/trailryx-http", "crates/trailryx-publish"]
+members = ["crates/trailryx-sim", "crates/trailryx-record", "crates/trailryx-crypto", "crates/trailryx-contracts", "crates/trailryx-journal", "crates/trailryx-index", "crates/trailryx-store", "crates/trailryx-json", "crates/trailryx-otlp", "crates/trailryx-erasure", "crates/trailryx-verify", "crates/trailryx-projection", "crates/trailryx-sign", "crates/trailryx-ingest", "crates/trailryx-assemble", "crates/trailryx-demo", "crates/trailryx-core", "crates/trailryx-asn1", "crates/trailryx-anchor", "crates/trailryx-compliance", "crates/trailryx-sql", "crates/trailryx-s3", "crates/trailryx-http", "crates/trailryx-publish", "crates/trailryx-crypto-aws"]
 
 [workspace.package]
 version = "0.0.1"

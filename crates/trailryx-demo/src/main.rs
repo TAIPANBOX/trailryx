@@ -601,8 +601,11 @@ fn walk(dir: &Path) -> Result<(), Failure> {
     // ---------------------------------------------------------------
     step(8, "what primitives is this store actually standing on");
     note("The plan asks for a scan by a tool outside this project. In its place:");
-    note("every record says which primitives produced it, and the verifier says");
-    note("whether it considers any of them retired.");
+    note("every record says which primitives it DECLARES, and the verifier says");
+    note("whether it considers any of them retired. Declared is not the same as in");
+    note("use: the hash and the signature are what produced these records, and the");
+    note("key exchange is what the format commits to for payload keys, which this");
+    note("run does not exercise because it seals payloads with a local key source.");
     let mut seen: Vec<String> = written
         .iter()
         .chain(std::iter::once(&erasure))

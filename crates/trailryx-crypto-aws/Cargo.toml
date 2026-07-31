@@ -1,0 +1,23 @@
+[package]
+name = "trailryx-crypto-aws"
+description = "The cryptographic provider: a validated cipher and ML-KEM, behind the erasure seam"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+# The one crate outside the SQL facade that carries a third-party dependency, by
+# the standing decision recorded in docs/planning/trailryx-architecture.md §2a. It
+# is an L2 adapter: the core builds and passes its tests without it.
+[dependencies]
+trailryx-erasure = { path = "../trailryx-erasure" }
+aws-lc-rs = "1"
+
+[features]
+# The build that links AWS-LC's FIPS 140-3 module. Without it the algorithms are
+# the same and the validation is not, and `is_validated()` says so.
+fips = ["aws-lc-rs/fips"]
+
+[lints]
+workspace = true

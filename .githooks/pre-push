@@ -89,12 +89,16 @@ else
   fail=$((fail + 1))
 fi
 
-# The core has to stand up with the facade absent, which §3.2a requires by name:
-# if the core cannot build and pass its tests without the facade, the facade has
-# got into the foundation. This is also what protects the core's determinism, and
+# The core has to stand up with every adapter absent, which §3.2a requires by name
+# for the facade and §2a extends to the rest: if the core cannot build and pass its
+# tests without them, an adapter has got into the foundation. This is also what protects the core's determinism, and
 # with it deterministic simulation testing, from tokio's scheduler.
-step "core builds without the facade" \
-  cargo test --workspace --exclude "$FACADE" --quiet
+excludes=""
+for crate in $ALLOWED; do
+  excludes="$excludes --exclude $crate"
+done
+# shellcheck disable=SC2086
+step "core builds without adapters" cargo test --workspace $excludes --quiet
 
 # No unsafe. The workspace lint forbids it, so this is a second pair of eyes on
 # the lint itself rather than on the code.
