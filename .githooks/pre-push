@@ -59,12 +59,23 @@ step "sim crate builds standalone" cargo test -p trailryx-sim --quiet
 # has to be small enough for an auditor to read, and every crate pulled in is a
 # crate somebody has to trust. That was never a property of the workspace. It is a
 # property of the thing an auditor reads.
+# Crates allowed to carry third-party dependencies, and the reason each one may.
+# A declared list rather than a single name, because the standing decision (Yurii,
+# 30 July 2026) is that this project takes the best available implementation of a
+# thing rather than writing its own by default. The list is the whole policy: a
+# crate not on it must have none, and adding a crate to it is a decision somebody
+# writes down here, not a dependency that appears in a manifest.
+#
+# What the list must never contain, and this is the part that carries the argument:
+# the core and `trailryx-verify`. An auditor reads the verifier. Every crate pulled
+# into it is a crate that auditor is asked to trust instead.
 FACADE="trailryx-sql"
-printf '  %-34s' "zero deps outside the facade"
+ALLOWED="trailryx-sql trailryx-crypto-aws"
+printf '  %-34s' "zero deps outside the declared"
 offenders=""
 for dir in crates/*/; do
   crate=$(basename "$dir")
-  [ "$crate" = "$FACADE" ] && continue
+  case " $ALLOWED " in *" $crate "*) continue ;; esac
   n=$(cargo tree -p "$crate" --prefix none 2>/dev/null | grep -v '^trailryx' | grep -c . || true)
   if [ "$n" -ne 0 ]; then
     offenders="$offenders $crate($n)"

@@ -17,7 +17,7 @@ cargo test
 ```
 
 There is nothing to install beyond a Rust toolchain. Every crate except
-`trailryx-sql` has **zero third-party dependencies** and the gate enforces it, so a
+`trailryx-sql` has **no third-party dependencies in the verifier or the core** and the gate enforces it, so a
 pull request that adds one outside the facade needs to argue for it in the description
 rather than in `Cargo.toml`.
 

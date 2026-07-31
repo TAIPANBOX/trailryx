@@ -9,7 +9,7 @@
 ![Rust](https://img.shields.io/badge/rust-1.85%2B-orange.svg)
 ![Tests](https://img.shields.io/badge/tests-971-success.svg)
 ![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)
-![Dependencies](https://img.shields.io/badge/deps-0%20in%20the%20core-success.svg)
+![Dependencies](https://img.shields.io/badge/deps-0%20in%20the%20verifier-success.svg)
 ![Unsafe](https://img.shields.io/badge/unsafe-forbidden-success.svg)
 
 </div>
@@ -300,10 +300,22 @@ and the proof shapes do not change without a version and a migration.
 | `trailryx-sql` | the SQL facade: DataFusion and the Postgres wire protocol, predicates pushed into the index, statements gated, reads authorised, four dialect extensions | 59 |
 | `trailryx-demo` | the eight acceptance steps, and a reader for a collector's file | - |
 
-**Zero third-party dependencies in every crate above.** `unsafe` forbidden at the
-workspace level.
+**The verifier and the core have no third-party dependencies.** `unsafe` forbidden
+at the workspace level. Adapters and facades take what they need, deliberately, and
+the gate holds the line by name rather than by intention.
 
-The one exception is `trailryx-sql`, the SQL facade, which took DataFusion and the
+This project used to claim zero dependencies workspace-wide, and that claim died in
+stages. The standing decision since 30 July 2026 is plainer: **take the best
+available implementation of a thing, and write our own only where writing it is the
+point.** The whole argument was never about a count. It was about the one artefact an
+auditor reads, and that artefact still has none.
+
+What writing our own is still the point for: the record format, the proofs, the
+journal, the index, the erasure machinery, and the offline verifier. What it is not
+the point for: a validated cipher, a post-quantum key exchange, a TLS stack, a SQL
+engine. Nobody buys an audit store because its author implemented AES.
+
+The first exception is `trailryx-sql`, the SQL facade, which took DataFusion and the
 Postgres wire protocol on 30 July 2026 and brings **294 third-party crates** with it
 on Linux, and **297** on macOS (`cargo tree -p trailryx-sql`, counting distinct
 names). That number is here rather than buried: it is what the decision cost.
@@ -332,6 +344,14 @@ section that turns down Zig: the risk of our own SQL engine exceeds the gain.
 What did not change is the part that carried the argument. `trailryx-verify` still
 has none, and that was never a property of the workspace: it is a property of the
 thing an auditor reads.
+
+The second exception is the cryptographic provider, and it is the reason the policy
+was written down. The AEAD seam has only an unvalidated stand-in in the tree, which
+`Vault::new` refuses, so crypto-erasure, the thing this store is bought for, does not
+run in a deployment. `aws-lc-rs` closes that with a FIPS 140-3 validated cipher, adds
+the validated ML-KEM this format has carried an identifier for since day one, and
+carries the TLS answer with it because `rustls` uses the same backend. One dependency,
+three open questions, in an adapter crate that the core builds and tests without.
 
 ## Try it
 
@@ -441,8 +461,10 @@ an answer.
 `aws-sdk-s3` brings a runtime, an HTTP stack, a TLS stack and several hundred crates
 to say that the S3 API is HTTP plus a signature. This workspace already had the HTTP
 client, written for RFC 3161, and both hash functions the signature is made of. So
-`trailryx-s3` has **zero third-party dependencies** like everything outside the SQL
-facade, and the storage adapter stays the size of the rest of the store.
+`trailryx-s3` has **no third-party dependencies**, and the storage adapter stays the
+size of the rest of the store. Not out of principle: the pieces already existed, so
+taking a cloud SDK would have added several hundred crates to avoid writing a
+signature that is four chained HMACs.
 
 That trade is only defensible if the signature is right, and a signature checked
 against itself is one that gets rejected in production with `SignatureDoesNotMatch`
