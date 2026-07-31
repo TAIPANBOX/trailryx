@@ -3727,6 +3727,7 @@ dependencies = [
  "trailryx-assemble",
  "trailryx-contracts",
  "trailryx-crypto",
+ "trailryx-crypto-aws",
  "trailryx-erasure",
  "trailryx-index",
  "trailryx-ingest",

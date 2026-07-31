@@ -70,7 +70,7 @@ step "sim crate builds standalone" cargo test -p trailryx-sim --quiet
 # the core and `trailryx-verify`. An auditor reads the verifier. Every crate pulled
 # into it is a crate that auditor is asked to trust instead.
 FACADE="trailryx-sql"
-ALLOWED="trailryx-sql trailryx-crypto-aws"
+ALLOWED="trailryx-sql trailryx-crypto-aws trailryx-demo"
 printf '  %-34s' "zero deps outside the declared"
 offenders=""
 for dir in crates/*/; do

@@ -31,9 +31,10 @@ use trailryx_assemble::Assembler;
 use trailryx_contracts::contracts::{ObjectStore, Source};
 use trailryx_contracts::fakes::{MemoryKeyProvider, MemoryObjectStore};
 use trailryx_contracts::ingest::{MetaDraft, PayloadPart};
+use trailryx_crypto_aws::AwsAead;
+use trailryx_erasure::PredictableKeys;
 use trailryx_erasure::subject::SubjectHandle;
 use trailryx_erasure::vault::Vault;
-use trailryx_erasure::{PredictableKeys, Sha384Ctr};
 use trailryx_index::completeness::Dimension;
 use trailryx_index::segment::{ShardTree, StoreTree};
 use trailryx_ingest::config::Config;
@@ -54,7 +55,7 @@ use trailryx_store::evidence::PackBuilder;
 use trailryx_store::query::{ProofStatus, Query, query_segment};
 use trailryx_store::seal::{SealOutcome, seal_segment};
 
-type Vaults = Vault<MemoryObjectStore, MemoryKeyProvider, Sha384Ctr, PredictableKeys>;
+type Vaults = Vault<MemoryObjectStore, MemoryKeyProvider, AwsAead, PredictableKeys>;
 
 const TENANT: &str = "acme";
 const TRUST_DOMAIN: &str = "acme.example";
@@ -145,7 +146,12 @@ fn walk(dir: &Path) -> Result<(), Failure> {
         TRUST_DOMAIN,
         MemoryObjectStore::default(),
         MemoryKeyProvider::default(),
-        Sha384Ctr,
+        // A real cipher, and keys that are deliberately not. The cipher has to be
+        // real or this run demonstrates nothing about encryption; the keys have to
+        // be predictable or the run stops being reproducible, which is the other
+        // thing it demonstrates. `unvalidated` because this build does not link the
+        // FIPS module, and the vault is right to insist on being told.
+        AwsAead,
         PredictableKeys::new(),
     );
     // Seeded, so a run is reproducible: the identities a run mints are a
@@ -623,6 +629,25 @@ fn walk(dir: &Path) -> Result<(), Failure> {
     for line in &seen {
         note(&format!("  {line}"));
     }
+    // What actually did the work, next to what the records declare. The two are
+    // different questions and this step used to answer only the second, which read
+    // as though all three primitives were in use.
+    note(&format!(
+        "  in use for payloads: {} ({})",
+        {
+            use trailryx_erasure::Aead;
+            AwsAead.name()
+        },
+        {
+            use trailryx_erasure::Aead;
+            if AwsAead.is_validated() {
+                "the FIPS 140-3 module"
+            } else {
+                "a real cipher, not the validated module: this build has no fips feature"
+            }
+        }
+    ));
+
     let weak: Vec<&str> = after
         .findings
         .iter()

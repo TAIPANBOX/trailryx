@@ -11,6 +11,7 @@ description = "The eight acceptance steps, walked end to end"
 trailryx-assemble = { path = "../trailryx-assemble" }
 trailryx-contracts = { path = "../trailryx-contracts" }
 trailryx-crypto = { path = "../trailryx-crypto" }
+trailryx-crypto-aws = { path = "../trailryx-crypto-aws" }
 trailryx-erasure = { path = "../trailryx-erasure" }
 trailryx-index = { path = "../trailryx-index" }
 trailryx-ingest = { path = "../trailryx-ingest" }

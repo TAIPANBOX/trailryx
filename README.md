@@ -369,12 +369,17 @@ because the algorithm name was right would be worse than the stand-in it replace
 ### The cryptographic provider
 
 The second exception is the cryptographic provider, and it is the reason the policy
-was written down. The AEAD seam has only an unvalidated stand-in in the tree, which
-`Vault::new` refuses, so crypto-erasure, the thing this store is bought for, does not
-run in a deployment. `aws-lc-rs` closes that with a FIPS 140-3 validated cipher, adds
-the validated ML-KEM this format has carried an identifier for since day one, and
+was written down. The AEAD seam used to hold only an unvalidated stand-in, which
+`Vault::new` refuses, so crypto-erasure, the thing this store is bought for, did not
+run in a deployment at all. `trailryx-crypto-aws` closes that with AES-256-GCM from
+AWS-LC, adds the ML-KEM this format has carried an identifier for since day one, and
 carries the TLS answer with it because `rustls` uses the same backend. One dependency,
 three open questions, in an adapter crate that the core builds and tests without.
+
+The acceptance demo seals its payloads with that cipher now. Its keys stay
+deliberately predictable, because the run has to be reproducible, and the eighth step
+prints which cipher did the work next to which primitives the records declare. Those
+are different questions, and until this week that step answered only the second.
 
 ## Try it
 
@@ -1266,8 +1271,10 @@ asked to be forgotten. Each entry is hashed together with the subject's key id
 instead.
 
 The cipher and the key generator are the two things this crate does not
-implement. They sit behind a trait for a validated module to fill, the
-stand-ins answer `false` to `is_validated()`, and the constructor refuses them.
+implement. They sit behind a trait, the stand-ins answer `false` to
+`is_validated()`, and the constructor refuses them. `trailryx-crypto-aws` fills the
+trait with AES-256-GCM from AWS-LC, and answers `true` only in the build that links
+the FIPS 140-3 module, so the seam still refuses to be told what it wants to hear.
 
 ## Handing an auditor something they can check without us
 
