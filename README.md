@@ -4,7 +4,7 @@
 
 **A record of what your AI agents did that nobody can quietly change or shorten.**
 
-![Stage](https://img.shields.io/badge/stage-11%20of%2013-blue.svg)
+![Stage](https://img.shields.io/badge/stage-13%20of%2013-blue.svg)
 ![Core](https://img.shields.io/badge/core-frozen-success.svg)
 ![Rust](https://img.shields.io/badge/rust-1.85%2B-orange.svg)
 ![Tests](https://img.shields.io/badge/tests-1022-success.svg)
@@ -270,8 +270,10 @@ A tool that has moved since should be re-checked rather than argued with.</sub>
 </div>
 
 
-Stages 0 to 10 in full, most of 11, plus the transport. The core is **frozen**: the journal format, the index structures
-and the proof shapes do not change without a version and a migration.
+Stages 0 to 12 closed, and 13 under way. The core is **frozen**: the journal format,
+the index structures and the proof shapes do not change without a version and a
+migration. What stage 13 still wants is measured absence rather than a guess, and
+[`VALIDATION.md`](VALIDATION.md) lists it.
 
 | Crate | What it is | Tests |
 |---|---|---|
