@@ -109,8 +109,8 @@ jobs:
 
       # A feature nobody builds is a feature that rots, and this one only shows up
       # in a deployment when it breaks.
-      - name: the TLS build still works
-        run: cargo test -p trailryx-http --features tls --quiet
+      - name: the TLS builds still work
+        run: ./scripts/tls-builds.sh
 
       # Every hand-written parser, fed bytes it did not expect. Ten times the
       # gate's volume here, because CI has the minutes and a fuzzer's value is

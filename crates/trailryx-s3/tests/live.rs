@@ -39,7 +39,7 @@
 //! can delete the wrong thing.
 
 use trailryx_contracts::{AdapterError, ObjectStore, PutOutcome};
-use trailryx_s3::{Addressing, Conditional, Credentials, S3};
+use trailryx_s3::{Addressing, Conditional, Credentials, Flavour, S3};
 
 /// The store's own words, or the adapter's summary if it kept none.
 ///
@@ -68,6 +68,7 @@ struct Config {
     secret: String,
     region: String,
     addressing: Addressing,
+    flavour: Flavour,
 }
 
 /// The environment, or `None` with a printed reason.
@@ -89,6 +90,13 @@ fn config() -> Option<Config> {
             Ok("virtual") => Addressing::VirtualHosted,
             _ => Addressing::Path,
         },
+        // Google Cloud Storage's XML API is this same API with four differences,
+        // and the only way to know they are right is to ask Google. Reaching it
+        // needs an interoperability HMAC key, which an operator creates on purpose.
+        flavour: match std::env::var("TRAILRYX_S3_FLAVOUR").as_deref() {
+            Ok("gcs") => Flavour::Gcs,
+            _ => Flavour::Aws,
+        },
     };
     Some(cfg)
 }
@@ -103,6 +111,7 @@ fn store(cfg: &Config) -> S3 {
         Conditional::IfNoneMatchStar,
     )
     .expect("the endpoint parses")
+    .with_flavour(cfg.flavour)
 }
 
 /// A prefix nobody else is using, derived from the process rather than a clock, so

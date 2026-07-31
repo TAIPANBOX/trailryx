@@ -112,6 +112,18 @@ pub enum Stream {
     Tls(Box<StreamOwned<ClientConnection, TcpStream>>),
 }
 
+impl std::fmt::Debug for Stream {
+    /// Written by hand because `StreamOwned` has no `Debug`, and named by variant
+    /// rather than by contents: what a reader wants from this is whether the
+    /// connection was encrypted, and the bytes in flight are not for a log.
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Plain(_) => f.write_str("Stream::Plain"),
+            Self::Tls(_) => f.write_str("Stream::Tls"),
+        }
+    }
+}
+
 impl Read for Stream {
     fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
         match self {

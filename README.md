@@ -7,7 +7,7 @@
 ![Stage](https://img.shields.io/badge/stage-13%20of%2013-blue.svg)
 ![Core](https://img.shields.io/badge/core-frozen-success.svg)
 ![Rust](https://img.shields.io/badge/rust-1.85%2B-orange.svg)
-![Tests](https://img.shields.io/badge/tests-1028-success.svg)
+![Tests](https://img.shields.io/badge/tests-1031-success.svg)
 ![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)
 ![Dependencies](https://img.shields.io/badge/deps-0%20in%20the%20verifier-success.svg)
 ![Unsafe](https://img.shields.io/badge/unsafe-forbidden-success.svg)
@@ -292,7 +292,7 @@ migration. What stage 13 still wants is measured absence rather than a guess, an
 | `trailryx-verify` | the offline verifier, including its own ECDSA and a 215-line RFC 3161 token reader. Depends on nothing | 29 |
 | `trailryx-projection` | Thrift, a Parquet writer with real lists, and columnar projections | 19 |
 | `trailryx-sign` | what gets signed, and what a witness attests to | 4 |
-| `trailryx-http` | the workspace's one HTTP/1.1 client. No TLS, no redirects, no reuse | 11 |
+| `trailryx-http` | the workspace's one HTTP/1.1 client. No TLS, no redirects, no reuse | 14 |
 | `trailryx-s3` | SigV4, S3 and Google Cloud Storage over that client. No cloud SDK | 35 |
 | `trailryx-azure` | Azure Blob Storage: Shared Key signing, and the four operations | 18 |
 | `trailryx-federation` | composing an answer across environments, and refusing to call it complete when it is not | 7 |
@@ -389,7 +389,7 @@ are different questions, and until this week that step answered only the second.
 ## Try it
 
 ```bash
-cargo test                                    # 1028 tests
+cargo test                                    # 1031 tests
 cargo run --bin trailryx-sim-run -- --help
 ```
 
@@ -1482,7 +1482,7 @@ that is the part an auditor cannot do without the pack. It then says out loud th
 it did not check the authority's signature, and prints the command that does:
 
 ```
-[note]  anchor: "digicert" stamped this root at 1785421800, token 738 bytes, nonce 1028344827
+[note]  anchor: "digicert" stamped this root at 1785421800, token 738 bytes, nonce 1031344827
 [weak]  anchor-signature: this verifier checked that "digicert"'s token is over this
         root and did not check the authority's signature; verify it with
         `openssl ts -verify` against their published certificate
@@ -1533,7 +1533,7 @@ failure mode the verifier exists to catch. And the exit code follows the pack's
 verdict, not the table, because a table of obligations means nothing about a pack
 that does not verify.
 
-The mapping covers the AI Act, **prEN ISO/IEC 241028** (the profile document for AI
+The mapping covers the AI Act, **prEN ISO/IEC 241031** (the profile document for AI
 system logging, still a draft, so its clauses are quoted nowhere), SR 11-7 and the
 SOC 2 criteria. It lists the obligations this store does nothing for, by name,
 because a mapping that shows only its wins reads as complete. `docs/compliance.md`
@@ -1686,12 +1686,19 @@ believe it. The limit is named in the same place as the number: a `SIGKILL` is a
 process dying, not a machine, so the page cache survives it and power loss is a
 harsher test that has not been run.
 
-**The S3 adapter, pointed at a server nobody here wrote, failed on its first
-request.** It had been sending two `Host` headers, which RFC 9112 requires a server to
-refuse, so it had never worked against a real endpoint while every test passed. The
-fakes were written from the same reading of the same documentation as the client, and
-agreed with it. That is the argument for oracles in one sentence, and it is in the
-file with the fix and the regression test.
+**Pointed at real object stores, the S3 adapter failed three ways, and every test
+here was green.** It sent two `Host` headers, which RFC 9112 requires a server to
+refuse. It could not read a response from a peer that closes TLS without
+`close_notify`, which Google does, so every request to GCS failed while the complete
+answer sat in the buffer. And it sent `x-amz-` headers to Google, which refuses that
+with `400 ExcessHeaderValues`, so it could read a GCS bucket and never publish to
+one, which is the operation the whole design rests on.
+
+All three are the same defect: the fakes were written from the same reading of the
+same documentation as the client, so they agreed with its mistakes. All three are
+fixed, and so is the class: the fake now refuses what a compliant server refuses, and
+putting the first bug back fails eleven of twelve tests. The suite then runs against
+AWS and Google for real, over TLS, and both refuse a second conditional write.
 
 **Eight hundred million shard ticks across 400,000 seeded runs, roughly twelve million
 crashes, zero durability violations.** On its own that number is worth very little,

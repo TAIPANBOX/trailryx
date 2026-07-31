@@ -83,6 +83,18 @@ impl Fake {
         Self { port, seen }
     }
 
+    /// The next request the fake saw, bounded rather than blocking.
+    ///
+    /// `recv` waits for ever when the request never arrives, and a test that waits
+    /// for ever reports nothing at all: no failure, no name, no output, just a run
+    /// that never ends. That happened the moment this fake learned to refuse a
+    /// malformed request, and finding it cost more than the bug it was hiding.
+    fn seen(&self) -> Seen {
+        self.seen
+            .recv_timeout(std::time::Duration::from_secs(10))
+            .expect("the fake never saw the request")
+    }
+
     fn gcs_store(&self) -> S3 {
         self.store(Conditional::IfNoneMatchStar)
             .with_flavour(Flavour::Gcs)
@@ -111,6 +123,13 @@ fn serve(
     honesty: Honesty,
     tx: &mpsc::Sender<Seen>,
 ) {
+    // A fake that hangs is worse than a fake that is wrong: the run stops with no
+    // output and no failing test name, and somebody goes looking in the wrong place.
+    // Found the moment this fake learned to refuse a bad request: one test stopped
+    // failing and started waiting for ever.
+    let _ = stream.set_read_timeout(Some(std::time::Duration::from_secs(5)));
+    let _ = stream.set_write_timeout(Some(std::time::Duration::from_secs(5)));
+
     let mut raw = Vec::new();
     let mut chunk = [0u8; 4096];
     // Read the head, then exactly as much body as was declared. A server that read
@@ -156,6 +175,16 @@ fn serve(
         body: body.clone(),
     };
     let _ = tx.send(seen.clone());
+
+    // Everything a real endpoint refuses before it looks at the request, refused
+    // here too. This is the whole lesson of the day three of these were found: a
+    // fake written from the same reading of the same documentation as the client
+    // agrees with the client's mistakes, so it has to be taught the rules the client
+    // is not allowed to break, not the behaviour the client happens to have.
+    if let Some(why) = a_real_server_would_refuse(&seen, cloud) {
+        let _ = stream.write_all(&xml_error(400, "InvalidRequest", &why));
+        return;
+    }
 
     let mut parts = line.split(' ');
     let method = parts.next().unwrap_or_default();
@@ -370,7 +399,7 @@ fn a_second_publication_of_a_key_loses_the_race_rather_than_overwriting() {
         "the winner's bytes survived"
     );
 
-    let sent = fake.seen.recv().expect("the first request");
+    let sent = fake.seen();
     assert_eq!(sent.line.split(' ').next(), Some("PUT"));
     assert_eq!(
         sent.body, b"the winner's bytes",
@@ -510,7 +539,7 @@ fn a_key_with_characters_that_change_the_signature_still_round_trips() {
         "and the listing hands back the key as it was written, not as it was escaped"
     );
 
-    let sent = fake.seen.recv().expect("the write");
+    let sent = fake.seen();
     assert!(
         sent.line
             .contains("/records/runs/a%20b%2Bc~d/%C3%A9/seg%3D1.trx"),
@@ -589,17 +618,42 @@ fn a_segment_publishes_atomically_to_google_too() {
         Some(b"the winner's bytes".to_vec())
     );
 
-    let sent = fake.seen.recv().expect("the first request");
+    let sent = fake.seen();
     assert_eq!(
         sent.header("x-goog-if-generation-match"),
         Some("0"),
         "Google's condition is a generation of zero, not an ETag wildcard"
     );
+    // Not one `x-amz-` header may go to Google, and this is not tidiness.
+    // A live bucket answers `400 ExcessHeaderValues` to a request that mixes the two
+    // families, and the only conditional-write header Google has is an `x-goog-` one.
+    // So an adapter signing the AWS way could read a GCS bucket perfectly and could
+    // never publish a segment to it: reads carry no extension header, writes carry
+    // the one that collides. Every test here passed while that was true.
+    let amz: Vec<&(String, String)> = sent
+        .headers
+        .iter()
+        .filter(|(name, _)| name.to_ascii_lowercase().starts_with("x-amz-"))
+        .collect();
     assert!(
-        sent.header("authorization").expect("a signature").contains(
-            "SignedHeaders=host;x-amz-content-sha256;x-amz-date;x-goog-if-generation-match"
+        amz.is_empty(),
+        "a request to Google carried AWS extension headers, which it refuses: {amz:?}"
+    );
+
+    let authorization = sent.header("authorization").expect("a signature");
+    assert!(
+        authorization.contains(
+            "SignedHeaders=host;x-goog-content-sha256;x-goog-date;x-goog-if-generation-match"
         ),
-        "the condition has to be signed here too, or a proxy could strip it"
+        "the condition has to be signed here too, or a proxy could strip it: {authorization}"
+    );
+    assert!(
+        authorization.starts_with("GOOG4-HMAC-SHA256 "),
+        "Google names its own algorithm: {authorization}"
+    );
+    assert!(
+        authorization.contains("/eu-central-1/storage/goog4_request"),
+        "the credential scope is Google's, down to the terminator: {authorization}"
     );
 }
 
@@ -660,7 +714,7 @@ fn the_request_carries_exactly_one_host_header() {
     let mut store = fake.store(Conditional::IfNoneMatchStar);
     let _ = store.put_if_absent("segments/000002.trx", b"bytes");
 
-    let sent = fake.seen.recv().expect("the request");
+    let sent = fake.seen();
     let hosts: Vec<&(String, String)> = sent
         .headers
         .iter()
@@ -673,4 +727,53 @@ fn the_request_carries_exactly_one_host_header() {
          before reading a byte of S3: {hosts:?}",
         hosts.len()
     );
+}
+
+/// The rules a compliant endpoint enforces before any storage logic runs.
+///
+/// Each one was a live failure before it was a line here.
+fn a_real_server_would_refuse(seen: &Seen, cloud: Cloud) -> Option<String> {
+    // RFC 9112: more than one `Host` is a refused request, and Go's HTTP server
+    // answers a bare `400` with no body, so nothing downstream can report a code.
+    // The adapter sent two for months, because the signer must sign the host and the
+    // HTTP client writes it, and this fake collected headers into a list and did not
+    // care.
+    let hosts = seen
+        .headers
+        .iter()
+        .filter(|(name, _)| name.eq_ignore_ascii_case("host"))
+        .count();
+    if hosts != 1 {
+        return Some(format!("{hosts} Host headers; RFC 9112 allows exactly one"));
+    }
+
+    // No header may arrive twice, whatever it is. A store that merges them silently
+    // and one that refuses are both real, and code that relies on which is a bug
+    // waiting for the other deployment.
+    let mut names: Vec<String> = seen
+        .headers
+        .iter()
+        .map(|(name, _)| name.to_ascii_lowercase())
+        .collect();
+    names.sort();
+    if let Some(pair) = names.windows(2).find(|w| w[0] == w[1]) {
+        return Some(format!("the header {} arrived twice", pair[0]));
+    }
+
+    // Google refuses a request that mixes the two families of extension header with
+    // `400 ExcessHeaderValues`, and its only conditional-write header is an
+    // `x-goog-` one. An adapter signing the AWS way could therefore read a GCS
+    // bucket perfectly and never publish to it, which is exactly what it did.
+    let has = |prefix: &str| {
+        seen.headers
+            .iter()
+            .any(|(name, _)| name.to_ascii_lowercase().starts_with(prefix))
+    };
+    match cloud {
+        Cloud::Gcs if has("x-amz-") => {
+            Some("ExcessHeaderValues: an x-amz- header sent to Google".to_owned())
+        }
+        Cloud::Aws if has("x-goog-") => Some("an x-goog- header sent to AWS".to_owned()),
+        _ => None,
+    }
 }

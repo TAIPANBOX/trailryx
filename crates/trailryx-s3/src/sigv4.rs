@@ -35,6 +35,78 @@ use trailryx_crypto::{Sha256, hmac_sha256};
 pub const ALGORITHM: &str = "AWS4-HMAC-SHA256";
 const TERMINATOR: &str = "aws4_request";
 
+/// Whose version of this signature to produce.
+///
+/// The algorithm is identical; four strings are not. Google's XML API accepts an
+/// `AWS4-HMAC-SHA256` signature, which is why the S3 adapter reached it at all, but
+/// **a request signed that way may carry only `x-amz-*` extension headers**. Mixing
+/// in an `x-goog-*` one is refused with `400 ExcessHeaderValues`, and the only
+/// conditional-write header Google has is `x-goog-if-generation-match`.
+///
+/// So a live GCS bucket answered reads and refused every conditional write, which is
+/// the single operation the whole publication design rests on. Signing the Google way
+/// is not a preference here; it is the difference between an adapter that can publish
+/// a segment atomically and one that cannot.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Scheme {
+    Aws,
+    Google,
+}
+
+impl Scheme {
+    fn algorithm(self) -> &'static str {
+        match self {
+            Self::Aws => ALGORITHM,
+            Self::Google => "GOOG4-HMAC-SHA256",
+        }
+    }
+
+    /// The literal in front of the secret in the first HMAC.
+    fn key_prefix(self) -> &'static [u8] {
+        match self {
+            Self::Aws => b"AWS4",
+            Self::Google => b"GOOG4",
+        }
+    }
+
+    fn terminator(self) -> &'static str {
+        match self {
+            Self::Aws => TERMINATOR,
+            Self::Google => "goog4_request",
+        }
+    }
+
+    /// The header carrying the request time, and the one carrying the payload hash.
+    pub fn date_header(self) -> &'static str {
+        match self {
+            Self::Aws => "x-amz-date",
+            Self::Google => "x-goog-date",
+        }
+    }
+
+    pub fn content_sha_header(self) -> &'static str {
+        match self {
+            Self::Aws => "x-amz-content-sha256",
+            Self::Google => "x-goog-content-sha256",
+        }
+    }
+
+    pub fn security_token_header(self) -> &'static str {
+        match self {
+            Self::Aws => "x-amz-security-token",
+            Self::Google => "x-goog-security-token",
+        }
+    }
+
+    /// What the credential scope calls the service.
+    pub fn service(self) -> &'static str {
+        match self {
+            Self::Aws => "s3",
+            Self::Google => "storage",
+        }
+    }
+}
+
 /// The credentials a request is signed with.
 ///
 /// The secret is held as bytes and never printed: `Debug` is hand-written to say so
@@ -235,32 +307,53 @@ pub fn sign(
     service: &str,
     timestamp: &str,
 ) -> Signed {
+    sign_as(
+        Scheme::Aws,
+        request,
+        credentials,
+        region,
+        service,
+        timestamp,
+    )
+}
+
+/// The same signature, in whichever of the two dialects the endpoint speaks.
+pub fn sign_as(
+    scheme: Scheme,
+    request: &Request,
+    credentials: &Credentials,
+    region: &str,
+    service: &str,
+    timestamp: &str,
+) -> Signed {
     let payload_hash = hex(&Sha256::digest(&request.payload));
     let (canonical_request, signed_headers) = request.canonical(&payload_hash);
 
     let date = &timestamp[..8];
-    let scope = format!("{date}/{region}/{service}/{TERMINATOR}");
+    let scope = format!("{date}/{region}/{service}/{}", scheme.terminator());
     let string_to_sign = format!(
-        "{ALGORITHM}\n{timestamp}\n{scope}\n{}",
+        "{}\n{timestamp}\n{scope}\n{}",
+        scheme.algorithm(),
         hex(&Sha256::digest(canonical_request.as_bytes()))
     );
 
     // Four chained HMACs, each keyed by the previous result. The first key is the
     // literal "AWS4" concatenated with the secret, which is the step most often
     // written as just the secret.
-    let mut key = Vec::with_capacity(4 + credentials.secret.len());
-    key.extend_from_slice(b"AWS4");
+    let mut key = Vec::with_capacity(5 + credentials.secret.len());
+    key.extend_from_slice(scheme.key_prefix());
     key.extend_from_slice(&credentials.secret);
     let key = hmac_sha256(&key, date.as_bytes());
     let key = hmac_sha256(&key, region.as_bytes());
     let key = hmac_sha256(&key, service.as_bytes());
-    let key = hmac_sha256(&key, TERMINATOR.as_bytes());
+    let key = hmac_sha256(&key, scheme.terminator().as_bytes());
     let signature = hex(&hmac_sha256(&key, string_to_sign.as_bytes()));
 
     // No comma after the algorithm, commas between the rest. AWS states that
     // explicitly because it is the shape everybody gets wrong once.
     let authorization = format!(
-        "{ALGORITHM} Credential={}/{scope}, SignedHeaders={signed_headers}, Signature={signature}",
+        "{} Credential={}/{scope}, SignedHeaders={signed_headers}, Signature={signature}",
+        scheme.algorithm(),
         credentials.access_key_id
     );
 

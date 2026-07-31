@@ -373,23 +373,7 @@ impl Http for Client {
             .and_then(|()| stream.flush())
             .map_err(|e| format!("cannot send the request: {e}"))?;
 
-        let mut raw = Vec::with_capacity(8192);
-        let mut chunk = [0u8; 8192];
-        loop {
-            let read = stream
-                .read(&mut chunk)
-                .map_err(|e| format!("cannot read the response: {e}"))?;
-            if read == 0 {
-                break;
-            }
-            raw.extend_from_slice(&chunk[..read]);
-            // Checked while reading: a peer that sends for ever has to be stopped,
-            // not measured afterwards.
-            if raw.len() > self.max_response.saturating_add(MAX_HEADERS) {
-                return Err(format!("the response exceeded {} bytes", self.max_response));
-            }
-        }
-        parse_response(&raw, self.max_response)
+        read_message(&mut stream, self.max_response)
     }
 }
 
@@ -466,6 +450,44 @@ pub fn parse_response(raw: &[u8], max_body: usize) -> Result<Response, String> {
         headers,
         body,
     })
+}
+
+/// Read until the peer stops, then let the framing decide whether that was the end.
+///
+/// Separate from `send` so it can be tested against a reader that ends the way a
+/// real one does, which is the only reason this is not four lines inline.
+///
+/// **The two endings that matter.** A peer may close a TLS connection without
+/// sending `close_notify`; Google Cloud Storage does. rustls reports that as
+/// `UnexpectedEof` rather than an end of file, and it is right to: at the TLS layer
+/// there is no way to tell a finished stream from one an attacker cut short.
+///
+/// HTTP can tell, because a response carries its own framing. So an unexpected end
+/// is treated here as an end, and `parse_response` decides: a body shorter than its
+/// `Content-Length` is refused, and an unfinished chunked body fails to decode. That
+/// is what rustls's own manual recommends for a protocol that frames its messages,
+/// and the alternative was what this client did until a live GCS bucket refused every
+/// single request with a TLS error while the complete response sat in the buffer.
+fn read_message(stream: &mut impl Read, max_response: usize) -> Result<Response, String> {
+    let mut raw = Vec::with_capacity(8192);
+    let mut chunk = [0u8; 8192];
+    loop {
+        let read = match stream.read(&mut chunk) {
+            Ok(read) => read,
+            Err(e) if e.kind() == std::io::ErrorKind::UnexpectedEof => break,
+            Err(e) => return Err(format!("cannot read the response: {e}")),
+        };
+        if read == 0 {
+            break;
+        }
+        raw.extend_from_slice(&chunk[..read]);
+        // Checked while reading: a peer that sends for ever has to be stopped, not
+        // measured afterwards.
+        if raw.len() > max_response.saturating_add(MAX_HEADERS) {
+            return Err(format!("the response exceeded {max_response} bytes"));
+        }
+    }
+    parse_response(&raw, max_response)
 }
 
 /// Decode a chunked body, bounded at every step.
@@ -662,5 +684,74 @@ mod tests {
         let request = Request::new(Method::Put, "/k").header("x-amz-meta-a", "b\r\nHost: evil");
         let error = client.send(&request).expect_err("must be refused");
         assert!(error.contains("line break"), "{error}");
+    }
+}
+
+#[cfg(test)]
+mod unclean_endings {
+    use super::*;
+
+    /// A reader that hands over some bytes and then ends the way TLS ends when the
+    /// peer forgets `close_notify`.
+    struct EndsAbruptly {
+        remaining: Vec<u8>,
+    }
+
+    impl Read for EndsAbruptly {
+        fn read(&mut self, out: &mut [u8]) -> std::io::Result<usize> {
+            if self.remaining.is_empty() {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::UnexpectedEof,
+                    "peer closed connection without sending TLS close_notify",
+                ));
+            }
+            let n = out.len().min(self.remaining.len());
+            out[..n].copy_from_slice(&self.remaining[..n]);
+            self.remaining.drain(..n);
+            Ok(n)
+        }
+    }
+
+    /// The ending Google gives, on a response that is whole.
+    ///
+    /// This is the bug that made every request to a live GCS bucket fail while the
+    /// complete answer sat in the buffer.
+    #[test]
+    fn a_complete_response_survives_a_peer_that_forgets_close_notify() {
+        let mut stream = EndsAbruptly {
+            remaining: b"HTTP/1.1 200 OK\r\nContent-Length: 5\r\n\r\nhello".to_vec(),
+        };
+        let response = read_message(&mut stream, 1 << 20).expect("the response is complete");
+        assert_eq!(response.status, 200);
+        assert_eq!(response.body, b"hello");
+    }
+
+    /// The same ending on a response that is not whole, which must still be refused.
+    ///
+    /// This is the half that makes the other half safe: the reason rustls calls an
+    /// unclean end an error is that an attacker can cut a stream short, and the only
+    /// thing that makes ignoring it acceptable is that the framing catches it here.
+    /// If this test ever passes, the fix above has become a hole.
+    #[test]
+    fn a_truncated_response_is_still_refused() {
+        let mut stream = EndsAbruptly {
+            remaining: b"HTTP/1.1 200 OK\r\nContent-Length: 5\r\n\r\nhel".to_vec(),
+        };
+        let refused = read_message(&mut stream, 1 << 20);
+        let why = refused.expect_err("a body shorter than its Content-Length is truncated");
+        assert!(why.contains("declared 5 bytes and sent 3"), "{why}");
+    }
+
+    /// A chunked body cut before its terminator, which has no length to check
+    /// against and must be caught by the decoder instead.
+    #[test]
+    fn a_truncated_chunked_response_is_still_refused() {
+        let mut stream = EndsAbruptly {
+            remaining: b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n5\r\nhel".to_vec(),
+        };
+        assert!(
+            read_message(&mut stream, 1 << 20).is_err(),
+            "an unfinished chunked body was accepted"
+        );
     }
 }

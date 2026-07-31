@@ -14,5 +14,12 @@ trailryx-contracts = { path = "../trailryx-contracts" }
 trailryx-crypto = { path = "../trailryx-crypto" }
 trailryx-http = { path = "../trailryx-http" }
 
+[features]
+# Reaching a real endpoint, which every cloud one is: `https` only. Off by default
+# so the crate keeps its zero third-party dependencies unless a deployment asks for
+# the connection this needs, and on it links the same rustls the cryptographic
+# provider already brings, rather than a second implementation of TLS.
+tls = ["trailryx-http/tls"]
+
 [lints]
 workspace = true

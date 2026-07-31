@@ -22,7 +22,7 @@ fifteen plus `cargo audit`, so a green push is a green pull request.
 
 | What | Number | Command |
 |---|---|---|
-| Tests | 1,028 across 28 crates | `cargo test --workspace` |
+| Tests | 1,031 across 28 crates | `cargo test --workspace` |
 | Third-party dependencies in the verifier | 0 | `cargo tree -p trailryx-verify` |
 | Third-party dependencies in the core | 0 | `./scripts/declared-deps.sh` |
 | `unsafe` | forbidden at the workspace level, and grepped for | `grep -rn unsafe crates` |
@@ -215,7 +215,44 @@ Two things the run pinned down that no fake would have:
   CLI's debug output settles a SigV4 argument. That is what caught a `Content-Type`
   header a helper library had added on its own.
 
-### GCS: the one with no free second implementation
+### Both clouds, for real, over TLS
+
+The emulator runs above are worth what they are worth. This is the same suite against
+**AWS S3 in eu-central-1** and **Google Cloud Storage**, over `https`, with a
+versioned bucket on each. It cost a few dozen requests and a few kilobytes, which is
+fractions of a cent, and both buckets were deleted afterwards.
+
+| | AWS S3 | Google Cloud Storage |
+|---|---|---|
+| Four operations | pass | pass |
+| A second conditional write | **refused by AWS**, first bytes kept | **refused by Google**, first bytes kept |
+| Read back by version | `wd1hFJIEIn8FRY72u.UObyOr1DR86_hz` | generation `1785506773704642` |
+| Paged listing | 12 keys in pages of 5, real continuation tokens | same, marker-based |
+| Addressing | virtual-hosted | path |
+
+**Two more defects, both found in the first minutes, neither findable without a real
+endpoint.**
+
+*Google closes a TLS connection without `close_notify`.* rustls reports that as an
+unexpected end of file rather than an end of file, because at the TLS layer a
+finished stream and one an attacker cut short look identical. This client read to EOF
+and only then parsed, so **every single request to GCS failed with a TLS error while
+the complete response sat in the buffer**. HTTP can tell the difference, because a
+response carries its own framing, so an unexpected end is now treated as an end and
+the parser judges: a body shorter than its `Content-Length` is refused and an
+unfinished chunked body fails to decode. Three tests hold both halves, including the
+one that must keep failing.
+
+*A request to Google may not carry `x-amz-` headers.* Google accepts an
+`AWS4-HMAC-SHA256` signature, which is why reads worked, but it answers `400
+ExcessHeaderValues` to a request mixing the two families, and its only
+conditional-write header is `x-goog-if-generation-match`. So this adapter could read
+a GCS bucket perfectly and **could never publish a segment to one**, which is the
+operation the entire design rests on. The signer now speaks both dialects:
+`GOOG4-HMAC-SHA256`, the `GOOG4` key prefix, the `goog4_request` terminator, the
+`storage` service, and the `x-goog-` header family throughout.
+
+### GCS: no free second implementation, which is why the above was needed
 
 The GCS support is not a second adapter. Google Cloud Storage's XML API *is* the S3
 API, so `Flavour::Gcs` changes four things and reuses the rest: the header that makes
@@ -280,6 +317,29 @@ rest arrive to build and to test it. Everything outside the facade, the cryptogr
 provider and the demo has none, and the verifier has none by design: an auditor reads
 it, and every crate pulled in is a crate they are asked to trust instead.
 
+### What was changed so this class stops recurring
+
+Three defects in one day, all the same shape: **a fake written from the same reading
+of the same documentation as the client agrees with the client's mistakes**. Patching
+three bugs would leave the fourth. So:
+
+- **The fake refuses what a compliant server refuses**, before any storage logic:
+  more than one `Host`, any header twice, and `x-amz-` headers sent to Google or
+  `x-goog-` ones sent to AWS. Every test that touches the fake now carries those
+  rules, not just a test written for them. Reintroducing the `Host` bug fails **11 of
+  12** tests in the crate; signing Google the AWS way fails 3.
+- **The HTTP client refuses a request that brings its own `Host`**, rather than
+  writing a second one, so the class cannot come back through another caller.
+- **The response read loop is a function over any reader**, so both endings can be
+  tested: a complete response after an unclean close is accepted, a truncated one is
+  still refused. The second test is what keeps the first safe.
+- **No test waits without a bound.** Teaching the fake to refuse turned one failing
+  test into a run that never ended: no failure, no name, no output. The fake's socket
+  now has a timeout and every wait for a request is bounded, so the answer is always
+  a test result. Finding that cost more than the bug it hid.
+- **`tests/live.rs` in both adapter crates**, run against any endpoint given in the
+  environment and printing `skipped` with a reason when there is none.
+
 ### Oracles
 
 Nothing here grades its own homework where a second implementation exists:
@@ -330,12 +390,13 @@ Stated so the absence is visible rather than inferred:
   standard library's blocking file API, behind the same trait the simulator fills.
   `io_uring` and `epoll` are a decision the architecture records and nobody has
   implemented, so there is nothing to run side by side yet.
-- **A live cloud bucket.** S3 now runs against MinIO and Azure against Azurite, both
-  above, and neither is the cloud it stands for: no real error codes under
-  contention, no throttling, no real TLS chain, no versioned bucket. GCS has nothing
-  at all, for want of an emulator that implements its XML API. The `Host` bug is the
-  argument for spending the few cents this would cost: one request to a real server
-  said what our whole suite could not.
+- **Azure against real Blob Storage.** S3 and GCS have now been run against their
+  own clouds, above; Azure has only met Azurite. The account for it is the one thing
+  in this list that nobody has tried yet rather than the one thing that costs money.
+- **Contention, throttling and failure modes.** Every live run above was one client
+  doing one thing at a time. Two publishers racing for the same key against a real
+  endpoint, and what a throttled or half-failed request does to a publication, are
+  not tested anywhere but the simulator.
 - **Years of simulated time.** The long run above covers nine days, not years, and
   the arithmetic for closing that gap is in its own section.
 - **An external audit of the cryptographic layer.** Planned before the first

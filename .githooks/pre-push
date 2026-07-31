@@ -140,8 +140,7 @@ step "verifier build is reproducible" ./scripts/reproduce.sh
 # client has no dependencies, which is what the check above measures, so the TLS
 # build has to be exercised separately or it would break silently and only in a
 # deployment.
-step "the TLS build still works" \
-  cargo test -p trailryx-http --features tls --quiet
+step "the TLS builds still work" ./scripts/tls-builds.sh
 
 # Every hand-written parser, fed bytes it did not expect, from a seed anybody can
 # rerun. Stage 13 asks for this; the usual answer needs a nightly compiler and

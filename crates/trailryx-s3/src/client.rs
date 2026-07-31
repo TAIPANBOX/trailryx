@@ -255,7 +255,11 @@ impl std::fmt::Debug for S3 {
 pub const MAX_OBJECT: usize = 256 << 20;
 
 impl S3 {
-    /// Against a real endpoint, given as `http://host[:port]`.
+    /// Against a real endpoint, given as `http://host[:port]` or `https://host`.
+    ///
+    /// Every cloud endpoint is the second form, and reaching one needs this crate's
+    /// `tls` feature; without it `Client::new` refuses the scheme rather than
+    /// quietly speaking plaintext to a port expecting a handshake.
     ///
     /// With [`Addressing::VirtualHosted`] the bucket becomes part of the host, which
     /// is why the client is built here rather than handed in: the `Host` header and
@@ -273,10 +277,22 @@ impl S3 {
         let origin = match addressing {
             Addressing::Path => endpoint.to_owned(),
             Addressing::VirtualHosted => {
-                let rest = endpoint
-                    .strip_prefix("http://")
+                // The bucket goes in front of the host, which means taking the
+                // origin apart and putting it back together, and the scheme has to
+                // survive that. Handling only `http://` here is how this adapter
+                // could not address a single real bucket: AWS is `https`, and the
+                // error would have been `NotHttp` on an endpoint that plainly began
+                // with `http`.
+                let (scheme, rest) = endpoint
+                    .strip_prefix("https://")
+                    .map(|rest| ("https://", rest))
+                    .or_else(|| {
+                        endpoint
+                            .strip_prefix("http://")
+                            .map(|rest| ("http://", rest))
+                    })
                     .ok_or(trailryx_http::UrlError::NotHttp)?;
-                format!("http://{bucket}.{rest}")
+                format!("{scheme}{bucket}.{rest}")
             }
         };
         let client = Client::new(&origin)?.with_max_response(MAX_OBJECT);
@@ -367,19 +383,28 @@ impl S3 {
         let timestamp = amz_timestamp(self.clock.unix_seconds());
         let payload_hash = sigv4::payload_hash(&payload);
 
+        // Which family of extension headers this endpoint will accept. Google
+        // refuses a request that mixes the two with `400 ExcessHeaderValues`, and
+        // its only conditional-write header is an `x-goog-` one, so an adapter
+        // signing the AWS way can read a GCS bucket and can never publish to it.
+        let scheme = match self.flavour {
+            Flavour::Aws => sigv4::Scheme::Aws,
+            Flavour::Gcs => sigv4::Scheme::Google,
+        };
         let mut headers = vec![
             ("host".to_owned(), self.host.clone()),
-            ("x-amz-content-sha256".to_owned(), payload_hash.clone()),
-            ("x-amz-date".to_owned(), timestamp.clone()),
+            (scheme.content_sha_header().to_owned(), payload_hash.clone()),
+            (scheme.date_header().to_owned(), timestamp.clone()),
         ];
         if let Some(token) = self.credentials.session_token() {
-            headers.push(("x-amz-security-token".to_owned(), token.to_owned()));
+            headers.push((scheme.security_token_header().to_owned(), token.to_owned()));
         }
         for (name, value) in extra_headers {
             headers.push(((*name).to_owned(), (*value).to_owned()));
         }
 
-        let signed = sigv4::sign(
+        let signed = sigv4::sign_as(
+            scheme,
             &SignedRequest {
                 method: method.as_str().to_owned(),
                 path: path.to_owned(),
@@ -389,7 +414,7 @@ impl S3 {
             },
             &self.credentials,
             &self.region,
-            "s3",
+            scheme.service(),
             &timestamp,
         );
 
