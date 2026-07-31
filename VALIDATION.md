@@ -32,6 +32,7 @@ fifteen plus `cargo audit`, so a green push is a green pull request.
 | Two verifiers, one verdict | agree on every pack | `cargo test -p trailryx-store --test two_verifiers` |
 | Verifier build reproducibility | same binary from two paths | `./scripts/reproduce.sh` |
 | Parsers under hostile bytes | 13 targets, 300 cases each, 0 panics | `cargo test -p trailryx-fuzz` |
+| The durability check can fail | a lying `fsync` is caught | `cargo test -p trailryx-core --test determinism` |
 | README numbers | badge, totals and every crate row | `./scripts/readme-numbers.sh` |
 
 The gate takes about two minutes, most of it the SQL facade's dependency tree.
@@ -65,6 +66,55 @@ less would be the product being false about the sentence it is built on.
 **What this is not.** The roadmap asks for ext4 and xfs. This machine has neither, so
 the run above is APFS and says so in its own output. It is worth more than nothing
 and less than what stage 13 asks for, and both of those are true at once.
+
+### The long simulation run, and the run that proves it can see
+
+Stage 13 asks for a long deterministic run. The gate does 200 seeds on every push,
+which catches a regression; this is the one that goes looking.
+
+```
+trailryx-sim-run --seed 1 --sweep 400000 --steps 2000 --shards 3 \
+  --sync-every 4 --crash-ppm 15000 --hostile --honest-disk
+```
+
+| | |
+|---|---|
+| Seeds | 400,000 |
+| Steps each | 2,000 |
+| Shard ticks | **800 million** |
+| Crashes injected | at 15,000 ppm, so roughly 12 million |
+| Simulated time | 2 seconds per seed, **9 days 6 hours** summed |
+| Real time | 10 minutes 40 seconds, so about 1,250x |
+| Durability violations | **0** |
+
+Stage 13 asks for *years* of simulated time and this is nine days, so the gap is
+stated rather than rounded away. It is also worth saying why the phrase is weaker
+than it sounds: the simulator advances its clock by a millisecond per step because
+some constant had to be chosen, and a run can be made to cover centuries by changing
+that number without testing anything more. **Ticks and crashes are the honest units
+here**, and years would be the flattering one.
+
+**And the number that makes that one mean something.** A sweep reporting zero
+violations proves nothing unless the same sweep can report a violation when there is
+one. The gate already holds that property on every push, in a test named
+`the_harness_catches_a_lying_fsync`, whose comment says what it is for: *if this test
+stops failing to find violations, the crash model has gone soft*. What follows is the
+same property at the scale of the run above, with the disk allowed to lie about
+`fsync`, which is the write hole every durability contract is written against:
+
+```
+trailryx-sim-run --seed 900001 --sweep 20000 --steps 2000 --shards 3 \
+  --sync-every 4 --crash-ppm 15000 --hostile
+```
+
+**17,869 of 20,000 seeds fail**, each naming its own seed, its digest and how many
+lying syncs it took. That is the correct answer: a disk that acknowledges a sync it
+did not perform breaks the promise by definition, and a harness that reported
+otherwise would be blind rather than reassuring.
+
+The two together are the claim: with a disk that keeps its word, 800 million
+operations lose nothing, and the check that says so is a check that fails when the
+disk stops keeping it.
 
 ### The acceptance demo
 
@@ -161,12 +211,16 @@ opposite.
 Stated so the absence is visible rather than inferred:
 
 - **ext4 and xfs kill runs.** Only APFS so far, above.
-- **Both I/O backends.** `io_uring` and `epoll` have not been run side by side.
+- **Both I/O backends.** Not "not measured", which is what this line used to say and
+  which was flattering: **neither exists**. There is one `Io` implementation, on the
+  standard library's blocking file API, behind the same trait the simulator fills.
+  `io_uring` and `epoll` are a decision the architecture records and nobody has
+  implemented, so there is nothing to run side by side yet.
 - **A multi-cloud demo run.** The three adapters are tested against fakes over real
   sockets and against published worked examples; none has been run against a live
   bucket, which needs credentials and costs money.
-- **A long DST run.** The sweep is 200 seeds per push, not the years of simulated time
-  stage 13 asks for.
+- **Years of simulated time.** The long run above covers nine days, not years, and
+  the arithmetic for closing that gap is in its own section.
 - **An external audit of the cryptographic layer.** Planned before the first
   compliance contract, and not started.
 

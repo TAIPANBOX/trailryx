@@ -1673,13 +1673,21 @@ command that produced it and the date it was run, split into the ones the gate
 re-measures on every push and the ones somebody has to run.
 
 It also has a section called *not yet measured*, which is the more useful half: no
-ext4 or xfs kill run, no side-by-side of the two I/O backends, no run against a live
-bucket, no years of simulated time, no external audit of the cryptographic layer.
+ext4 or xfs kill run, no second I/O backend to compare the first against, no run
+against a live bucket, no years of simulated time, no external audit of the
+cryptographic layer.
 
-The headline from the half that is measured: **forty processes killed with `SIGKILL`
-mid-write on a real filesystem, and not one acked record lost.** That is the sentence
-the whole design is built on, tested by something other than the simulator that was
-written to believe it.
+Two headlines from the half that is measured, and they only mean anything together.
+
+**Forty processes killed with `SIGKILL` mid-write on a real filesystem, and not one
+acked record lost.** That is the sentence the whole design is built on, tested by
+something other than the simulator that was written to believe it.
+
+**Eight hundred million shard ticks across 400,000 seeded runs, roughly twelve million
+crashes, zero durability violations.** On its own that number is worth very little,
+because a check that cannot fail reports zero forever. So the same sweep is run again
+with the disk allowed to lie about `fsync`, and **17,869 of 20,000 seeds fail**. The
+first number is only evidence because the second one exists.
 
 ## Working on it
 
