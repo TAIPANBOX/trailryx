@@ -437,6 +437,14 @@ authenticated index range and the answer carries a completeness proof. Anything 
 is still applied, so the rows are right, and the answer is marked **partial with the
 reason named**.
 
+<div align="center">
+
+<img src="docs/assets/sql-proof.svg" alt="A predicate on one of the five provable dimensions becomes an authenticated index range and the answer carries a full completeness proof; a predicate off them is still applied so the rows are right, but the answer is marked partial with the reason named; an INSERT is planned but refused at execution, so no write completes" width="960">
+
+<sub>Both traps at the bottom were found by tests rather than by reading, and each one had the store reporting a proof it did not have.</sub>
+
+</div>
+
 The classification lives in a module that **knows nothing about DataFusion**, because
 it is the part that decides whether an answer is provable: it has to be testable with
 no async runtime, no session and no planner, and it has to survive the engine changing

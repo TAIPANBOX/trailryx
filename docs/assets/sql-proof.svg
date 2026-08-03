@@ -1,0 +1,111 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="-18 -18 996 466" width="996" height="466" role="img" aria-label="SQL that either proves or says it did not: a predicate on one of the five provable dimensions becomes an authenticated index range and the answer carries a full completeness proof, a predicate off them is still applied so the rows are right but the answer is marked partial with the reason named, and an INSERT is planned but refused at execution so no write completes">
+  <title>SQL either proves or says it did not, and the classifier that decides knows nothing about the engine</title>
+  <rect x="-18" y="-18" width="996" height="466" rx="16" fill="#0A0E13"/>
+  <rect x="-17.5" y="-17.5" width="995" height="465" rx="15.5" fill="none" stroke="rgba(255,255,255,.09)"/>
+
+  <defs>
+    <marker id="sp-a" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="7" markerHeight="7" orient="auto">
+      <path d="M0 0 L8 4 L0 8 z" fill="#5A6675"/>
+    </marker>
+  </defs>
+
+  <g font-family="ui-monospace,Menlo">
+
+    <text x="480" y="24" fill="#E9EFF6" font-size="13" font-weight="700" text-anchor="middle">SQL does not become a hole in the proof model</text>
+    <text x="480" y="41" fill="#5A6675" font-size="10" text-anchor="middle">every answer carries how much of itself is actually proved, because an answer of unknown completeness must not read like a proved one</text>
+
+    <!-- queries -->
+    <text x="151" y="64" fill="#5A6675" font-size="9.5" text-anchor="middle">what you send</text>
+
+    <rect x="8" y="72" width="286" height="46" rx="9" fill="#141C27" stroke="#2a3547"/>
+    <text x="22" y="92" fill="#C8D3E0" font-size="9">SELECT * FROM records</text>
+    <text x="22" y="105" fill="#C8D3E0" font-size="9">WHERE run_id = 'run-b'</text>
+
+    <rect x="8" y="130" width="286" height="46" rx="9" fill="#141C27" stroke="#2a3547"/>
+    <text x="22" y="150" fill="#C8D3E0" font-size="9">SELECT * FROM records</text>
+    <text x="22" y="163" fill="#C8D3E0" font-size="9">WHERE severity = 'error'</text>
+
+    <rect x="8" y="188" width="286" height="46" rx="9" fill="#141C27" stroke="#2a3547"/>
+    <text x="22" y="208" fill="#C8D3E0" font-size="9">INSERT INTO records</text>
+    <text x="22" y="221" fill="#C8D3E0" font-size="9">VALUES (...)</text>
+
+    <path d="M298 95 L316 95" stroke="#5A6675" stroke-width="1.2" marker-end="url(#sp-a)" fill="none"/>
+    <path d="M298 153 L316 153" stroke="#5A6675" stroke-width="1.2" marker-end="url(#sp-a)" fill="none"/>
+    <path d="M298 211 L316 211" stroke="#5A6675" stroke-width="1.2" marker-end="url(#sp-a)" fill="none"/>
+
+    <!-- the classifier -->
+    <rect x="324" y="72" width="286" height="162" rx="11" fill="#10161F" stroke="#E4626F" stroke-width="1.4">
+      <animate attributeName="stroke-opacity" values="1;.45;1" dur="3.4s" repeatCount="indefinite"/>
+    </rect>
+    <text x="467" y="93" fill="#E4626F" font-size="10.5" font-weight="700" text-anchor="middle">the classifier</text>
+    <text x="467" y="110" fill="#8A97A6" font-size="9" text-anchor="middle">does every predicate land on a</text>
+    <text x="467" y="123" fill="#8A97A6" font-size="9" text-anchor="middle">dimension the index can prove?</text>
+
+    <rect x="340" y="136" width="254" height="40" rx="8" fill="#141C27" stroke="#2a3547"/>
+    <text x="467" y="153" fill="#E9EFF6" font-size="9.5" font-weight="700" text-anchor="middle">it knows nothing about DataFusion</text>
+    <text x="467" y="168" fill="#8A97A6" font-size="9" text-anchor="middle">no async runtime, no session, no planner</text>
+
+    <text x="467" y="192" fill="#8A97A6" font-size="9" text-anchor="middle">the part that decides whether an answer is</text>
+    <text x="467" y="205" fill="#8A97A6" font-size="9" text-anchor="middle">provable has to be testable on its own, and</text>
+    <text x="467" y="218" fill="#8A97A6" font-size="9" text-anchor="middle">has to survive the engine changing its types</text>
+
+    <path d="M614 95 L632 95" stroke="#5A6675" stroke-width="1.2" marker-end="url(#sp-a)" fill="none"/>
+    <path d="M614 153 L632 153" stroke="#5A6675" stroke-width="1.2" marker-end="url(#sp-a)" fill="none"/>
+    <path d="M614 211 L632 211" stroke="#5A6675" stroke-width="1.2" marker-end="url(#sp-a)" fill="none"/>
+
+    <!-- verdicts -->
+    <text x="795" y="64" fill="#5A6675" font-size="9.5" text-anchor="middle">what comes back</text>
+
+    <rect x="640" y="72" width="312" height="46" rx="9" fill="#141C27" stroke="#3FB950"/>
+    <text x="654" y="90" fill="#3FB950" font-size="10" font-weight="700">ProofStatus::Full</text>
+    <text x="654" y="106" fill="#8A97A6" font-size="9">an authenticated index range: these are all of them</text>
+
+    <rect x="640" y="130" width="312" height="46" rx="9" fill="#141C27" stroke="#E3B341"/>
+    <text x="654" y="148" fill="#E3B341" font-size="10" font-weight="700">ProofStatus::Partial(reason)</text>
+    <text x="654" y="164" fill="#8A97A6" font-size="9">the rows are right, just not proved complete</text>
+
+    <rect x="640" y="188" width="312" height="46" rx="9" fill="#141C27" stroke="#F0544C"/>
+    <text x="654" y="206" fill="#F0544C" font-size="10" font-weight="700">refused, and no write completes</text>
+    <text x="654" y="222" fill="#8A97A6" font-size="9">the engine plans it; execution is where it stops</text>
+
+    <!-- the five dimensions -->
+    <rect x="8" y="248" width="944" height="64" rx="11" fill="#10161F" stroke="#2a3547"/>
+    <text x="120" y="268" fill="#E9EFF6" font-size="10.5" font-weight="700" text-anchor="middle">the five provable</text>
+    <text x="120" y="283" fill="#E9EFF6" font-size="10.5" font-weight="700" text-anchor="middle">dimensions</text>
+    <text x="120" y="300" fill="#5A6675" font-size="9" text-anchor="middle">anything else is honest, not proved</text>
+
+    <rect x="244" y="262" width="126" height="36" rx="7" fill="#141C27" stroke="#2a3547"/>
+    <text x="307" y="285" fill="#C8D3E0" font-size="10" text-anchor="middle">record_id</text>
+
+    <rect x="382" y="262" width="126" height="36" rx="7" fill="#141C27" stroke="#2a3547"/>
+    <text x="445" y="285" fill="#C8D3E0" font-size="10" text-anchor="middle">recorded_at</text>
+
+    <rect x="520" y="262" width="126" height="36" rx="7" fill="#141C27" stroke="#2a3547"/>
+    <text x="583" y="285" fill="#C8D3E0" font-size="10" text-anchor="middle">agent_id</text>
+
+    <rect x="658" y="262" width="126" height="36" rx="7" fill="#141C27" stroke="#2a3547"/>
+    <text x="721" y="285" fill="#C8D3E0" font-size="10" text-anchor="middle">run_id</text>
+
+    <rect x="796" y="262" width="126" height="36" rx="7" fill="#141C27" stroke="#2a3547"/>
+    <text x="859" y="285" fill="#C8D3E0" font-size="10" text-anchor="middle">event_type</text>
+
+    <!-- the two quiet lies the tests found -->
+    <text x="480" y="336" fill="#8A97A6" font-size="10" text-anchor="middle" font-weight="700">two ways this reported a proof it did not have, both found by tests rather than by reading</text>
+
+    <rect x="8" y="346" width="466" height="92" rx="10" fill="#141C27" stroke="#F0544C"/>
+    <text x="24" y="366" fill="#F0544C" font-size="10" font-weight="700">never answer Unsupported to a pushdown</text>
+    <text x="24" y="383" fill="#8A97A6" font-size="9">DataFusion does not hand an unsupported filter to the scan</text>
+    <text x="24" y="396" fill="#8A97A6" font-size="9">at all, so the facade never learns the predicate existed and</text>
+    <text x="24" y="409" fill="#8A97A6" font-size="9">reports FULL for a query it saw only part of. Everything not</text>
+    <text x="24" y="422" fill="#8A97A6" font-size="9">exactly provable is Inexact: the engine re-checks, which costs</text>
+    <text x="24" y="435" fill="#8A97A6" font-size="9">a comparison and buys the ability to tell the truth.</text>
+
+    <rect x="486" y="346" width="466" height="92" rx="10" fill="#141C27" stroke="#E3B341"/>
+    <text x="502" y="366" fill="#E3B341" font-size="10" font-weight="700">two bounds on one column are one range</text>
+    <text x="502" y="383" fill="#8A97A6" font-size="9">DataFusion rewrites BETWEEN into &gt;= AND &lt;=, and reading the</text>
+    <text x="502" y="396" fill="#8A97A6" font-size="9">second as a competing dimension made the most ordinary</text>
+    <text x="502" y="409" fill="#8A97A6" font-size="9">time-range query report partial. A partial that fires on</text>
+    <text x="502" y="422" fill="#8A97A6" font-size="9">ordinary queries teaches a reader that partial means nothing</text>
+    <text x="502" y="435" fill="#8A97A6" font-size="9">in particular, which is worse than no proof at all.</text>
+  </g>
+</svg>
