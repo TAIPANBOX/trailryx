@@ -58,11 +58,13 @@ Everything below is a rule, not a description. Each one says what holds it today
 
 23. **An identifier arriving from a peer is parsed at the strictness of the ingest door, not of the journal.** `trailryx-journal` reads ids back with the lax constructor because it wrote them; `trailryx-otlp` uses the strict one because those came from outside. A peer is outside wearing the journal's clothes, and the transport got this wrong the first time it was written. *(test: an_agent_id_that_is_not_a_uri_is_refused_the_way_the_ingest_door_refuses_it)*
 
+24. **A silenced advisory carries a reason, and the reason is re-derived on every run.** `cargo audit` reads the lockfile, which is correct, and therefore flags crates cargo records but never compiles. Silencing one of those is sometimes right; silencing it with a sentence in a configuration file is not, because the sentence stops being true without saying so and the entry then protects nothing while still reading as a decision. Two reasons are allowed and both are facts rather than judgements: `never-built`, the crate is in no build graph because it sits behind an optional feature nothing enables, and `dev-only`, the crate is compiled for tests but reaches no normal dependency edge. The second is the weaker one and says so: it means the code is not in a shipped artifact, not that it never runs here. An id silenced with no recorded reason fails the gate outright. *(gate: scripts/audit.sh, verified by pointing each reason at a crate that breaks it and by adding an unexplained id, all three of which fail it)*
+
 ---
 
 ## What is a gate, and what is still only a sentence
 
-**Decisions that became gates.** Zero dependencies outside the declared list, the core standing up without adapters, no `unsafe`, a seed reproducing a run byte for byte, the published seed corpus, two independent verifiers agreeing on one pack, a reproducible verifier binary, the TLS builds, every parser under hostile bytes, every number the README states, and a 200-seed durability sweep. Fifteen checks, run by `.githooks/pre-push` and again by CI.
+**Decisions that became gates.** Zero dependencies outside the declared list, the core standing up without adapters, no `unsafe`, a seed reproducing a run byte for byte, the published seed corpus, two independent verifiers agreeing on one pack, a reproducible verifier binary, the TLS builds, every parser under hostile bytes, every number the README states, a 200-seed durability sweep, and the advisories with the reasons the silenced ones are silenced. Sixteen checks, run by `.githooks/pre-push` and again by CI.
 
 **Decisions with no gate yet.** This list is debt, and it is here so it stays visible:
 

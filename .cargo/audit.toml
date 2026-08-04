@@ -1,0 +1,19 @@
+# cargo-audit configuration.
+#
+# The ids below are silenced. The REASON each one is silenced lives in
+# `scripts/audit.sh`, beside the check that re-derives it, because a reason
+# written only as a comment is a reason nothing notices going stale.
+#
+# An id added here without a matching entry in that script fails the gate. That
+# is deliberate: silencing an advisory is allowed, silencing one without saying
+# why is not.
+
+[advisories]
+ignore = [
+  # rkyv 0.7.46, out-of-bounds reads on archives containing Rc/Arc.
+  # In the lockfile, in no build graph. Reason checked as: never-built.
+  "RUSTSEC-2026-0235",
+  # time 0.3.45, denial of service via stack exhaustion.
+  # Test certificates only, through rcgen. Reason checked as: dev-only.
+  "RUSTSEC-2026-0009",
+]

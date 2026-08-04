@@ -1727,14 +1727,14 @@ first number is only evidence because the second one exists.
 git config core.hooksPath .githooks   # once
 ```
 
-`.githooks/pre-push` runs fifteen checks and refuses the push if any fails:
+`.githooks/pre-push` runs sixteen checks and refuses the push if any fails:
 formatting, clippy with warnings as errors, the tests, a standalone build of the
 substrate crate, a zero-dependency check on every crate outside the SQL facade, a
 build and test of the core with the facade absent, an `unsafe` check, the determinism
 criterion, the published seed corpus, the two verifiers agreeing on the same packs, a
 reproducible build of the verifier from two different paths, the TLS build of the HTTP
 client, every parser against hostile bytes, every number this README states about the
-repository, and a 200-seed durability sweep. About a minute and a
+repository, a 200-seed durability sweep, and the advisories. About a minute and a
 half, most of it the facade's dependency tree.
 
 The one about numbers is the least glamorous and the most useful. An audit of this page on 30
@@ -1746,8 +1746,12 @@ is a claim with no owner. So the badge, the totals and every row of the crate ta
 are now checked against what the suite actually runs, and the push fails when they
 disagree.
 
-`.github/workflows/ci.yml` runs the same fifteen plus `cargo audit`, which stopped being trivially green the day the facade arrived and is now a real check with real work behind it, so a green push
-is a green pull request. It keeps a guard that skips every job while the repository
+`.github/workflows/ci.yml` runs the same sixteen, so a green push
+is a green pull request. The advisory check was CI-only until 4 August 2026, and
+that gap cost exactly what a gap like that costs: fifteen green checks on a laptop
+and a red gate on the runner. It is one file now, `scripts/audit.sh`, and the half
+of it that needs the network says so when it skips rather than turning every push
+into a round trip. It keeps a guard that skips every job while the repository
 is private, because Actions minutes are metered there and free here. The repository
 went public on 30 July 2026 and the condition released itself, which is why it was
 written as a condition rather than as a note to remember. It stays because it works
