@@ -394,6 +394,12 @@ cargo test                                    # 1046 tests
 cargo run --bin trailryx-sim-run -- --help
 ```
 
+One build prerequisite beyond a Rust toolchain: **`protoc`**, because the
+federation transport generates its wire types from `proto/federation.proto` at
+build time rather than keeping a checked-in copy that can silently disagree with
+it. `apt-get install protobuf-compiler`, or `brew install protobuf`. Without it
+the build stops in that crate's `build.rs` and says so.
+
 One seed reproduces a run exactly, on any machine:
 
 ```bash

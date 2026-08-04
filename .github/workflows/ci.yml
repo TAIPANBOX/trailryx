@@ -31,6 +31,27 @@ jobs:
           rustup default stable
           rustc --version && cargo --version
 
+      # `trailryx-federation-grpc` generates its wire types at build time, on
+      # purpose: a checked-in copy is a second source of truth for the wire, and
+      # the first edit of the `.proto` without a regeneration makes the two
+      # disagree in silence. The price of that decision is that `protoc` is a
+      # build prerequisite, and it is not on the runner.
+      #
+      # This is the one step the pre-push hook cannot stand in for. Every other
+      # check here is the same script the hook calls, so the two cannot drift;
+      # this one is about the MACHINE, and a developer whose laptop has protoc
+      # gets fifteen green checks locally while the runner fails on the first
+      # cargo invocation that touches the crate. That is exactly what happened.
+      #
+      # The version is printed rather than pinned. protoc is a compiler and its
+      # output can move between releases, so a build somebody reports has to be
+      # traceable to the one that produced it.
+      - name: protoc
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y protobuf-compiler
+          protoc --version
+
       # Warnings are failures: a warning nobody fixes is a warning everybody stops
       # reading.
       - name: cargo fmt --check
