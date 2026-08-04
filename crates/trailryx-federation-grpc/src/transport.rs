@@ -433,9 +433,7 @@ impl GrpcPeer {
                         proof = Some(proof_from_trailer(&t)?);
                     }
                     None => {
-                        return Err(TransportError::Malformed(
-                            "a chunk with no body".to_owned(),
-                        ));
+                        return Err(TransportError::Malformed("a chunk with no body".to_owned()));
                     }
                 }
             }

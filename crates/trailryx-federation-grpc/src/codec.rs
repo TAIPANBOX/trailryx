@@ -10,8 +10,8 @@ use crate::pb;
 use trailryx_record::{
     AgentId, Algorithms, Basis, ErrorCode, EventType, HASH_BYTES, Hash, HashAlg, KemAlg,
     MapperVersion, ModelId, Outcome, PayloadClass, PayloadRef, PolicyVersion, PrincipalId, Record,
-    RecordId, RunId, SegmentId, Severity, ShardIx, SigAlg, TenantId, Timestamp, ToolName, Untrusted,
-    Verdict,
+    RecordId, RunId, SegmentId, Severity, ShardIx, SigAlg, TenantId, Timestamp, ToolName,
+    Untrusted, Verdict,
 };
 
 /// Why a message that arrived could not become a record.
@@ -370,7 +370,9 @@ pub fn to_wire(record: &Record) -> pb::Record {
 /// literal, and a struct literal would let a peer put a paragraph of somebody's
 /// medical history where a run id belongs.
 pub fn from_wire(wire: pb::Record) -> Result<Record, WireError> {
-    let basis = wire.basis.ok_or(WireError::MissingField { field: "basis" })?;
+    let basis = wire
+        .basis
+        .ok_or(WireError::MissingField { field: "basis" })?;
     let outcome = wire
         .outcome
         .ok_or(WireError::MissingField { field: "outcome" })?;

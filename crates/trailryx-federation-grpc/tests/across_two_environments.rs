@@ -177,11 +177,7 @@ fn two_environments_answering_over_real_sockets_compose_to_a_complete_answer() {
         connect(&fed, "eu-gcp", gcp.addr()).expect("gcp accepts us"),
     ];
 
-    let registry = Registry::attested(
-        7,
-        vec!["eu-aws".to_owned(), "eu-gcp".to_owned()],
-        true,
-    );
+    let registry = Registry::attested(7, vec!["eu-aws".to_owned(), "eu-gcp".to_owned()], true);
     let (federated, failures) = fan_out(&registry, &mut peers, "recorded_at >= 0");
 
     assert!(failures.is_empty(), "{failures:?}");
@@ -206,8 +202,13 @@ fn two_environments_answering_over_real_sockets_compose_to_a_complete_answer() {
 #[test]
 fn a_peer_cannot_answer_under_a_name_its_certificate_does_not_carry() {
     let fed = Federation::new();
-    let gcp = serve(loopback(), records(3), ServedProof::Full, fed.server_identity("eu-gcp"))
-        .expect("the gcp peer starts");
+    let gcp = serve(
+        loopback(),
+        records(3),
+        ServedProof::Full,
+        fed.server_identity("eu-gcp"),
+    )
+    .expect("the gcp peer starts");
 
     let impersonation = connect(&fed, "on-prem", gcp.addr());
 
@@ -222,10 +223,20 @@ fn a_peer_cannot_answer_under_a_name_its_certificate_does_not_carry() {
 #[test]
 fn a_forgotten_environment_breaks_the_proof_over_the_wire() {
     let fed = Federation::new();
-    let aws = serve(loopback(), records(2), ServedProof::Full, fed.server_identity("eu-aws"))
-        .expect("the aws peer starts");
-    let gcp = serve(loopback(), records(3), ServedProof::Full, fed.server_identity("eu-gcp"))
-        .expect("the gcp peer starts");
+    let aws = serve(
+        loopback(),
+        records(2),
+        ServedProof::Full,
+        fed.server_identity("eu-aws"),
+    )
+    .expect("the aws peer starts");
+    let gcp = serve(
+        loopback(),
+        records(3),
+        ServedProof::Full,
+        fed.server_identity("eu-gcp"),
+    )
+    .expect("the gcp peer starts");
 
     let mut peers = vec![
         connect(&fed, "eu-aws", aws.addr()).expect("aws accepts us"),
@@ -261,12 +272,22 @@ fn a_forgotten_environment_breaks_the_proof_over_the_wire() {
 #[test]
 fn an_environment_that_is_down_is_silent_rather_than_empty() {
     let fed = Federation::new();
-    let aws = serve(loopback(), records(2), ServedProof::Full, fed.server_identity("eu-aws"))
-        .expect("the aws peer starts");
+    let aws = serve(
+        loopback(),
+        records(2),
+        ServedProof::Full,
+        fed.server_identity("eu-aws"),
+    )
+    .expect("the aws peer starts");
 
     let gcp_addr = {
-        let gcp = serve(loopback(), Vec::new(), ServedProof::Full, fed.server_identity("eu-gcp"))
-            .expect("the gcp peer starts");
+        let gcp = serve(
+            loopback(),
+            Vec::new(),
+            ServedProof::Full,
+            fed.server_identity("eu-gcp"),
+        )
+        .expect("the gcp peer starts");
         let addr = gcp.addr();
         // Dropping it takes the runtime with it, which is this test's way of
         // pulling the plug on an environment.
@@ -304,8 +325,13 @@ fn a_client_signed_by_another_authority_gets_no_records() {
     let fed = Federation::new();
     let outsider = Federation::new();
 
-    let aws = serve(loopback(), records(2), ServedProof::Full, fed.server_identity("eu-aws"))
-        .expect("the aws peer starts");
+    let aws = serve(
+        loopback(),
+        records(2),
+        ServedProof::Full,
+        fed.server_identity("eu-aws"),
+    )
+    .expect("the aws peer starts");
 
     // Their own key, signed by their own authority, plus our CA so that they are
     // satisfied with us. The half they cannot forge is the half that stops them.
@@ -480,8 +506,13 @@ fn a_record_arriving_after_the_trailer_is_refused() {
 #[test]
 fn a_truncated_peer_is_silent_in_the_composed_answer() {
     let fed = Federation::new();
-    let aws = serve(loopback(), records(2), ServedProof::Full, fed.server_identity("eu-aws"))
-        .expect("the aws peer starts");
+    let aws = serve(
+        loopback(),
+        records(2),
+        ServedProof::Full,
+        fed.server_identity("eu-aws"),
+    )
+    .expect("the aws peer starts");
     let (gcp_addr, _rt) = serve_hostile(NoTrailer, fed.server_identity("eu-gcp"));
 
     let mut peers = vec![
