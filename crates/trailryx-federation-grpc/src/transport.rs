@@ -271,6 +271,7 @@ impl RunningPeer {
 /// ordering is the contract: everything before the trailer is data, and reaching
 /// the end without one means the answer was cut off.
 pub fn serve(
+    bind: SocketAddr,
     records: Vec<Record>,
     proof: ServedProof,
     identity: ServerIdentity,
@@ -298,7 +299,7 @@ pub fn serve(
         .map_err(|e| TransportError::Local(e.to_string()))?;
 
     let listener = runtime
-        .block_on(TcpListener::bind("127.0.0.1:0"))
+        .block_on(TcpListener::bind(bind))
         .map_err(|e| TransportError::Local(e.to_string()))?;
     let addr = listener
         .local_addr()

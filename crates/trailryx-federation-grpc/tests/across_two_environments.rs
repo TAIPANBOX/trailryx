@@ -25,6 +25,13 @@ use trailryx_record::{
 /// wrong answer tells you.
 const PATIENCE: Duration = Duration::from_secs(5);
 
+/// Any free loopback port. The address is an argument rather than a default so
+/// that a peer meant to be reachable from another machine cannot get one by
+/// forgetting to say so.
+fn loopback() -> SocketAddr {
+    "127.0.0.1:0".parse().expect("a literal address")
+}
+
 // ---------------------------------------------------------------------------
 // Key material
 // ---------------------------------------------------------------------------
@@ -151,12 +158,14 @@ fn two_environments_answering_over_real_sockets_compose_to_a_complete_answer() {
     let fed = Federation::new();
 
     let aws = serve(
+        loopback(),
         records(2),
         ServedProof::Full,
         fed.server_identity("eu-aws"),
     )
     .expect("the aws peer starts");
     let gcp = serve(
+        loopback(),
         records(3),
         ServedProof::Full,
         fed.server_identity("eu-gcp"),
@@ -197,7 +206,7 @@ fn two_environments_answering_over_real_sockets_compose_to_a_complete_answer() {
 #[test]
 fn a_peer_cannot_answer_under_a_name_its_certificate_does_not_carry() {
     let fed = Federation::new();
-    let gcp = serve(records(3), ServedProof::Full, fed.server_identity("eu-gcp"))
+    let gcp = serve(loopback(), records(3), ServedProof::Full, fed.server_identity("eu-gcp"))
         .expect("the gcp peer starts");
 
     let impersonation = connect(&fed, "on-prem", gcp.addr());
@@ -213,9 +222,9 @@ fn a_peer_cannot_answer_under_a_name_its_certificate_does_not_carry() {
 #[test]
 fn a_forgotten_environment_breaks_the_proof_over_the_wire() {
     let fed = Federation::new();
-    let aws = serve(records(2), ServedProof::Full, fed.server_identity("eu-aws"))
+    let aws = serve(loopback(), records(2), ServedProof::Full, fed.server_identity("eu-aws"))
         .expect("the aws peer starts");
-    let gcp = serve(records(3), ServedProof::Full, fed.server_identity("eu-gcp"))
+    let gcp = serve(loopback(), records(3), ServedProof::Full, fed.server_identity("eu-gcp"))
         .expect("the gcp peer starts");
 
     let mut peers = vec![
@@ -252,11 +261,11 @@ fn a_forgotten_environment_breaks_the_proof_over_the_wire() {
 #[test]
 fn an_environment_that_is_down_is_silent_rather_than_empty() {
     let fed = Federation::new();
-    let aws = serve(records(2), ServedProof::Full, fed.server_identity("eu-aws"))
+    let aws = serve(loopback(), records(2), ServedProof::Full, fed.server_identity("eu-aws"))
         .expect("the aws peer starts");
 
     let gcp_addr = {
-        let gcp = serve(Vec::new(), ServedProof::Full, fed.server_identity("eu-gcp"))
+        let gcp = serve(loopback(), Vec::new(), ServedProof::Full, fed.server_identity("eu-gcp"))
             .expect("the gcp peer starts");
         let addr = gcp.addr();
         // Dropping it takes the runtime with it, which is this test's way of
@@ -295,7 +304,7 @@ fn a_client_signed_by_another_authority_gets_no_records() {
     let fed = Federation::new();
     let outsider = Federation::new();
 
-    let aws = serve(records(2), ServedProof::Full, fed.server_identity("eu-aws"))
+    let aws = serve(loopback(), records(2), ServedProof::Full, fed.server_identity("eu-aws"))
         .expect("the aws peer starts");
 
     // Their own key, signed by their own authority, plus our CA so that they are
@@ -346,7 +355,7 @@ where
         .build()
         .expect("a runtime");
     let listener = runtime
-        .block_on(tokio::net::TcpListener::bind("127.0.0.1:0"))
+        .block_on(tokio::net::TcpListener::bind(loopback()))
         .expect("a port");
     let addr = listener.local_addr().expect("an address");
 
@@ -471,7 +480,7 @@ fn a_record_arriving_after_the_trailer_is_refused() {
 #[test]
 fn a_truncated_peer_is_silent_in_the_composed_answer() {
     let fed = Federation::new();
-    let aws = serve(records(2), ServedProof::Full, fed.server_identity("eu-aws"))
+    let aws = serve(loopback(), records(2), ServedProof::Full, fed.server_identity("eu-aws"))
         .expect("the aws peer starts");
     let (gcp_addr, _rt) = serve_hostile(NoTrailer, fed.server_identity("eu-gcp"));
 
@@ -502,6 +511,7 @@ fn a_truncated_peer_is_silent_in_the_composed_answer() {
 fn a_peers_own_partial_answer_stays_partial_after_crossing_the_wire() {
     let fed = Federation::new();
     let aws = serve(
+        loopback(),
         records(2),
         ServedProof::Partial(vec![Incompleteness::PredicateOffProvableDimensions]),
         fed.server_identity("eu-aws"),
