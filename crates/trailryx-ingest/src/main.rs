@@ -90,6 +90,23 @@ fn main() -> std::process::ExitCode {
     let ingest = Arc::new(ingest);
     let server = match Server::bind(Arc::clone(&ingest)) {
         Ok(server) => Arc::new(server),
+        // The library's wording is right for a library caller and useless to
+        // this one: `Ingest::with_auth` is not something a person running a
+        // binary can reach for, and in a container it is not something they can
+        // reach for at all. So the refusal is annotated, not re-decided: the
+        // server still owns the policy, this only says what the flag for it is.
+        //
+        // Found on 2026-08-04 by running the published image, whose default
+        // command binds 0.0.0.0 and therefore hits exactly this path. The
+        // operator was told to call a Rust function.
+        Err(e) if token_file.is_none() => {
+            return fail(&format!(
+                "cannot bind: {e}\n\
+                 trailryx-ingest: from this binary, that means: pass --token-file PATH, where \
+                 PATH holds one shared secret, or keep the port private with \
+                 --bind 127.0.0.1:4318"
+            ));
+        }
         Err(e) => return fail(&format!("cannot bind: {e}")),
     };
     println!("listening on {}", server.address());

@@ -7,7 +7,7 @@
 ![Stage](https://img.shields.io/badge/stage-13%20of%2013-blue.svg)
 ![Core](https://img.shields.io/badge/core-frozen-success.svg)
 ![Rust](https://img.shields.io/badge/rust-1.85%2B-orange.svg)
-![Tests](https://img.shields.io/badge/tests-1046-success.svg)
+![Tests](https://img.shields.io/badge/tests-1050-success.svg)
 ![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)
 ![Dependencies](https://img.shields.io/badge/deps-0%20in%20the%20verifier-success.svg)
 ![Unsafe](https://img.shields.io/badge/unsafe-forbidden-success.svg)
@@ -289,7 +289,7 @@ migration. What stage 13 still wants is measured absence rather than a guess, an
 | `trailryx-otlp` | two OTLP transports, one mapper: protobuf and JSON, the GenAI semconv, the file source | 140 |
 | `trailryx-assemble` | what a source handed over, made into records | 29 |
 | `trailryx-erasure` | payload envelopes, the key hierarchy, erasure | 44 |
-| `trailryx-verify` | the offline verifier, including its own ECDSA and a 215-line RFC 3161 token reader. Depends on nothing | 29 |
+| `trailryx-verify` | the offline verifier, including its own ECDSA and a 215-line RFC 3161 token reader. Depends on nothing | 33 |
 | `trailryx-projection` | Thrift, a Parquet writer with real lists, and columnar projections | 19 |
 | `trailryx-sign` | what gets signed, and what a witness attests to | 4 |
 | `trailryx-http` | the workspace's one HTTP/1.1 client. No TLS, no redirects, no reuse | 14 |
@@ -394,13 +394,29 @@ Nothing here needs a Rust toolchain, a clone, or a build.
 **The server**, as an image:
 
 ```bash
-docker pull ghcr.io/taipanbox/trailryx:v0.1.0
+docker pull ghcr.io/taipanbox/trailryx:v0.1.1
 ```
 
 An immutable tag, never `latest`, so a pod that restarts comes back as the same
 program. `FROM scratch` with one statically linked file inside it: `trailryx-ingest`
 has no third-party crates, so there is no base distribution under it to patch or to
 explain.
+
+**It will not start without a secret, and that is the point.** A port reachable
+from the network with no authentication is refused before the socket opens, so
+`docker run` with no arguments beyond the defaults stops and says so. Give it one:
+
+```bash
+printf 'a-long-random-shared-secret\n' > token
+docker run -p 4318:4318 -v "$PWD/token:/token:ro" \
+  ghcr.io/taipanbox/trailryx:v0.1.1 --bind 0.0.0.0:4318 --token-file /token
+```
+
+That answers `401` without the secret and accepts OTLP with it. There is **no TLS
+in this image**, so the secret is readable on the wire and the process says so at
+startup: terminate TLS in front of it. To try it without any of that, keep the port
+private with `--bind 127.0.0.1:4318` and no token, which is refused by nothing
+because it is reachable by nobody.
 
 **The verifier**, as a plain file, because its whole purpose is that somebody who
 does not trust us can check a pack with it:
@@ -409,7 +425,8 @@ does not trust us can check a pack with it:
 curl -LO https://github.com/TAIPANBOX/trailryx/releases/latest/download/trailryx-verify-x86_64-unknown-linux-musl
 curl -LO https://github.com/TAIPANBOX/trailryx/releases/latest/download/SHA256SUMS
 sha256sum --check --ignore-missing SHA256SUMS
-chmod +x trailryx-verify-* && ./trailryx-verify --help
+chmod +x trailryx-verify-x86_64-unknown-linux-musl
+./trailryx-verify-x86_64-unknown-linux-musl --help
 ```
 
 Built for `x86_64` and `aarch64`, Linux and macOS. The Linux builds are musl and
@@ -444,7 +461,7 @@ not repeated here: a number written twice is a number that will disagree with it
 ## Try it
 
 ```bash
-cargo test                                    # 1046 tests
+cargo test                                    # 1050 tests
 cargo run --bin trailryx-sim-run -- --help
 ```
 

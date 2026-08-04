@@ -4087,7 +4087,7 @@ dependencies = [
 
 [[package]]
 name = "trailryx-anchor"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "trailryx-asn1",
  "trailryx-contracts",
@@ -4098,11 +4098,11 @@ dependencies = [
 
 [[package]]
 name = "trailryx-asn1"
-version = "0.1.0"
+version = "0.1.1"
 
 [[package]]
 name = "trailryx-assemble"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "trailryx-contracts",
  "trailryx-erasure",
@@ -4112,7 +4112,7 @@ dependencies = [
 
 [[package]]
 name = "trailryx-azure"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "trailryx-contracts",
  "trailryx-crypto",
@@ -4121,35 +4121,35 @@ dependencies = [
 
 [[package]]
 name = "trailryx-compliance"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "trailryx-verify",
 ]
 
 [[package]]
 name = "trailryx-contracts"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "trailryx-record",
 ]
 
 [[package]]
 name = "trailryx-core"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "trailryx-sim",
 ]
 
 [[package]]
 name = "trailryx-crypto"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "trailryx-record",
 ]
 
 [[package]]
 name = "trailryx-crypto-aws"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "aws-lc-rs",
  "trailryx-erasure",
@@ -4157,7 +4157,7 @@ dependencies = [
 
 [[package]]
 name = "trailryx-demo"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "trailryx-assemble",
  "trailryx-azure",
@@ -4179,7 +4179,7 @@ dependencies = [
 
 [[package]]
 name = "trailryx-erasure"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "trailryx-contracts",
  "trailryx-crypto",
@@ -4190,7 +4190,7 @@ dependencies = [
 
 [[package]]
 name = "trailryx-federation"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "trailryx-contracts",
  "trailryx-record",
@@ -4199,7 +4199,7 @@ dependencies = [
 
 [[package]]
 name = "trailryx-federation-grpc"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "prost",
  "rcgen",
@@ -4217,7 +4217,7 @@ dependencies = [
 
 [[package]]
 name = "trailryx-fuzz"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "trailryx-anchor",
  "trailryx-asn1",
@@ -4236,7 +4236,7 @@ dependencies = [
 
 [[package]]
 name = "trailryx-http"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "rustls",
  "webpki-roots 0.26.11",
@@ -4244,7 +4244,7 @@ dependencies = [
 
 [[package]]
 name = "trailryx-index"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "trailryx-crypto",
  "trailryx-record",
@@ -4252,7 +4252,7 @@ dependencies = [
 
 [[package]]
 name = "trailryx-ingest"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "trailryx-contracts",
  "trailryx-crypto",
@@ -4262,7 +4262,7 @@ dependencies = [
 
 [[package]]
 name = "trailryx-journal"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "trailryx-crypto",
  "trailryx-record",
@@ -4271,14 +4271,14 @@ dependencies = [
 
 [[package]]
 name = "trailryx-json"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "trailryx-sim",
 ]
 
 [[package]]
 name = "trailryx-otlp"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "trailryx-assemble",
  "trailryx-contracts",
@@ -4290,7 +4290,7 @@ dependencies = [
 
 [[package]]
 name = "trailryx-projection"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "trailryx-crypto",
  "trailryx-index",
@@ -4300,7 +4300,7 @@ dependencies = [
 
 [[package]]
 name = "trailryx-publish"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "trailryx-contracts",
  "trailryx-crypto",
@@ -4310,11 +4310,11 @@ dependencies = [
 
 [[package]]
 name = "trailryx-record"
-version = "0.1.0"
+version = "0.1.1"
 
 [[package]]
 name = "trailryx-s3"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "trailryx-contracts",
  "trailryx-crypto",
@@ -4323,7 +4323,7 @@ dependencies = [
 
 [[package]]
 name = "trailryx-sign"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "trailryx-crypto",
  "trailryx-record",
@@ -4331,11 +4331,11 @@ dependencies = [
 
 [[package]]
 name = "trailryx-sim"
-version = "0.1.0"
+version = "0.1.1"
 
 [[package]]
 name = "trailryx-sql"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "async-trait",
  "datafusion",
@@ -4355,7 +4355,7 @@ dependencies = [
 
 [[package]]
 name = "trailryx-store"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "trailryx-anchor",
  "trailryx-compliance",
@@ -4372,7 +4372,7 @@ dependencies = [
 
 [[package]]
 name = "trailryx-verify"
-version = "0.1.0"
+version = "0.1.1"
 
 [[package]]
 name = "try-lock"

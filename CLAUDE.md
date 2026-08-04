@@ -64,7 +64,7 @@ Everything below is a rule, not a description. Each one says what holds it today
 
 ## What is a gate, and what is still only a sentence
 
-**Decisions that became gates.** Zero dependencies outside the declared list, the core standing up without adapters, no `unsafe`, a seed reproducing a run byte for byte, the published seed corpus, two independent verifiers agreeing on one pack, a reproducible verifier binary, the TLS builds, every parser under hostile bytes, every number the README states, a 200-seed durability sweep, and the advisories with the reasons the silenced ones are silenced. Sixteen checks, run by `.githooks/pre-push` and again by CI.
+**Decisions that became gates.** Zero dependencies outside the declared list, the core standing up without adapters, no `unsafe`, a seed reproducing a run byte for byte, the published seed corpus, two independent verifiers agreeing on one pack, a reproducible verifier binary, the TLS builds, every parser under hostile bytes, every number the README states including the image tag it tells people to pull, a 200-seed durability sweep, and the advisories with the reasons the silenced ones are silenced. Sixteen checks, run by `.githooks/pre-push` and again by CI.
 
 **Decisions with no gate yet.** This list is debt, and it is here so it stays visible:
 
