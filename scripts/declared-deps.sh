@@ -19,7 +19,7 @@
 set -uo pipefail
 cd "$(git rev-parse --show-toplevel)" || exit 1
 
-ALLOWED="trailryx-sql trailryx-crypto-aws trailryx-demo"
+ALLOWED="trailryx-sql trailryx-crypto-aws trailryx-demo trailryx-federation-grpc"
 
 case "${1:-check}" in
   # `list` prints the crates to exclude when asking whether the core stands alone.

@@ -1,0 +1,216 @@
+// The federation wire.
+//
+// Two shapes here are deliberate and are the reason this file is worth reading
+// before the Rust that implements it.
+//
+// **The trailer comes last, and its absence means "not complete".** A stream
+// that dies half way must never be readable as a small complete answer, which
+// is the transport-level form of the rule the federation crate exists for: a
+// forgotten node breaks the proof rather than shrinking the answer. So the
+// proof status is not a field on the response, it is the final message, and a
+// reader that reaches end-of-stream without one has been told nothing it may
+// call proved.
+//
+// **A reason for incompleteness is a code, never a string.** Free text in the
+// metadata plane is forbidden (invariant 5), and a remote peer is exactly the
+// untrusted party that would otherwise write into it. Codes also survive
+// translation: our own status types carry `&'static str`, which cannot be built
+// from bytes that arrived over a socket without leaking them.
+
+syntax = "proto3";
+
+package trailryx.federation.v1;
+
+service Federation {
+  // Streamed per decision A2: an answer can be large, and the caller should not
+  // have to hold all of it before it can start verifying.
+  rpc Query(QueryRequest) returns (stream QueryChunk);
+}
+
+message QueryRequest {
+  // The predicate, in the store's own read surface. Sent as written; the far
+  // side decides what it can prove and says so in the trailer.
+  string predicate = 1;
+}
+
+message QueryChunk {
+  oneof body {
+    Record record = 1;
+    Trailer trailer = 2;
+  }
+}
+
+// The last message on a healthy stream. Nothing follows it.
+message Trailer {
+  ProofStatus proof = 1;
+  // Empty when proof is FULL. Repeated because a far side can have more than
+  // one reason and collapsing them loses which.
+  repeated PartialReason reasons = 2;
+}
+
+enum ProofStatus {
+  PROOF_STATUS_UNSPECIFIED = 0;
+  PROOF_STATUS_FULL = 1;
+  PROOF_STATUS_PARTIAL = 2;
+  PROOF_STATUS_NONE = 3;
+}
+
+// Why an answer is not fully proved. A closed vocabulary: an unknown code maps
+// to a named "this version does not know" rather than to text.
+enum PartialReason {
+  PARTIAL_REASON_UNSPECIFIED = 0;
+  PARTIAL_REASON_PREDICATE_OFF_PROVABLE_DIMENSIONS = 1;
+  PARTIAL_REASON_SEGMENT_UNAVAILABLE = 2;
+  PARTIAL_REASON_PROOF_NOT_ATTEMPTED = 3;
+  PARTIAL_REASON_PEER_SET_UNATTESTED = 4;
+  PARTIAL_REASON_UPSTREAM_PEER_INCOMPLETE = 5;
+}
+
+// ---------------------------------------------------------------------------
+// The record, field for field.
+// ---------------------------------------------------------------------------
+
+message Record {
+  // 16 bytes, big-endian. Not a string: a ULID rendered as text and parsed back
+  // is one more place two versions can disagree about padding.
+  bytes id = 1;
+  string tenant = 2;
+  uint32 shard = 3;
+
+  string agent_id = 4;
+  string run_id = 5;
+  optional string parent_run_id = 6;
+  repeated string on_behalf_of = 7;
+
+  uint64 occurred_at = 8;
+  optional uint64 decided_at = 9;
+  uint64 recorded_at = 10;
+  optional uint64 knowledge_as_of = 11;
+  optional uint64 clock_skew_nanos = 12;
+
+  EventType event_type = 13;
+  Severity severity = 14;
+
+  Basis basis = 15;
+  repeated bytes caused_by = 16;
+  Outcome outcome = 17;
+  optional PayloadRef payload = 18;
+
+  uint64 seq = 19;
+  bytes prev_hash = 20;
+  uint64 segment_id = 21;
+  Algorithms algorithms = 22;
+  uint32 mapper = 23;
+}
+
+message Basis {
+  optional string policy_version = 1;
+  optional int64 budget_remaining_micros = 2;
+  optional bytes memory_ref = 3;
+  optional string model = 4;
+  optional uint32 temperature_milli = 5;
+  optional uint32 max_tokens = 6;
+  optional bytes prompt_hash = 7;
+  repeated string tool_manifest = 8;
+  repeated string identity_chain = 9;
+}
+
+message Outcome {
+  optional Verdict verdict = 1;
+  optional ErrorCode error = 2;
+  optional uint64 latency_micros = 3;
+  optional uint32 tokens_in = 4;
+  optional uint32 tokens_out = 5;
+  optional int64 cost_micros = 6;
+}
+
+message PayloadRef {
+  bytes hash = 1;
+  uint64 size_bytes = 2;
+  PayloadClass class = 3;
+  bytes key_id = 4;
+}
+
+message Algorithms {
+  HashAlg hash = 1;
+  SigAlg signature = 2;
+  KemAlg kem = 3;
+}
+
+// Every enum below keeps 0 as UNSPECIFIED and the decoder refuses it. Proto3
+// cannot tell "absent" from "first variant", and silently reading an unknown
+// event type as the first one is how a record changes meaning in transit.
+
+enum EventType {
+  EVENT_TYPE_UNSPECIFIED = 0;
+  EVENT_TYPE_REQUEST_RECEIVED = 1;
+  EVENT_TYPE_MODEL_CALL = 2;
+  EVENT_TYPE_TOOL_CALL = 3;
+  EVENT_TYPE_POLICY_DECISION = 4;
+  EVENT_TYPE_BUDGET_CHECK = 5;
+  EVENT_TYPE_MEMORY_ACCESS = 6;
+  EVENT_TYPE_DELEGATION = 7;
+  EVENT_TYPE_RUN_COMPLETED = 8;
+  EVENT_TYPE_ERASURE = 9;
+  EVENT_TYPE_STORE_EVENT = 10;
+}
+
+enum Severity {
+  SEVERITY_UNSPECIFIED = 0;
+  SEVERITY_DEBUG = 1;
+  SEVERITY_INFO = 2;
+  SEVERITY_NOTICE = 3;
+  SEVERITY_WARNING = 4;
+  SEVERITY_ERROR = 5;
+  SEVERITY_CRITICAL = 6;
+}
+
+enum Verdict {
+  VERDICT_UNSPECIFIED = 0;
+  VERDICT_ALLOWED = 1;
+  VERDICT_DENIED = 2;
+  VERDICT_HELD = 3;
+  VERDICT_FAILED = 4;
+  VERDICT_NOT_APPLICABLE = 5;
+}
+
+enum ErrorCode {
+  ERROR_CODE_UNSPECIFIED = 0;
+  ERROR_CODE_NONE = 1;
+  ERROR_CODE_TIMEOUT = 2;
+  ERROR_CODE_RATE_LIMITED = 3;
+  ERROR_CODE_UNAUTHORIZED = 4;
+  ERROR_CODE_BUDGET_EXCEEDED = 5;
+  ERROR_CODE_POLICY_DENIED = 6;
+  ERROR_CODE_UPSTREAM_ERROR = 7;
+  ERROR_CODE_MALFORMED = 8;
+  ERROR_CODE_INTERNAL = 9;
+}
+
+enum PayloadClass {
+  PAYLOAD_CLASS_UNSPECIFIED = 0;
+  PAYLOAD_CLASS_PROMPT = 1;
+  PAYLOAD_CLASS_COMPLETION = 2;
+  PAYLOAD_CLASS_TOOL_ARGUMENTS = 3;
+  PAYLOAD_CLASS_TOOL_RESULT = 4;
+  PAYLOAD_CLASS_DOCUMENT = 5;
+  PAYLOAD_CLASS_DIAGNOSTIC = 6;
+}
+
+enum HashAlg {
+  HASH_ALG_UNSPECIFIED = 0;
+  HASH_ALG_SHA384 = 1;
+}
+
+enum SigAlg {
+  SIG_ALG_UNSPECIFIED = 0;
+  SIG_ALG_ES256 = 1;
+  SIG_ALG_ES384 = 2;
+  SIG_ALG_ML_DSA_65 = 3;
+  SIG_ALG_SLH_DSA = 4;
+}
+
+enum KemAlg {
+  KEM_ALG_UNSPECIFIED = 0;
+  KEM_ALG_X25519_ML_KEM_768 = 1;
+}

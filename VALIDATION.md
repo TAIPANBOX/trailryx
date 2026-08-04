@@ -463,10 +463,61 @@ opposite.
 
 ---
 
+### The federation transport, over real sockets and real mutual TLS
+
+```
+cargo test -p trailryx-federation-grpc
+```
+
+15 tests, 4 August 2026: six over the codec, nine that bind a loopback listener and
+complete a real TLS 1.3 handshake against a certificate authority the test creates.
+Nothing is mocked, because a mocked transport agrees with whatever the transport
+does, including its mistakes, and two of its mistakes are the only interesting
+results here.
+
+**What the run establishes.** Two environments answering completely compose to a
+complete answer, and the roadmap's stage-12 criterion holds on a wire rather than in
+memory. A registry naming three environments while two answer yields a partial proof
+with the third named. A peer that is down is silent rather than empty. A peer's own
+partial answer stays partial after crossing. A stream that ends before its trailer is
+refused outright, and inside a fan-out that peer contributes nothing rather than a
+plausible-looking two thirds.
+
+**What it found.** Two things, both by a test failing first.
+
+The transport was **weaker than the ingest door it sits beside**. It parsed an
+arriving `agent_id` with the lax constructor `trailryx-journal` uses for records it
+wrote itself, so a peer could have sent an identifier with no `agent://` scheme and
+had it stored, while the same value arriving through `trailryx-otlp` would have been
+refused. Now invariant 23, with the test that caught it.
+
+**Mutual TLS refuses later than it looks.** The first version of the client-authority
+test asserted that `connect` fails for a certificate signed by an authority we do not
+trust. It does not. Under TLS 1.3 the server sends its own Finished before processing
+the client certificate, so an unauthorised client connects successfully and is refused
+on its first request instead. The property that actually holds, and the one now
+asserted, is that such a client ends the exchange with no records. Measured against a
+real handshake, not read from a specification.
+
+The name-from-certificate check was then **shown to be load-bearing** rather than
+decorative: with the expected name replaced by a constant, five of the nine tests
+fail, including the impersonation one.
+
+---
+
 ## Not yet measured
 
 Stated so the absence is visible rather than inferred:
 
+- **The federation transport across an actual network.** Everything above is
+  loopback. A handshake to `127.0.0.1` is a real handshake and is not a real network:
+  no latency worth the name, no packet loss, no MTU, no middlebox, no partition, and
+  no clock disagreement between the two ends. Two environments in two clouds is the
+  test this one stands in for, and it has not been run.
+- **Verified replication.** Stage 12 asks for a receiver that checks the chain before
+  accepting. The transport composes what peers send and validates every field on the
+  way in; it does not yet verify the far side's hash chain, so a peer that is trusted
+  by the registry is trusted about its own history.
 - **A machine dying rather than a process.** Every kill run above is a `SIGKILL`,
   so the kernel and its page cache survive it. Power loss, where the disk's own cache
   is allowed to forget what it acknowledged, is a different and harsher test. The

@@ -4,8 +4,24 @@
 # What this buys: the roadmap asks for ext4 and xfs, and the run so far was APFS.
 # What it does not buy: a power cut. This test kills a *process*; the kernel and
 # its page cache survive, so what is under test is our recovery from a torn write,
-# not the filesystem's behaviour when the machine loses power. A cloud VM would
-# not buy that either, which is why this runs locally and free.
+# not the filesystem's behaviour when the machine loses power.
+#
+# This file used to end that paragraph with "a cloud VM would not buy that
+# either, which is why this runs locally and free". That was wrong, and it was
+# wrong in the direction that let us stop looking. Both providers document the
+# opposite in as many words. AWS on `stop-instances --force`: the instance
+# "shuts down forcibly without flushing the file system caches and metadata",
+# and bypassing the graceful shutdown "might result in data loss or corruption
+# (for example, memory contents not flushed to disk or loss of in-flight IOs)".
+# GCP on `instances reset`: it "forcibly wipes the memory contents" and does not
+# perform a clean shutdown of the guest OS. That is precisely the page cache
+# this test cannot take away, so a forced stop is a strictly harsher run than
+# anything reachable here, and the honest reason this file runs locally is that
+# it is free, not that the cloud has nothing to add.
+#
+# Read from the providers' own documentation, 2026-08-04. The cloud run itself
+# is still in VALIDATION.md under *not yet measured*, where it belongs until it
+# has been done.
 set -e
 
 echo "=== встановлюю інструменти файлових систем"
