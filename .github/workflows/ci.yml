@@ -16,24 +16,28 @@ name: ci
 # WHY TWO JOBS AND NOT ONE, measured 2026-08-04.
 #
 # One job ran all sixteen serially and reached 33 minutes without finishing
-# `cargo test`. Two things were wrong and only one of them was obvious.
+# `cargo test`. Nothing was cached, so every run compiled DataFusion and pgwire
+# from nothing; that is `Swatinem/rust-cache` below.
 #
-# The obvious one: nothing cached, so every run compiled DataFusion and pgwire
-# from nothing. That is `Swatinem/rust-cache` below, and it is the larger of the
-# two fixes.
+# The split was first justified here by a second reason, that the debug and
+# release halves share one target directory and evict each other's artifacts.
+# The first run after the split measured that reason and it does not hold, so it
+# is recorded as wrong rather than quietly deleted.
 #
-# The one worth writing down: the checks span TWO cargo profiles, and a single
-# job does not just run them one after another, it also makes them share one
-# target directory. The debug and release halves then evict each other's
-# artifacts, so the second half of the run recompiles what the first half had
-# already built. Splitting on the profile boundary means two caches that stay
-# warm instead of one that thrashes, and the wall clock becomes the slower half
-# rather than the sum.
+# What the numbers actually say. The release job finished in 44 SECONDS while
+# the debug job was still on clippy, and it was never expensive: the three
+# crates it touches (`trailryx-sim`, `trailryx-verify`, `trailryx-fuzz`) have
+# ZERO third-party dependencies between them, while `trailryx-sql` has 424. The
+# whole cost is the facade, and only the debug job builds it. There was no
+# thrash. There were four cheap checks queued behind a thirty-minute compile for
+# no reason at all, and now they are not.
 #
-# So the split is by PROFILE, not by topic. Put a new check in the job whose
-# profile it uses: anything reaching for `--release` belongs below, everything
-# else above. A release check in the debug job is not a style mistake, it is the
-# thrash coming back.
+# The split is still by PROFILE, because that boundary happens to separate the
+# dependency-free crates from the facade, and because two caches beat one that
+# holds two profiles. Put a new check in the job whose profile it uses. But the
+# reason it pays is the dependency weight, not the eviction, and a future change
+# that moves a facade-touching check into the release job would lose the whole
+# benefit while still looking correct.
 #
 # The one thing that is NOT free to split is `protoc`: both jobs install it,
 # because both compile the crate that needs it.
