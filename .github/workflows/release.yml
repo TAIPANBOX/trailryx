@@ -1,0 +1,224 @@
+name: release
+
+# Binaries and an image, so that using this project does not require building
+# it.
+#
+# WHY THIS EXISTS, and it is worth stating because the obvious reason is the
+# wrong one.
+#
+# It is NOT because building is slow. Measured 2026-08-04: a cold release build
+# of both shipped binaries, from an empty target directory, takes 2.3 seconds.
+# Every crate that ends up in a binary here has zero third-party dependencies,
+# and `trailryx-sql`, the SQL facade whose dependency count the README states
+# once and measures where it states it, is in no binary at all. The long build
+# everybody had noticed was `cargo test --workspace` in CI, which is our own
+# test of the facade and reaches no user.
+#
+# It exists because a user should not need a Rust toolchain, a git clone or a
+# cargo at all in order to run a receiver or to check a pack.
+#
+# NOT because this joins the agent stack. It does not, and that is a decision
+# rather than an omission: 2026-08-03, "he does not connect to our whole stack
+# yet, it is just a separate service", which is also why trailryx is absent from
+# the stack diagrams. Nothing in this workflow should be read as making it a
+# sixth plane. It is a separate product, and a separate product needs its own
+# way to be installed precisely BECAUSE it cannot be installed as part of
+# something else.
+#
+# TWO ARTIFACTS, FOR TWO DIFFERENT PEOPLE.
+#
+# `trailryx-ingest` is the server, and it goes in the image, because that is how
+# a cluster consumes things.
+#
+# `trailryx-verify` is the offline verifier, and it is deliberately a plain file
+# on the release page rather than only a layer inside an image. Its entire
+# purpose is that somebody who does not trust us can check a pack with it. Making
+# them run our container first to get it would defeat the point of having it.
+#
+# MONEY: nothing here is metered. Standard GitHub-hosted runners are free on a
+# public repository, including the macOS and arm64 ones this uses, and GHCR
+# storage is free for public packages. Larger runners are not free and this
+# workflow does not ask for any.
+
+on:
+  push:
+    tags: ["v*"]
+  # A release pipeline that is first exercised by cutting a release is a
+  # pipeline tested in the one run where a mistake is public. So the BUILD half
+  # runs on any pull request that touches this machinery, and the two publishing
+  # jobs stay gated on a tag: `if: startsWith(github.ref, 'refs/tags/v')`.
+  #
+  # Narrow on purpose. Four runners on every pull request would be waste; four
+  # runners when somebody edits the thing that builds four runners is the point.
+  pull_request:
+    paths:
+      - ".github/workflows/release.yml"
+      - "Dockerfile"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: 0
+
+jobs:
+  binaries:
+    name: ${{ matrix.target }}
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # musl rather than gnu for both Linux targets: a statically linked
+          # binary runs on whatever the operator already has, and this project
+          # has no third-party crates to make that hard.
+          - target: x86_64-unknown-linux-musl
+            runner: ubuntu-latest
+          - target: aarch64-unknown-linux-musl
+            runner: ubuntu-24.04-arm
+          - target: aarch64-apple-darwin
+            runner: macos-latest
+          - target: x86_64-apple-darwin
+            runner: macos-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: toolchain
+        run: |
+          rustup toolchain install stable --profile minimal
+          rustup default stable
+          rustup target add ${{ matrix.target }}
+          rustc --version
+
+      # musl-tools carries the linker the musl targets need. Absent on the
+      # runner, and the failure it produces names `cc` rather than musl, which
+      # sends people the wrong way.
+      - name: musl linker
+        if: endsWith(matrix.target, '-linux-musl')
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y musl-tools
+
+      # --locked, so the binary on the release page is built from the lockfile
+      # in the tag rather than from whatever resolved that morning. Without it a
+      # published artifact cannot be rebuilt from its own commit.
+      - name: build
+        run: |
+          cargo build --release --locked --target ${{ matrix.target }} \
+            --bin trailryx-verify --bin trailryx-ingest
+
+      # Named by target, because a file called `trailryx-verify` from four
+      # different platforms in one directory is four files that overwrite each
+      # other.
+      - name: name and checksum
+        shell: bash
+        run: |
+          mkdir -p dist
+          for bin in trailryx-verify trailryx-ingest; do
+            cp "target/${{ matrix.target }}/release/$bin" "dist/$bin-${{ matrix.target }}"
+          done
+          cd dist
+          if command -v sha256sum >/dev/null 2>&1; then
+            sha256sum ./* > "SHA256SUMS-${{ matrix.target }}"
+          else
+            shasum -a 256 ./* > "SHA256SUMS-${{ matrix.target }}"
+          fi
+          cat "SHA256SUMS-${{ matrix.target }}"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dist-${{ matrix.target }}
+          path: dist/
+          if-no-files-found: error
+
+  publish:
+    name: release page
+    needs: binaries
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: dist-*
+          merge-multiple: true
+          path: dist
+
+      # One file for every artifact, so a reader checks one thing rather than
+      # four. The per-target files are kept beside it rather than deleted:
+      # somebody verifying a single download should not have to trust that this
+      # step concatenated correctly.
+      - name: one checksum file
+        run: |
+          cd dist
+          cat SHA256SUMS-* | grep -v '^$' | sed 's#\./##' | sort -k2 > SHA256SUMS
+          echo "--- SHA256SUMS ---"
+          cat SHA256SUMS
+
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*
+          fail_on_unmatched_files: true
+          generate_release_notes: true
+
+  image:
+    name: ghcr image
+    needs: binaries
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: dist-*-linux-musl
+          merge-multiple: true
+          path: dist
+
+      # The image is assembled from the SAME files the release page serves, not
+      # from a second build. Two builds of one tag are two answers to one
+      # question, and the whole point of publishing a checksum is that there is
+      # only one.
+      - name: layout for buildx
+        run: |
+          mkdir -p ctx/amd64 ctx/arm64
+          cp dist/trailryx-ingest-x86_64-unknown-linux-musl ctx/amd64/trailryx-ingest
+          cp dist/trailryx-ingest-aarch64-unknown-linux-musl ctx/arm64/trailryx-ingest
+          chmod +x ctx/amd64/trailryx-ingest ctx/arm64/trailryx-ingest
+          cp Dockerfile ctx/Dockerfile
+
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # Both architectures under one tag, so a manifest pulls the right one on
+      # whatever the operator runs. The tag is the git tag and never `latest`: an
+      # image tag that moves makes a pod that comes back different after a
+      # restart nobody ran.
+      #
+      # Published under the same organisation as the stack's images and that is
+      # all it shares with them. Trailryx is a separate product (see the header),
+      # so nothing here adds it to `stack-k8s` and nothing there should pull it
+      # without that being decided on its own.
+      #
+      # No build arguments. The Dockerfile reads buildx's own TARGETARCH and
+      # picks the matching directory out of the context, which is why the layout
+      # step above names them `amd64` and `arm64` rather than by rust triple.
+      - name: build and push
+        uses: docker/build-push-action@v6
+        with:
+          context: ctx
+          file: ctx/Dockerfile
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ghcr.io/taipanbox/trailryx:${{ github.ref_name }}
