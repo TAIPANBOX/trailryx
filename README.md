@@ -400,6 +400,10 @@ cargo run --release --bin trailryx-sim-run -- \
   --seed 777 --steps 20000 --shards 4 --crash-ppm 5000 --hostile --honest-disk
 ```
 
+```
+seed=777 steps=20000 digest=42c29db84fa0d604 lines=37394 crashes=95 violations=0
+```
+
 And sixteen of them are published with their digests, so you can check that claim
 rather than take it:
 
@@ -420,8 +424,6 @@ because the tempting response to a new failure is to paste the new number in.
 `docs/reproducing.md` has the recipe, the digest, and the sentence that makes a
 digest worth anything: it is only meaningful published next to a toolchain version
 and a target triple.
-
-## The export has to be readable without us
 
 ## SQL that either proves or says it did not
 
@@ -856,6 +858,8 @@ What it does not prove is stated in its own README first rather than last: it wa
 written by reading the Rust, so it would not catch the same misunderstanding made
 twice, and it checks no signatures.
 
+## The export has to be readable without us
+
 A proprietary format is a trust debt: an auditor would have to believe our reader.
 `docs/planning/trailryx-plan.md` §6.3 settles that debt with one obligation, a
 guaranteed lossless export to Parquet and JSON that is verifiable on its own, and
@@ -874,10 +878,6 @@ file that parses cleanly and says something else. So there is a case with empty 
 at the start, in the middle and at the end, two list columns in a row and a scalar
 beside them, and both of the likeliest encoding mistakes were introduced on purpose
 to check that pyarrow catches them. It does.
-
-```
-seed=777 steps=20000 digest=42c29db84fa0d604 lines=37394 crashes=95 violations=0
-```
 
 ## What a proof actually does
 
@@ -1541,7 +1541,7 @@ failure mode the verifier exists to catch. And the exit code follows the pack's
 verdict, not the table, because a table of obligations means nothing about a pack
 that does not verify.
 
-The mapping covers the AI Act, **prEN ISO/IEC 241031** (the profile document for AI
+The mapping covers the AI Act, **prEN ISO/IEC 24970** (the profile document for AI
 system logging, still a draft, so its clauses are quoted nowhere), SR 11-7 and the
 SOC 2 criteria. It lists the obligations this store does nothing for, by name,
 because a mapping that shows only its wins reads as complete. `docs/compliance.md`
@@ -1748,19 +1748,24 @@ in both directions.
 
 ## Next
 
-Federation, and what is left of storage.
+Federation's transport. The completeness rule exists and the wires do not: composing
+an answer across environments is decided and tested, and the gRPC-with-mutual-TLS
+transport that would carry it is specified and unbuilt.
 
 The SQL facade shipped: the Postgres wire protocol over a `TableProvider` that pushes
 predicates on the provable dimensions into the authenticated index, so an answer
 either carries its completeness proof or says which predicate did not fall on a
 provable dimension.
 
-Object storage is most of the way there. A segment publishes atomically to S3 over a
-hand-written SigV4 and the workspace's own HTTP client, the body first and the
-manifest as the commit point, with the store's conditional-write behaviour measured
-rather than assumed. What is left is hot and cold tiering, the GCS and Azure
-adapters, and TLS on the outbound client, which is the honest reason the S3 section
-above says a private network or a terminator.
+Object storage shipped too, and this paragraph was the last place still saying
+otherwise. It named four things left to do and every one of them had landed by the
+time somebody read it again: hot and cold tiering (`trailryx-store`'s `tier.rs` and
+`cold.rs`), the GCS adapter (the same client, four names apart), Azure (its own
+signer, for the reasons its section above gives), and TLS on the outbound client
+(`--features tls`, on the same `aws-lc-rs` backend the cipher uses). What stayed true
+is what a publication is: atomic, over a hand-written SigV4 and the workspace's own
+HTTP client, the body first and the manifest as the commit point, with the store's
+conditional-write behaviour measured rather than assumed.
 
 That first sentence used to read "the provable query language that replaces the SQL facade",
 which contradicted `docs/planning/trailryx-architecture.md` §3.1 and §3.2 in both
@@ -1778,9 +1783,11 @@ source has no persisted checkpoint, so a restart re-reads from the last
 acknowledged line and the assembler mints a fresh identity, which is why it
 declares at-least-once delivery; it does not follow a rotation, and it refuses a
 gzipped, zstd-compressed or length-prefixed export by naming the collector setting
-that produced it rather than half-reading it. Stage 7 has no validated cipher behind its
-seam, and its key seam now models a real custodian's scheduling window even though
-no cloud KMS adapter ships, and its hostile erasure suite tries every
+that produced it rather than half-reading it. Stage 7 has a real cipher behind its seam
+now, AES-256-GCM from AWS-LC, which answers validated only in the build linking the
+FIPS 140-3 module; what it still has no adapter for is a cloud KMS, though its key
+seam already models a real custodian's scheduling window, and its hostile erasure
+suite tries every
 recovery path that exists: caches, projections, exports and backups each arrive
 with their own attempt, or they arrive unchecked. Stage 8 is done: the RFC 3161 anchor, the
 compliance mapping, and reproducible builds with a published seed corpus. Stage 9 has real Parquet lists now; what
