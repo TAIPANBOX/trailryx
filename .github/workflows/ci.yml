@@ -12,6 +12,31 @@ name: ci
 # It is kept because it works in both directions: if this repository is ever made
 # private again, CI stops billing on its own rather than on somebody noticing.
 # Deleting the line is a billing decision, not a tidy-up.
+#
+# WHY TWO JOBS AND NOT ONE, measured 2026-08-04.
+#
+# One job ran all sixteen serially and reached 33 minutes without finishing
+# `cargo test`. Two things were wrong and only one of them was obvious.
+#
+# The obvious one: nothing cached, so every run compiled DataFusion and pgwire
+# from nothing. That is `Swatinem/rust-cache` below, and it is the larger of the
+# two fixes.
+#
+# The one worth writing down: the checks span TWO cargo profiles, and a single
+# job does not just run them one after another, it also makes them share one
+# target directory. The debug and release halves then evict each other's
+# artifacts, so the second half of the run recompiles what the first half had
+# already built. Splitting on the profile boundary means two caches that stay
+# warm instead of one that thrashes, and the wall clock becomes the slower half
+# rather than the sum.
+#
+# So the split is by PROFILE, not by topic. Put a new check in the job whose
+# profile it uses: anything reaching for `--release` belongs below, everything
+# else above. A release check in the debug job is not a style mistake, it is the
+# thrash coming back.
+#
+# The one thing that is NOT free to split is `protoc`: both jobs install it,
+# because both compile the crate that needs it.
 
 on:
   push:
@@ -20,6 +45,7 @@ on:
 
 jobs:
   gate:
+    name: gate (debug profile)
     if: github.event.repository.private == false
     runs-on: ubuntu-latest
     steps:
@@ -102,9 +128,26 @@ jobs:
 
       # The exit criterion of stage 0, checked on every push rather than once. If a
       # seed stops reproducing a run, every guarantee built on the simulator stops
-      # meaning anything.
+      # meaning anything. Debug profile: the corpus check below is the release one.
       - name: determinism, same seed twice
         run: ./scripts/determinism.sh
+
+      # Two verifiers, one pack: the Rust one and `verifier-py/trailryx_verify.py`.
+      # Two implementations that agree prove the format rather than the author.
+      - name: two verifiers agree
+        run: cargo test -p trailryx-store --test two_verifiers --quiet
+
+      # A feature nobody builds is a feature that rots, and this one only shows up
+      # in a deployment when it breaks.
+      - name: the TLS builds still work
+        run: ./scripts/tls-builds.sh
+
+      # Every number the README states about this repository, against the repository.
+      # A README number is a claim with no owner, and an audit on 30 July 2026 found
+      # six crate counts drifted, a dependency figure no reading of the tree
+      # reproduced, and a line off by a factor of two. None was a lie when written.
+      - name: README numbers are true
+        run: ./scripts/readme-numbers.sh
 
       # Written when it was trivially green, because there was nothing to audit,
       # and kept for the day that stopped being true. That day was 30 July 2026,
@@ -120,39 +163,48 @@ jobs:
           cargo install cargo-audit --locked --quiet
           ./scripts/audit.sh
 
+  release-gate:
+    name: gate (release profile)
+    if: github.event.repository.private == false
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: toolchain
+        run: |
+          rustup toolchain install stable --profile minimal
+          rustup default stable
+          rustc --version && cargo --version
+
+      # A cache of its own, keyed separately by the action because the job name
+      # differs. That separation is the point: sharing one with the debug job
+      # means each half evicting the other's artifacts, which is what made the
+      # single-job version recompile work it had already done.
+      - name: cargo cache
+        uses: Swatinem/rust-cache@v2
+
+      - name: protoc
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y protobuf-compiler
+          protoc --version
+
       # The published seed corpus: every recorded run must still produce the digest and
       # the violation count written down for it. A determinism check, not a
       # correctness one, and `sim/corpus.tsv` says so in its own header.
       - name: seed corpus reproduces
         run: ./scripts/seed-corpus.sh
 
-      # Two verifiers, one pack: the Rust one and `verifier-py/trailryx_verify.py`.
-      # Two implementations that agree prove the format rather than the author.
-      - name: two verifiers agree
-        run: cargo test -p trailryx-store --test two_verifiers --quiet
-
       # The same source must produce the same verifier binary from any directory, or
       # an auditor cannot check the binary they run against the source they read.
       - name: verifier build is reproducible
         run: ./scripts/reproduce.sh
-
-      # A feature nobody builds is a feature that rots, and this one only shows up
-      # in a deployment when it breaks.
-      - name: the TLS builds still work
-        run: ./scripts/tls-builds.sh
 
       # Every hand-written parser, fed bytes it did not expect. Ten times the
       # gate's volume here, because CI has the minutes and a fuzzer's value is
       # roughly linear in cases.
       - name: parsers survive hostile bytes
         run: TRAILRYX_FUZZ_CASES=3000 cargo test -p trailryx-fuzz --release --quiet
-
-      # Every number the README states about this repository, against the repository.
-      # A README number is a claim with no owner, and an audit on 30 July 2026 found
-      # six crate counts drifted, a dependency figure no reading of the tree
-      # reproduced, and a line off by a factor of two. None was a lie when written.
-      - name: README numbers are true
-        run: ./scripts/readme-numbers.sh
 
       # Enough to catch a write-path regression. The long sweep belongs in a nightly.
       - name: durability sweep, 200 seeds
