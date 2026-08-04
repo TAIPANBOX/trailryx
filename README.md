@@ -432,6 +432,10 @@ reaches a binary here has zero third-party dependencies.
 cargo build --release --locked --bin trailryx-verify --bin trailryx-ingest
 ```
 
+**No `protoc` for this**, despite what the next section says about the test suite:
+neither shipped binary reaches the federation transport, so nothing on this path
+compiles a `.proto`.
+
 The long build is `cargo test --workspace`, which also builds `trailryx-sql` and the
 dependency tree counted further up this page. That is the SQL facade, it is in no
 binary, and it reaches no user. The count is stated once, where it is measured, and
