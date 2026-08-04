@@ -91,6 +91,26 @@ else
   printf 'skipped the dependency count: cargo tree could not resolve offline\n'
 fi
 
+# The image tag the README tells people to pull, against the version this
+# workspace is. Added 2026-08-04, with v0.1.1, because that line is a number
+# with an owner nobody appointed: it is correct on the day a release is cut and
+# wrong from the next one onwards, and the person it misleads is a stranger
+# following the install instructions, who has no way to know.
+#
+# Every occurrence, not the first: the pull line and the run line drift apart
+# just as easily as either drifts from the manifest.
+version=$(grep -m1 '^version = ' Cargo.toml | grep -oE '[0-9]+\.[0-9]+\.[0-9]+')
+tags=$(grep -oE 'ghcr\.io/taipanbox/trailryx:v[0-9]+\.[0-9]+\.[0-9]+' "$readme" |
+  grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | sort -u)
+if [ -n "$tags" ]; then
+  for tag in $tags; do
+    [ "$tag" = "$version" ] ||
+      note "the README says pull ghcr.io/taipanbox/trailryx:v$tag and this workspace is $version"
+  done
+else
+  printf 'skipped the image tag: the README names no ghcr.io tag\n'
+fi
+
 # The stage badge, against the roadmap that owns the order of work.
 stage=$(grep -o 'badge/stage-[0-9]*%20of%20[0-9]*' "$readme" | grep -o '[0-9]*' | head -1)
 closed=$(grep -oE 'Етап [0-9]+ закритий' docs/planning/trailryx-roadmap.md |
