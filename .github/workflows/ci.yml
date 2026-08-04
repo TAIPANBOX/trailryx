@@ -31,6 +31,20 @@ jobs:
           rustup default stable
           rustc --version && cargo --version
 
+      # Measured 2026-08-04: without this, a run took 33 minutes and had not
+      # finished `cargo test`. The workspace pulls DataFusion and pgwire behind
+      # the SQL facade, and every run compiled the whole tree from nothing.
+      #
+      # This is not a Rust problem and it is worth writing down as such, because
+      # the obvious wrong conclusion is that the language is the cost: tokenfuse
+      # is the same language with this same action, and its build-and-test job
+      # takes three minutes.
+      #
+      # Free here. Actions cache is 10 GB per repository on a public one, and
+      # GitHub evicts the oldest entries itself, so nothing starts metering.
+      - name: cargo cache
+        uses: Swatinem/rust-cache@v2
+
       # `trailryx-federation-grpc` generates its wire types at build time, on
       # purpose: a checked-in copy is a second source of truth for the wire, and
       # the first edit of the `.proto` without a regeneration makes the two
