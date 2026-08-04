@@ -1,6 +1,6 @@
 name: ci
 
-# The same fifteen checks `.githooks/pre-push` runs, so a green push is a green pull
+# The same sixteen checks `.githooks/pre-push` runs, so a green push is a green pull
 # request and neither can drift from the other.
 #
 # THE GUARD ON `if:` STAYS, and it is not decoration. Actions minutes are metered on
@@ -12,6 +12,35 @@ name: ci
 # It is kept because it works in both directions: if this repository is ever made
 # private again, CI stops billing on its own rather than on somebody noticing.
 # Deleting the line is a billing decision, not a tidy-up.
+#
+# WHY TWO JOBS AND NOT ONE, measured 2026-08-04.
+#
+# One job ran all sixteen serially and reached 33 minutes without finishing
+# `cargo test`. Nothing was cached, so every run compiled DataFusion and pgwire
+# from nothing; that is `Swatinem/rust-cache` below.
+#
+# The split was first justified here by a second reason, that the debug and
+# release halves share one target directory and evict each other's artifacts.
+# The first run after the split measured that reason and it does not hold, so it
+# is recorded as wrong rather than quietly deleted.
+#
+# What the numbers actually say. The release job finished in 44 SECONDS while
+# the debug job was still on clippy, and it was never expensive: the three
+# crates it touches (`trailryx-sim`, `trailryx-verify`, `trailryx-fuzz`) have
+# ZERO third-party dependencies between them, while `trailryx-sql` has 424. The
+# whole cost is the facade, and only the debug job builds it. There was no
+# thrash. There were four cheap checks queued behind a thirty-minute compile for
+# no reason at all, and now they are not.
+#
+# The split is still by PROFILE, because that boundary happens to separate the
+# dependency-free crates from the facade, and because two caches beat one that
+# holds two profiles. Put a new check in the job whose profile it uses. But the
+# reason it pays is the dependency weight, not the eviction, and a future change
+# that moves a facade-touching check into the release job would lose the whole
+# benefit while still looking correct.
+#
+# The one thing that is NOT free to split is `protoc`: both jobs install it,
+# because both compile the crate that needs it.
 
 on:
   push:
@@ -20,6 +49,7 @@ on:
 
 jobs:
   gate:
+    name: gate (debug profile)
     if: github.event.repository.private == false
     runs-on: ubuntu-latest
     steps:
@@ -30,6 +60,41 @@ jobs:
           rustup toolchain install stable --profile minimal --component rustfmt,clippy
           rustup default stable
           rustc --version && cargo --version
+
+      # Measured 2026-08-04: without this, a run took 33 minutes and had not
+      # finished `cargo test`. The workspace pulls DataFusion and pgwire behind
+      # the SQL facade, and every run compiled the whole tree from nothing.
+      #
+      # This is not a Rust problem and it is worth writing down as such, because
+      # the obvious wrong conclusion is that the language is the cost: tokenfuse
+      # is the same language with this same action, and its build-and-test job
+      # takes three minutes.
+      #
+      # Free here. Actions cache is 10 GB per repository on a public one, and
+      # GitHub evicts the oldest entries itself, so nothing starts metering.
+      - name: cargo cache
+        uses: Swatinem/rust-cache@v2
+
+      # `trailryx-federation-grpc` generates its wire types at build time, on
+      # purpose: a checked-in copy is a second source of truth for the wire, and
+      # the first edit of the `.proto` without a regeneration makes the two
+      # disagree in silence. The price of that decision is that `protoc` is a
+      # build prerequisite, and it is not on the runner.
+      #
+      # This is the one step the pre-push hook cannot stand in for. Every other
+      # check here is the same script the hook calls, so the two cannot drift;
+      # this one is about the MACHINE, and a developer whose laptop has protoc
+      # gets sixteen green checks locally while the runner fails on the first
+      # cargo invocation that touches the crate. That is exactly what happened.
+      #
+      # The version is printed rather than pinned. protoc is a compiler and its
+      # output can move between releases, so a build somebody reports has to be
+      # traceable to the one that produced it.
+      - name: protoc
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y protobuf-compiler
+          protoc --version
 
       # Warnings are failures: a warning nobody fixes is a warning everybody stops
       # reading.
@@ -67,46 +132,19 @@ jobs:
 
       # The exit criterion of stage 0, checked on every push rather than once. If a
       # seed stops reproducing a run, every guarantee built on the simulator stops
-      # meaning anything.
+      # meaning anything. Debug profile: the corpus check below is the release one.
       - name: determinism, same seed twice
         run: ./scripts/determinism.sh
-
-      # Trivially green today, and that is the point rather than an excuse: with zero
-      # dependencies there is nothing to audit, so this check exists for the day one
-      # arrives. The same argument as the standalone substrate build above. Free
-      # now that the repository is public; it would have been a billable minute
-      # before.
-      - name: cargo audit
-        run: |
-          cargo install cargo-audit --locked --quiet
-          cargo audit
-
-      # The published seed corpus: every recorded run must still produce the digest and
-      # the violation count written down for it. A determinism check, not a
-      # correctness one, and `sim/corpus.tsv` says so in its own header.
-      - name: seed corpus reproduces
-        run: ./scripts/seed-corpus.sh
 
       # Two verifiers, one pack: the Rust one and `verifier-py/trailryx_verify.py`.
       # Two implementations that agree prove the format rather than the author.
       - name: two verifiers agree
         run: cargo test -p trailryx-store --test two_verifiers --quiet
 
-      # The same source must produce the same verifier binary from any directory, or
-      # an auditor cannot check the binary they run against the source they read.
-      - name: verifier build is reproducible
-        run: ./scripts/reproduce.sh
-
       # A feature nobody builds is a feature that rots, and this one only shows up
       # in a deployment when it breaks.
       - name: the TLS builds still work
         run: ./scripts/tls-builds.sh
-
-      # Every hand-written parser, fed bytes it did not expect. Ten times the
-      # gate's volume here, because CI has the minutes and a fuzzer's value is
-      # roughly linear in cases.
-      - name: parsers survive hostile bytes
-        run: TRAILRYX_FUZZ_CASES=3000 cargo test -p trailryx-fuzz --release --quiet
 
       # Every number the README states about this repository, against the repository.
       # A README number is a claim with no owner, and an audit on 30 July 2026 found
@@ -114,6 +152,63 @@ jobs:
       # reproduced, and a line off by a factor of two. None was a lie when written.
       - name: README numbers are true
         run: ./scripts/readme-numbers.sh
+
+      # Written when it was trivially green, because there was nothing to audit,
+      # and kept for the day that stopped being true. That day was 30 July 2026,
+      # when the SQL facade arrived, and 4 August 2026, when two advisories
+      # landed on it at once.
+      #
+      # `scripts/audit.sh` rather than a bare `cargo audit`, because the ignore
+      # list needs the reason behind each entry re-derived on every run. Same
+      # file the hook calls; until 4 August 2026 this step existed only here,
+      # which is how a laptop reported everything green while the runner did not.
+      - name: cargo audit
+        run: |
+          cargo install cargo-audit --locked --quiet
+          ./scripts/audit.sh
+
+  release-gate:
+    name: gate (release profile)
+    if: github.event.repository.private == false
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: toolchain
+        run: |
+          rustup toolchain install stable --profile minimal
+          rustup default stable
+          rustc --version && cargo --version
+
+      # A cache of its own, keyed separately by the action because the job name
+      # differs. That separation is the point: sharing one with the debug job
+      # means each half evicting the other's artifacts, which is what made the
+      # single-job version recompile work it had already done.
+      - name: cargo cache
+        uses: Swatinem/rust-cache@v2
+
+      - name: protoc
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y protobuf-compiler
+          protoc --version
+
+      # The published seed corpus: every recorded run must still produce the digest and
+      # the violation count written down for it. A determinism check, not a
+      # correctness one, and `sim/corpus.tsv` says so in its own header.
+      - name: seed corpus reproduces
+        run: ./scripts/seed-corpus.sh
+
+      # The same source must produce the same verifier binary from any directory, or
+      # an auditor cannot check the binary they run against the source they read.
+      - name: verifier build is reproducible
+        run: ./scripts/reproduce.sh
+
+      # Every hand-written parser, fed bytes it did not expect. Ten times the
+      # gate's volume here, because CI has the minutes and a fuzzer's value is
+      # roughly linear in cases.
+      - name: parsers survive hostile bytes
+        run: TRAILRYX_FUZZ_CASES=3000 cargo test -p trailryx-fuzz --release --quiet
 
       # Enough to catch a write-path regression. The long sweep belongs in a nightly.
       - name: durability sweep, 200 seeds

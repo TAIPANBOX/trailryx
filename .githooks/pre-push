@@ -144,6 +144,17 @@ step "README numbers are true" ./scripts/readme-numbers.sh
 # regression before it is pushed.
 say "durability sweep (200 seeds)" ./scripts/durability-sweep.sh
 
+# Advisories, and the reasons the silenced ones are silenced. CI had this and
+# this hook did not, which is the drift the header above says must not happen:
+# sixteen green checks locally, a red gate on the runner, and an afternoon spent
+# on a difference that was never a decision.
+#
+# The half of the script that needs the network and cargo-audit announces itself
+# as skipped when either is missing, rather than turning every push into a
+# round trip. The half that re-derives each ignore's reason is `cargo tree`
+# against the manifest on disk, and that half always runs.
+say "advisories, and the silenced ones" ./scripts/audit.sh
+
 echo
 if [ "$fail" -gt 0 ]; then
   echo "pre-push: $fail failed, $pass passed. Push refused."

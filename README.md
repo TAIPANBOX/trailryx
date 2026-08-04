@@ -7,7 +7,7 @@
 ![Stage](https://img.shields.io/badge/stage-13%20of%2013-blue.svg)
 ![Core](https://img.shields.io/badge/core-frozen-success.svg)
 ![Rust](https://img.shields.io/badge/rust-1.85%2B-orange.svg)
-![Tests](https://img.shields.io/badge/tests-1031-success.svg)
+![Tests](https://img.shields.io/badge/tests-1046-success.svg)
 ![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)
 ![Dependencies](https://img.shields.io/badge/deps-0%20in%20the%20verifier-success.svg)
 ![Unsafe](https://img.shields.io/badge/unsafe-forbidden-success.svg)
@@ -296,6 +296,7 @@ migration. What stage 13 still wants is measured absence rather than a guess, an
 | `trailryx-s3` | SigV4, S3 and Google Cloud Storage over that client. No cloud SDK | 35 |
 | `trailryx-azure` | Azure Blob Storage: Shared Key signing, and the four operations | 18 |
 | `trailryx-federation` | composing an answer across environments, and refusing to call it complete when it is not | 7 |
+| `trailryx-federation-grpc` | that composition over the wire: gRPC with mutual TLS, and a peer named by its certificate rather than by what it sent | 15 |
 | `trailryx-fuzz` | every hand-written parser, fed bytes it did not expect, from a seed | 5 |
 | `trailryx-publish` | atomic publication of a sealed segment, and the fault model for it | 11 |
 | `trailryx-crypto-aws` | the validated cipher and ML-KEM, behind the erasure seam. The one adapter with a dependency | 7 |
@@ -389,9 +390,15 @@ are different questions, and until this week that step answered only the second.
 ## Try it
 
 ```bash
-cargo test                                    # 1031 tests
+cargo test                                    # 1046 tests
 cargo run --bin trailryx-sim-run -- --help
 ```
+
+One build prerequisite beyond a Rust toolchain: **`protoc`**, because the
+federation transport generates its wire types from `proto/federation.proto` at
+build time rather than keeping a checked-in copy that can silently disagree with
+it. `apt-get install protobuf-compiler`, or `brew install protobuf`. Without it
+the build stops in that crate's `build.rs` and says so.
 
 One seed reproduces a run exactly, on any machine:
 
@@ -1720,14 +1727,14 @@ first number is only evidence because the second one exists.
 git config core.hooksPath .githooks   # once
 ```
 
-`.githooks/pre-push` runs fifteen checks and refuses the push if any fails:
+`.githooks/pre-push` runs sixteen checks and refuses the push if any fails:
 formatting, clippy with warnings as errors, the tests, a standalone build of the
 substrate crate, a zero-dependency check on every crate outside the SQL facade, a
 build and test of the core with the facade absent, an `unsafe` check, the determinism
 criterion, the published seed corpus, the two verifiers agreeing on the same packs, a
 reproducible build of the verifier from two different paths, the TLS build of the HTTP
 client, every parser against hostile bytes, every number this README states about the
-repository, and a 200-seed durability sweep. About a minute and a
+repository, a 200-seed durability sweep, and the advisories. About a minute and a
 half, most of it the facade's dependency tree.
 
 The one about numbers is the least glamorous and the most useful. An audit of this page on 30
@@ -1739,8 +1746,12 @@ is a claim with no owner. So the badge, the totals and every row of the crate ta
 are now checked against what the suite actually runs, and the push fails when they
 disagree.
 
-`.github/workflows/ci.yml` runs the same fifteen plus `cargo audit`, which stopped being trivially green the day the facade arrived and is now a real check with real work behind it, so a green push
-is a green pull request. It keeps a guard that skips every job while the repository
+`.github/workflows/ci.yml` runs the same sixteen, so a green push
+is a green pull request. The advisory check was CI-only until 4 August 2026, and
+that gap cost exactly what a gap like that costs: fifteen green checks on a laptop
+and a red gate on the runner. It is one file now, `scripts/audit.sh`, and the half
+of it that needs the network says so when it skips rather than turning every push
+into a round trip. It keeps a guard that skips every job while the repository
 is private, because Actions minutes are metered there and free here. The repository
 went public on 30 July 2026 and the condition released itself, which is why it was
 written as a condition rather than as a note to remember. It stays because it works

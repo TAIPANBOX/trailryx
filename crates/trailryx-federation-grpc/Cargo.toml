@@ -1,0 +1,54 @@
+[package]
+name = "trailryx-federation-grpc"
+description = "The federation transport: gRPC over mutual TLS, and the checks a remote peer must not be able to skip"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+# An L2 adapter, which is the only layer allowed to carry third-party
+# dependencies (architecture §2a, invariant 2). The rule this transport serves
+# stays in `trailryx-federation`, which has none and must keep none: an auditor
+# reading why an answer was called complete should not have to read tonic to
+# find out.
+#
+# `tls-aws-lc` rather than `tls-ring` on purpose. The workspace already links
+# aws-lc-rs for its cryptographic provider and for the HTTP client's TLS, and a
+# build with two implementations of AES is a build where "which one signed this"
+# has two answers.
+[dependencies]
+trailryx-contracts = { path = "../trailryx-contracts" }
+trailryx-federation = { path = "../trailryx-federation" }
+trailryx-record = { path = "../trailryx-record" }
+trailryx-store = { path = "../trailryx-store" }
+
+tonic = { version = "0.14", features = ["tls-aws-lc"] }
+tonic-prost = "0.14"
+prost = "0.14"
+tokio = { version = "1", features = ["rt-multi-thread", "net", "macros", "time", "sync"] }
+tokio-stream = "0.1"
+# Named directly, not left to whatever the dependency graph settles on. Feature
+# selection is not enough here: `trailryx-sql` reaches `ring` through DataFusion
+# and pgwire, so a workspace build has rustls with BOTH providers compiled in and
+# rustls then refuses to guess. See `use_aws_lc_rs`.
+rustls = { version = "0.23", default-features = false, features = ["aws_lc_rs", "std"] }
+
+[build-dependencies]
+tonic-prost-build = "0.14"
+
+[dev-dependencies]
+# `default-features = false` to drop rcgen's own default, which is `ring`. The
+# tests generate the certificates the transport then uses, and a test that made
+# its keys with one library while the transport verified them with another would
+# be quietly testing a combination no deployment has.
+rcgen = { version = "0.13", default-features = false, features = ["aws_lc_rs", "pem"] }
+# The hostile peers live in `tests/`, not behind a flag in the library. A
+# "serve without a trailer" entry point in production code is an entry point
+# somebody can reach in production.
+tonic = { version = "0.14", features = ["tls-aws-lc"] }
+tokio = { version = "1", features = ["rt-multi-thread", "net", "macros", "time"] }
+tokio-stream = { version = "0.1", features = ["net"] }
+
+[lints]
+workspace = true

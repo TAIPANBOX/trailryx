@@ -52,18 +52,27 @@ Everything below is a rule, not a description. Each one says what holds it today
 
 20. **A fake must refuse what a compliant server refuses.** A fake written from the same reading of the same documentation as the client agrees with the client's mistakes, so it has to be taught the rules the client is not allowed to break. *(test: the_request_carries_exactly_one_host_header)*
 
+21. **A peer's name comes from its certificate, never from anything it sent.** The completeness rule counts answers against a signed registry, and that count is worth nothing if a name can be claimed: one node holding one valid federation certificate could otherwise answer to every missing name in turn and stamp the result complete. The client names the peer it expects, TLS refuses a certificate that does not carry it, and no field in the response body takes part in the decision. *(test: a_peer_cannot_answer_under_a_name_its_certificate_does_not_carry)*
+
+22. **A federated stream that ended without its trailer is not an answer.** The proof status rides last precisely so that its absence is a signal. Rows that arrived without a claim attached are refused rather than returned, because a truncated answer that reads as a small complete one is the exact failure the federation rule exists to prevent, one layer down. *(test: a_stream_that_ends_before_its_trailer_is_refused_rather_than_read_as_complete)*
+
+23. **An identifier arriving from a peer is parsed at the strictness of the ingest door, not of the journal.** `trailryx-journal` reads ids back with the lax constructor because it wrote them; `trailryx-otlp` uses the strict one because those came from outside. A peer is outside wearing the journal's clothes, and the transport got this wrong the first time it was written. *(test: an_agent_id_that_is_not_a_uri_is_refused_the_way_the_ingest_door_refuses_it)*
+
+24. **A silenced advisory carries a reason, and the reason is re-derived on every run.** `cargo audit` reads the lockfile, which is correct, and therefore flags crates cargo records but never compiles. Silencing one of those is sometimes right; silencing it with a sentence in a configuration file is not, because the sentence stops being true without saying so and the entry then protects nothing while still reading as a decision. Two reasons are allowed and both are facts rather than judgements: `never-built`, the crate is in no build graph because it sits behind an optional feature nothing enables, and `dev-only`, the crate is compiled for tests but reaches no normal dependency edge. The second is the weaker one and says so: it means the code is not in a shipped artifact, not that it never runs here. An id silenced with no recorded reason fails the gate outright. *(gate: scripts/audit.sh, verified by pointing each reason at a crate that breaks it and by adding an unexplained id, all three of which fail it)*
+
 ---
 
 ## What is a gate, and what is still only a sentence
 
-**Decisions that became gates.** Zero dependencies outside the declared list, the core standing up without adapters, no `unsafe`, a seed reproducing a run byte for byte, the published seed corpus, two independent verifiers agreeing on one pack, a reproducible verifier binary, the TLS builds, every parser under hostile bytes, every number the README states, and a 200-seed durability sweep. Fifteen checks, run by `.githooks/pre-push` and again by CI.
+**Decisions that became gates.** Zero dependencies outside the declared list, the core standing up without adapters, no `unsafe`, a seed reproducing a run byte for byte, the published seed corpus, two independent verifiers agreeing on one pack, a reproducible verifier binary, the TLS builds, every parser under hostile bytes, every number the README states, a 200-seed durability sweep, and the advisories with the reasons the silenced ones are silenced. Sixteen checks, run by `.githooks/pre-push` and again by CI.
 
 **Decisions with no gate yet.** This list is debt, and it is here so it stays visible:
 
 - Invariants 9, 10, 15, 16, 17 and 18 above are held by nothing but their own sentence.
+- Invariants 21, 22 and 23 are held by tests rather than by a gate. A gate would have to prove a negative about code that has not been written yet ("no future call path reads a name out of the body"), and a grep that pretended to do so would be worse than the honest sentence.
 - The fuzz step differs between the hook and CI on purpose, 300 cases against 3,000: the hook is fast and CI is thorough. Do not "fix" it into agreement.
 - `qryx scan --policy cnsa` is run on demand, not on push.
-- The federation transport (gRPC with mutual TLS, decision A2) is specified and unbuilt: the completeness rule exists, the wires do not.
+- ~~The federation transport (gRPC with mutual TLS, decision A2) is specified and unbuilt.~~ Built 2026-08-04 in `trailryx-federation-grpc`, with invariants 21 to 23 above. What remains unbuilt from stage 12 is verified replication: a receiver that checks the chain before accepting, rather than only composing what it is told.
 
 Numbers, and what has and has not been measured, live in [`VALIDATION.md`](VALIDATION.md). Nothing in this file should restate a number.
 

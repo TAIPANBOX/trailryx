@@ -1,0 +1,147 @@
+#!/usr/bin/env bash
+# Runs cargo-audit, and re-establishes the reason behind every silenced
+# advisory before it lets one through.
+#
+# WHY AN IGNORE NEEDS A CHECK OF ITS OWN.
+#
+# An ignore is a claim that an advisory cannot reach us. The claim is usually
+# true the day it is written, nothing notices when it stops being true, and it
+# then protects nothing while still reading as a decision somebody made. This
+# repository refuses that shape everywhere else: an invariant says what holds
+# it, a "nothing found" needs a run where the same check finds something. An
+# ignore is the same problem wearing a configuration file.
+#
+# So every entry in `.cargo/audit.toml` names a crate AND a reason, and both
+# reasons in use here are facts rather than judgements, which means they can be
+# re-derived on every run:
+#
+#   never-built     the crate is in Cargo.lock and in no build graph, because
+#                   it sits behind an optional feature nothing enables.
+#   dev-only        the crate is compiled, but only for tests: no path to it
+#                   exists along normal dependency edges, so nothing a consumer
+#                   builds contains it.
+#
+# The second is deliberately the weaker of the two and is written down as such.
+# It says the code is not in a shipped artifact. It does not say the code is
+# never executed here.
+#
+# WHY THE CARGO-AUDIT HALF CAN SKIP AND THE REACHABILITY HALF CANNOT.
+#
+# `cargo audit` needs the advisory database, so it needs the network and the
+# tool. The reachability checks need neither: they are `cargo tree` against the
+# manifest already on disk. A hook that demanded a network round trip on every
+# push would get bypassed with `--no-verify`, which is worse than an honest
+# skip, so the tool half announces its absence with the reason and the
+# structural half always runs.
+#
+# This file is the ONE copy of this check. `.githooks/pre-push` and CI both
+# call it.
+
+set -uo pipefail
+
+cd "$(dirname "$0")/.."
+
+config=".cargo/audit.toml"
+if [ ! -f "$config" ]; then
+  echo "FAIL: $config is missing, so the ignore list has no single source"
+  exit 1
+fi
+
+ids=$(grep -oE 'RUSTSEC-[0-9]{4}-[0-9]{4}' "$config" | sort -u)
+
+# Each ignored advisory, the crate it concerns, and which of the two reasons is
+# being claimed. An id present in the config and absent here is refused: the
+# point of the file is that a reason exists and is checked, so a silent entry
+# is the exact failure this script is for.
+python3 - "$ids" <<'PY'
+import re
+import subprocess
+import sys
+
+REASONS = {
+    # rkyv reaches Cargo.lock through the SQL facade's DataFusion stack, by way
+    # of rust_decimal, where it sits behind an optional feature
+    # (`rkyv = ["dep:rkyv"]`) that nothing in this graph turns on. rust_decimal
+    # 1.42.1 is the latest published version, so no upgrade removes the entry.
+    "RUSTSEC-2026-0235": ("rkyv", "never-built"),
+    # time reaches us only through rcgen, the dev-dependency that generates the
+    # certificates the federation transport's tests use. The fix is time 0.3.47,
+    # which requires Rust 1.88 while this workspace declares 1.85, so taking it
+    # would trade a stated portability floor for a stack-exhaustion bug in code
+    # that only ever parses certificates this repository generated itself.
+    "RUSTSEC-2026-0009": ("time", "dev-only"),
+}
+
+def tree(crate, edges=None):
+    cmd = ["cargo", "tree", "-i", crate, "--all-features", "--target", "all"]
+    if edges:
+        cmd += ["--edges", edges]
+    out = subprocess.run(cmd, capture_output=True, text=True)
+    if out.returncode != 0:
+        return ""
+    return out.stdout if re.search(rf"^{re.escape(crate)} v", out.stdout, re.M) else ""
+
+ids = [i for i in sys.argv[1].split() if i]
+fail = False
+
+if not ids:
+    print("  (no advisories are silenced)")
+
+for advisory in ids:
+    entry = REASONS.get(advisory)
+    if entry is None:
+        print(f"FAIL: {advisory} is silenced but no reason is recorded for it here.")
+        print("      Record the crate and the reason, or stop silencing it.")
+        fail = True
+        continue
+
+    crate, reason = entry
+
+    if reason == "never-built":
+        found = tree(crate)
+        if found:
+            print(f"FAIL: {advisory} is silenced because '{crate}' is never built, "
+                  f"and it IS in the build graph:")
+            print(found.strip()[:600])
+            fail = True
+        else:
+            print(f"  ok  {advisory}: '{crate}' is in no build graph, only in the lockfile")
+
+    elif reason == "dev-only":
+        shipped = tree(crate, edges="normal")
+        if shipped:
+            print(f"FAIL: {advisory} is silenced because '{crate}' is test-only, "
+                  f"and it now reaches a normal dependency edge:")
+            print(shipped.strip()[:600])
+            fail = True
+        elif not tree(crate):
+            print(f"FAIL: {advisory} is silenced as test-only but '{crate}' is in no graph "
+                  f"at all, so the entry is stale and should be removed.")
+            fail = True
+        else:
+            print(f"  ok  {advisory}: '{crate}' is reached only through dev-dependencies")
+
+    else:
+        print(f"FAIL: {advisory} claims an unknown reason {reason!r}")
+        fail = True
+
+if fail:
+    print()
+    print("An ignore whose reason has stopped holding is worse than no ignore: it")
+    print("reports zero for a vulnerability that now reaches code somebody runs.")
+    sys.exit(1)
+PY
+reach=$?
+[ "$reach" -eq 0 ] || exit "$reach"
+
+if ! command -v cargo-audit >/dev/null 2>&1; then
+  echo "  skipped  cargo audit: cargo-audit is not installed (cargo install cargo-audit)."
+  echo "           The reachability checks above ran; the advisory database did not."
+  exit 0
+fi
+
+args=()
+for id in $ids; do
+  args+=(--ignore "$id")
+done
+cargo audit "${args[@]}"
