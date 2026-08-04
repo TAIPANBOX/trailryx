@@ -38,6 +38,11 @@ rustls = { version = "0.23", default-features = false, features = ["aws_lc_rs", 
 tonic-prost-build = "0.14"
 
 [dev-dependencies]
+# The chain check lives in the federation crate and the codec lives here, so
+# the assumption that binds them (a record survives protobuf byte for byte)
+# can only be tested where both are in scope.
+trailryx-crypto = { path = "../trailryx-crypto" }
+trailryx-journal = { path = "../trailryx-journal" }
 # `default-features = false` to drop rcgen's own default, which is `ring`. The
 # tests generate the certificates the transport then uses, and a test that made
 # its keys with one library while the transport verified them with another would
