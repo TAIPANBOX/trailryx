@@ -31,6 +31,11 @@
 //! things I combined the set that exists? The transport and the registry are what
 //! stage 12 adds; the rule was written once.
 
+/// Verified replication: what a receiver checks before adopting a peer's
+/// records. Composition above answers "did everyone answer"; this answers
+/// "does what one of them said link up", and they are different questions.
+pub mod replication;
+
 use trailryx_contracts::{Peer, PeerResponse, ProofStatus as PeerProof};
 use trailryx_record::Record;
 use trailryx_store::query::ProofStatus;

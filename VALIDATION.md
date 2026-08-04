@@ -514,10 +514,23 @@ Stated so the absence is visible rather than inferred:
   no latency worth the name, no packet loss, no MTU, no middlebox, no partition, and
   no clock disagreement between the two ends. Two environments in two clouds is the
   test this one stands in for, and it has not been run.
-- **Verified replication.** Stage 12 asks for a receiver that checks the chain before
-  accepting. The transport composes what peers send and validates every field on the
-  way in; it does not yet verify the far side's hash chain, so a peer that is trusted
-  by the registry is trusted about its own history.
+- **The first link of an unanchored run.** Verified replication is built
+  (`trailryx-federation::replication`, 2026-08-04) and the chain is now recomputed
+  before a peer's records are adopted: altered, removed, duplicated and reordered
+  records are all refused, measured by eleven tests that each reach one refusal and
+  by five deliberate breakages of the implementation. What it cannot do is check
+  where a run STARTS when the receiver holds no prior head for that shard. A peer
+  that invented a history from a fabricated head passes `accept_unanchored`, because
+  a fabricated chain is internally consistent: that is what a chain is. This is a
+  limit of the problem, not of the code, and it is why the weaker entry point has a
+  name rather than a flag. `accept_from`, which every receiver that already knows the
+  shard should use, has no such gap.
+
+  Two things this rests on and does not itself prove: that both sides encode a record
+  to the same bytes (invariant 7 freezes the format; `encoding_is_canonical` in
+  `trailryx-journal` tests it), and that protobuf does not move a byte on the way
+  (`replication_over_the_wire` tests exactly that, because a lossy codec would report
+  a broken chain rather than reporting itself).
 - **A machine dying rather than a process.** Every kill run above is a `SIGKILL`,
   so the kernel and its page cache survive it. Power loss, where the disk's own cache
   is allowed to forget what it acknowledged, is a different and harsher test. The
