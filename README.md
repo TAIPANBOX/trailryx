@@ -387,6 +387,60 @@ deliberately predictable, because the run has to be reproducible, and the eighth
 prints which cipher did the work next to which primitives the records declare. Those
 are different questions, and until this week that step answered only the second.
 
+## Install it
+
+Nothing here needs a Rust toolchain, a clone, or a build.
+
+**The server**, as an image:
+
+```bash
+docker pull ghcr.io/taipanbox/trailryx:v0.1.0
+```
+
+An immutable tag, never `latest`, so a pod that restarts comes back as the same
+program. `FROM scratch` with one statically linked file inside it: `trailryx-ingest`
+has no third-party crates, so there is no base distribution under it to patch or to
+explain.
+
+**The verifier**, as a plain file, because its whole purpose is that somebody who
+does not trust us can check a pack with it:
+
+```bash
+curl -LO https://github.com/TAIPANBOX/trailryx/releases/latest/download/trailryx-verify-x86_64-unknown-linux-musl
+curl -LO https://github.com/TAIPANBOX/trailryx/releases/latest/download/SHA256SUMS
+sha256sum --check --ignore-missing SHA256SUMS
+chmod +x trailryx-verify-* && ./trailryx-verify --help
+```
+
+Built for `x86_64` and `aarch64`, Linux and macOS. The Linux builds are musl and
+static, so they run on whatever the operator already has.
+
+The image and the release page carry the **same bytes**: the image is assembled from
+the artifacts the release serves rather than from a second build, so one checksum
+answers for both. And `scripts/reproduce.sh` builds the verifier twice from two
+directories of different lengths and refuses if a byte differs, which is what makes
+that checksum worth checking rather than worth reading.
+
+## Build it instead
+
+If you would rather build than download, that is fast and it is worth saying why,
+because the number people expect is wrong. A cold release build of both shipped
+binaries, from an empty target directory, is **2.3 seconds**: every crate that
+reaches a binary here has zero third-party dependencies.
+
+```bash
+cargo build --release --locked --bin trailryx-verify --bin trailryx-ingest
+```
+
+**No `protoc` for this**, despite what the next section says about the test suite:
+neither shipped binary reaches the federation transport, so nothing on this path
+compiles a `.proto`.
+
+The long build is `cargo test --workspace`, which also builds `trailryx-sql` and the
+dependency tree counted further up this page. That is the SQL facade, it is in no
+binary, and it reaches no user. The count is stated once, where it is measured, and
+not repeated here: a number written twice is a number that will disagree with itself.
+
 ## Try it
 
 ```bash
