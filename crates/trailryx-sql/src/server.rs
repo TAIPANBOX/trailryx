@@ -103,6 +103,32 @@ pub struct Refusals {
 /// Named separately from the ingest gate because the action is different and the
 /// difference matters: this one asks [`Action::Query`], and a principal allowed to
 /// write records is not thereby allowed to read them.
+///
+/// # What this gate is, and what a deployer must not read into it
+///
+/// It is a **door**, asked once, at connect time: authenticate the credential, then
+/// `authorize(principal, Action::Query, scope)` where `scope` is the string fixed
+/// when this gate was constructed. It admits the connection or it refuses it.
+///
+/// It is **not a row filter, and there is no row filter behind it**. Past the door
+/// every authenticated client reads every record in every segment registered on the
+/// server, whatever the `tenant` field on those records says. Nothing on the read
+/// path takes a principal or a tenant: not `RecordTable::scan`, not
+/// [`crate::pushdown::plan`], not `records_as_of`, `causal_closure` or `journal`. A
+/// `WHERE tenant = ...` is a predicate the client chose and can leave out.
+///
+/// **So the deployment model is one server per scope.** The segments a server
+/// registers are the segments its clients may read, and separating two tenants means
+/// two servers, two ports and two sets of segments, not two principals on this one.
+/// The unit tests below show two gates with different scopes refusing each other's
+/// principals, which is exactly that model and is not multi-tenancy: they are two
+/// servers in one test, not one server keeping two tenants apart.
+///
+/// Per-principal or per-tenant row filtering is a design decision with its own
+/// questions (where the tenant of a request comes from, what a partial proof means
+/// once rows are withheld, what an index range proves about a filtered answer) and it
+/// is scheduled separately. Until it exists, a deployment that puts two tenants'
+/// segments behind one of these has no isolation between them.
 pub struct ReadGate {
     provider: Mutex<Box<dyn AuthProvider + Send>>,
     scope: String,
@@ -123,6 +149,10 @@ impl Debug for ReadGate {
 }
 
 impl ReadGate {
+    /// `scope` is the whole server's scope and it never varies per client: it is the
+    /// string every `Action::Query` decision is asked about, fixed here, for every
+    /// connection this gate will ever admit. See the type's documentation for why
+    /// that makes the deployment one server per scope.
     pub fn new(provider: Box<dyn AuthProvider + Send>, scope: impl Into<String>) -> Self {
         Self {
             provider: Mutex::new(provider),
@@ -328,6 +358,11 @@ impl Handlers {
     /// The split is the honest one: what may run is ours to be right about, and
     /// encoding forty-two columns including four lists into Postgres wire format is
     /// not a thing to reimplement for the sake of owning it.
+    ///
+    /// **One of these per connection**, over a session of that connection's own. It
+    /// used to be one per server, Arc-cloned into every task, which made the proof
+    /// slot behind `trailryx_proof()` process-wide. Passing a session that another
+    /// connection also holds puts that back: see [`crate::Session::for_connection`].
     pub fn new(session: &crate::Session, gate: Arc<ReadGate>) -> Self {
         Self {
             startup: Arc::new(Startup { gate }),
@@ -374,6 +409,17 @@ pub async fn serve(
 /// hand over a socket it opened under different privileges. The policy check has
 /// already happened by then, which is why this one does not repeat it: a listener is
 /// past the point where refusing helps.
+///
+/// # One session per connection
+///
+/// The `session` handed in is the **template**: it names the sealed segments and
+/// whether raw journal access is registered, and each accepted socket gets a session
+/// of its own forked from it. That is not tidiness. `trailryx_proof()` reports how
+/// provable the last answer on this session was, and until 5 August 2026 one session,
+/// one `SessionContext` and one proof slot served every connection in the process, so
+/// a client asking about its own partial answer could be told about a stranger's
+/// proved one. A reader who believed it would take an unproved answer as proved,
+/// through the one function whose entire purpose is to stop exactly that.
 pub async fn serve_on(
     listener: tokio::net::TcpListener,
     session: Arc<crate::Session>,
@@ -382,11 +428,17 @@ pub async fn serve_on(
     // With no gate the port is loopback, which `check` has already established. The
     // permissive provider is only reachable in that case and it says so in its name.
     let gate = gate.unwrap_or_else(|| Arc::new(ReadGate::loopback_only()));
-    let handlers = Arc::new(Handlers::new(&session, gate));
     loop {
         let (socket, _peer) = listener.accept().await.map_err(StartError::Io)?;
-        let handlers = Arc::clone(&handlers);
+        let session = Arc::clone(&session);
+        let gate = Arc::clone(&gate);
         tokio::spawn(async move {
+            // Forked inside the task rather than on the accept loop, so a slow
+            // registration cannot hold up the next client, and bound to a name rather
+            // than left as a temporary, so what keeps this connection's catalog alive
+            // is something a reader can see.
+            let connection = session.for_connection();
+            let handlers = Arc::new(Handlers::new(&connection, gate));
             // One connection failing is one connection failing. A read surface that
             // took the listener down with a client would be a denial of service
             // anybody could perform.
@@ -501,8 +553,16 @@ mod tests {
         assert_eq!(wrong_password.refusals().rejected, 1);
         assert_eq!(wrong_password.refusals().denied, 0);
 
-        // The right password, and this gate guards somebody else's tenant. A
-        // principal who can read one scope is not thereby able to read another.
+        // The right password, and this gate is a DIFFERENT SERVER, standing in front
+        // of somebody else's segments. A principal who may read one scope is not
+        // thereby admitted to another one's door.
+        //
+        // Read no further into it than that. Two gates here are two servers, and what
+        // is being shown is that each door decides for itself. It is not a server
+        // keeping two tenants apart, because no such thing exists on this surface:
+        // past either door, every record that server registered is readable. The
+        // type's documentation says so at length, because this test is the thing most
+        // likely to be mistaken for the feature.
         let wrong_scope = gate("other-tenant");
         assert!(wrong_scope.decide(b"s3cret").is_err());
         assert_eq!(wrong_scope.refusals().denied, 1);

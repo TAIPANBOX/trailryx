@@ -94,7 +94,7 @@ impl TableFunctionImpl for RecordsAsOf {
         let text = one_string(args, "records_as_of")?;
         let nanos = parse_instant(&text)?;
         Ok(Arc::new(
-            RecordTable::new((*self.segments).clone())
+            RecordTable::over(Arc::clone(&self.segments))
                 .sharing(Arc::clone(&self.slot))
                 .as_of(Timestamp(nanos)),
         ))
@@ -208,10 +208,25 @@ impl TableFunctionImpl for CausalClosure {
 /// A stopgap for `WITH PROOF`, and it says so rather than being presented as the
 /// design. What it inherits from the suffix syntax it replaces is the honest part: the
 /// value is derived from which predicates were pushed into the index, never asserted.
-/// What it does not inherit is atomicity, and that is the cost: a second query on the
-/// same session between the two statements overwrites it. So it is truthful and it is
-/// racy, which is a worse property than `WITH PROOF` would have had and a better one
-/// than a second parser.
+/// What it does not inherit is atomicity, and that is the cost.
+///
+/// # What "this session" means, and what still races
+///
+/// One session, one slot. Over the Postgres facade a session is a connection
+/// ([`crate::Session::for_connection`]), so nothing another client does can move this
+/// answer. That was not true until 5 August 2026: one slot served the whole process
+/// and a reader could be told an answer was proved because somebody else's had been.
+/// Two tests in `crates/trailryx-sql/tests/wire.rs` hold it now, and both of them
+/// failed against the code that shared it.
+///
+/// What remains is one session's own race, and it is smaller but real: a second
+/// statement between the query and the `trailryx_proof()` that asks about it
+/// overwrites the slot, so a client that pipelines statements, or that reuses one
+/// connection from two tasks, can read a verdict about the wrong query of its own.
+/// Reading the proof immediately after the answer is what makes it true, and
+/// `WITH PROOF` is the shape that would make the two atomic. So it is truthful and it
+/// is racy within one session, which is a worse property than `WITH PROOF` would have
+/// had and a better one than a second parser.
 #[derive(Debug)]
 pub struct ProofOfLastAnswer {
     table: Arc<RecordTable>,
@@ -352,10 +367,27 @@ mod tests {
 ///   current one and returns what exists. Erroring instead would make the ordinary
 ///   "everything from here" query a moving target.
 /// - **A different privilege from ordinary SQL.** Restricted by default to superusers
-///   and `pg_read_server_files`. Here that is [`Action::ReadMetadata`] rather than
-///   [`Action::Query`], asked for separately, and a session that was not granted it
-///   does not get this function registered at all. The catalog a session sees is what
-///   it may use.
+///   and `pg_read_server_files`. Here the shape is copied and the privilege is not: a
+///   session that was not built with raw access does not get this function registered
+///   at all, so the catalog a session sees is still what it may use.
+///
+/// # The fourth one is copied only halfway, and this is the half that is missing
+///
+/// `raw` on [`crate::Session::with_raw_access`] is a **construction flag**, decided
+/// once by whoever builds the session and applying to every client that connects to
+/// the server built on it. The architecture asks for [`Action::ReadMetadata`] to be a
+/// grant per principal, asked of the deployment's `AuthProvider` separately from
+/// [`Action::Query`]; nothing asks for it. The only authorisation on this surface is
+/// one `Action::Query` at connect time in [`crate::server::ReadGate`], and a grep for
+/// `.authorize(` across this workspace finds eleven call sites, of which the only ones
+/// carrying [`Action::ReadMetadata`] are in the contracts crate's own conformance
+/// suite, where the point is to check that a provider tells the actions apart.
+///
+/// So the deployment model for raw journal access is one server for the principals
+/// who may have it and another for the principals who may not. Making it a real
+/// per-principal grant means a second `authorize` call, and it cannot live where this
+/// flag lives: the catalog is fixed when the session is built and the principal is
+/// not known until a client connects.
 ///
 /// [`Action::ReadMetadata`]: trailryx_contracts::contracts::Action::ReadMetadata
 /// [`Action::Query`]: trailryx_contracts::contracts::Action::Query

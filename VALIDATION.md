@@ -505,6 +505,72 @@ fail, including the impersonation one.
 
 ---
 
+### The SQL facade, read on 5 August 2026: one real defect and one false claim
+
+```
+cargo test -p trailryx-sql --test wire
+```
+
+**The proof slot was process-wide while the function that reads it says "session".**
+`serve_on` built one `Handlers`, over one `Session`, over one `SessionContext`, and
+Arc-cloned it into every connection's task. Every table and table function registered
+on that context shared one proof slot, so `trailryx_proof()` answered about the last
+query **anybody** had run on that server. A reader who ran a query the index could not
+prove and then asked for its proof was told `full` if a stranger's provable query had
+landed in between: an unproved answer reported as proved, through the one function
+whose purpose is to prevent exactly that. It went in either direction and it also gave
+a brand new connection a verdict about a query it had never run.
+
+Fixed by making a session per connection: `Session::for_connection` forks a fresh
+`SessionContext`, table and slot over the same `Arc<Vec<Segment>>`, so the isolation
+costs a pointer rather than a copy of the trail. A per-connection *service* was
+considered and does not work, which is worth recording because it looks like it would:
+`SessionContext` is `Clone` over an `Arc<RwLock<SessionState>>`, so every service built
+from one session resolves the same registered tables and the same slot. A task-local
+slot was considered and refused: it holds only while nothing between `context.sql` and
+the table provider's scan crosses a task boundary, and the failure mode is a silent
+fall back to a shared slot, which is this defect again with a mechanism that hides it.
+
+Two tests, both run against the unfixed code first and both failing there.
+`two_connections_each_read_their_own_proof_and_never_the_others` reported `full` where
+`partial` was true, and `a_fresh_connection_has_proved_nothing_however_busy_the_server_is`
+reported `full` where `none` was true. Now invariant 26.
+
+**The read surface has no row filtering, and three documents implied it had.** Not a
+code change: authorisation on the Postgres port is one `Action::Query` decision at
+connect time against a scope fixed when the server was built, and past it every
+authenticated client reads every record in every segment that server registered,
+whatever the `tenant` field says. Nothing on the read path takes a principal or a
+tenant. The unit tests showing two gates with different scopes refusing each other's
+principals read as tenant isolation and are really two servers in one test. The
+constraint is now stated in `SECURITY.md`, in the README's SQL section and on
+`ReadGate` itself, in the form a deployer needs: **one server per scope**.
+
+**`Action::ReadMetadata` is never requested from an `AuthProvider`.** The module doc
+and the README both described raw journal access as that action "asked for
+separately".
+
+```
+grep -rn --include='*.rs' '\.authorize(' crates/     # 11 call sites
+```
+
+Six are in `trailryx-contracts/src/conformance.rs`, which asks a provider for
+`ReadMetadata`, `ReadPayload`, `Query` and `Erase` in turn precisely to check that it
+tells them apart; that is a test of somebody's provider, not a request from this
+store. Three are inside `trailryx-ingest/src/bearer.rs`'s `#[cfg(test)] mod tests`.
+The two in a production path are `Action::Query` in `trailryx-sql/src/server.rs:178`
+and `Action::Ingest` in `trailryx-ingest/src/auth.rs:180`. **No path asks for
+`ReadMetadata`.**
+
+What exists instead is `raw: bool` on `Session::with_raw_access`, decided once for the
+whole server, and `grep -rn with_raw_access` finds two definitions and five callers,
+all five of them tests in `crates/trailryx-sql/tests/sql.rs`. Both documents now
+describe the flag that exists. Implementing the grant is a second `authorize` call
+somewhere the principal is known, which is not where the flag is: the catalog is fixed
+when the session is built and the principal arrives at connect time.
+
+---
+
 ## Not yet measured
 
 Stated so the absence is visible rather than inferred:
@@ -554,6 +620,12 @@ Stated so the absence is visible rather than inferred:
   not tested anywhere but the simulator.
 - **Years of simulated time.** The long run above covers nine days, not years, and
   the arithmetic for closing that gap is in its own section.
+- **Read authorisation past the connect-time door.** Not "not measured": **not
+  built**. The SQL surface authorises once, per connection, against a scope fixed when
+  the server was built, and does no per-principal or per-tenant row filtering
+  afterwards. Neither does it ask for `Action::ReadMetadata`. Both are recorded above,
+  in `SECURITY.md` and in the README, so the deployment model (one server per scope)
+  is something a deployer reads rather than infers.
 - **An external audit of the cryptographic layer.** Planned before the first
   compliance contract, and not started.
 

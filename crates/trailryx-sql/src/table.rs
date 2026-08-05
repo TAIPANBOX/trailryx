@@ -38,9 +38,16 @@
 //!
 //! SQL has nowhere to put it until `WITH PROOF` exists, so every scan records its
 //! provability in [`RecordTable::last_proof`]. That is a stopgap and it says so: a
-//! caller reading it is reading the last query's answer, not this query's, and a
-//! concurrent second query overwrites it. What it is not is a lie: the value is
-//! derived from which predicates were pushed, never asserted.
+//! caller reading it is reading the last answer on **this session**, not necessarily
+//! the one it just asked for, because a second statement on the same session between
+//! the two overwrites it. What it is not is a lie: the value is derived from which
+//! predicates were pushed, never asserted.
+//!
+//! The slot belongs to one session and to nothing wider. It was shared by the whole
+//! process until 5 August 2026, which meant a reader on one connection could be
+//! handed the verdict of a query somebody else had run on another: the shape of lie
+//! this crate exists to prevent, arriving through the function whose purpose is to
+//! prevent it. [`crate::Session::for_connection`] is where the boundary is now drawn.
 
 use std::fmt;
 use std::sync::{Arc, Mutex};
@@ -86,7 +93,10 @@ impl fmt::Display for Provability {
 /// Sealed segments, exposed as a table.
 #[derive(Debug)]
 pub struct RecordTable {
-    segments: Vec<Segment>,
+    /// Shared rather than owned, because a table is built per session and a session
+    /// is built per connection: copying every sealed record for each client would
+    /// make the isolation cost proportional to the trail rather than to a pointer.
+    segments: Arc<Vec<Segment>>,
     schema: SchemaRef,
     /// The dimension to scan when no predicate can be the sorted one.
     fallback: Dimension,
@@ -98,11 +108,13 @@ pub struct RecordTable {
     /// Where this table records how provable its last answer was.
     ///
     /// Shared across every table a session serves, including the ones a table
-    /// function builds. One slot per session rather than one per table: a caller
-    /// asks "how provable was the last answer", and an answer that came from
-    /// `causal_closure` or `journal` is still the last answer. The first version
-    /// gave each table its own and the proof of a table function's answer was
-    /// unreachable, which a test caught.
+    /// function builds, and **across nothing else**. One slot per session rather than
+    /// one per table: a caller asks "how provable was the last answer", and an answer
+    /// that came from `causal_closure` or `journal` is still the last answer. The
+    /// first version gave each table its own and the proof of a table function's
+    /// answer was unreachable, which a test caught. The version after that shared one
+    /// across every connection in the process, which is worse in the other direction
+    /// and which two tests in `tests/wire.rs` now catch.
     last_proof: ProofSlot,
 }
 
@@ -111,6 +123,16 @@ pub type ProofSlot = Arc<Mutex<Option<Provability>>>;
 
 impl RecordTable {
     pub fn new(segments: Vec<Segment>) -> Self {
+        Self::over(Arc::new(segments))
+    }
+
+    /// The same, over segments somebody else already holds.
+    ///
+    /// The form the facade actually uses: a session per connection, each with its own
+    /// proof slot, all reading one set of sealed segments. Sealed means immutable, so
+    /// sharing them is safe in the way that matters and cheap in the way that decides
+    /// whether per-connection isolation is affordable at all.
+    pub fn over(segments: Arc<Vec<Segment>>) -> Self {
         Self {
             segments,
             schema: projection_schema(),
@@ -153,7 +175,7 @@ impl RecordTable {
             *held = Some(proof);
         }
         Self {
-            segments: Vec::new(),
+            segments: Arc::new(Vec::new()),
             schema: projection_schema(),
             fallback: Dimension::RecordedAt,
             as_of: None,
@@ -181,7 +203,7 @@ impl RecordTable {
             })
             .collect();
         Self {
-            segments: Vec::new(),
+            segments: Arc::new(Vec::new()),
             schema: projection_schema(),
             fallback: Dimension::RecordedAt,
             as_of: None,
@@ -192,7 +214,7 @@ impl RecordTable {
 
     /// The sealed segments this table answers from.
     pub fn segments(&self) -> &[Segment] {
-        &self.segments
+        self.segments.as_slice()
     }
 
     /// How provable the last scan was, if there has been one.
@@ -470,7 +492,7 @@ impl TableProvider for RecordTable {
         // pushdown real rather than decorative.
         let mut rows: Vec<(trailryx_record::Record, trailryx_record::Hash)> = Vec::new();
         let mut proof_downgraded = Vec::new();
-        for segment in &self.segments {
+        for segment in self.segments.iter() {
             let answer = query_segment(segment, &planned.query);
             if !answer.proof.is_full() {
                 proof_downgraded.push(format!(
