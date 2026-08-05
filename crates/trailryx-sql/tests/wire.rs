@@ -219,6 +219,111 @@ async fn the_gate_is_on_the_prepared_statement_path_as_well() {
     assert_eq!(rows.len(), 1);
 }
 
+/// What `trailryx_proof()` says on one connection.
+async fn proof_on(client: &tokio_postgres::Client) -> String {
+    let messages = client
+        .simple_query("SELECT proof FROM trailryx_proof()")
+        .await
+        .expect("the proof function is served");
+    messages
+        .iter()
+        .find_map(|m| match m {
+            tokio_postgres::SimpleQueryMessage::Row(row) => row.get(0).map(str::to_owned),
+            _ => None,
+        })
+        .expect("one row with one column")
+}
+
+/// Two connections open at once, and each is told about its own answer.
+///
+/// `trailryx_proof()` reports the last answer **on this session**, and a Postgres
+/// session is a connection. While the proof slot was shared by the whole process, it
+/// was not: one reader ran a query the index could not prove, another ran one it
+/// could, and whichever asked second was handed the other's verdict. An unproved
+/// answer reported as proved is the one lie this crate is arranged against, and it
+/// arrived through the function whose entire purpose is to prevent it.
+///
+/// The two connections are open together and the statements are ordered on purpose.
+/// A test that raced them would fail sometimes, and a proof that is right most of the
+/// time is not a proof.
+#[tokio::test]
+async fn two_connections_each_read_their_own_proof_and_never_the_others() {
+    let gate = Arc::new(ReadGate::new(Box::new(OneReader), "acme"));
+    let address = start(Some(gate)).await;
+
+    let a = connect(&address, SECRET).await.expect("A connects");
+    let b = connect(&address, SECRET).await.expect("B connects");
+
+    // A asks something the index cannot prove: `severity` is not one of the five
+    // provable dimensions, so it is applied as a filter and the answer is partial.
+    a.simple_query("SELECT run_id FROM records WHERE severity = 'info'")
+        .await
+        .expect("A's select is served");
+    // B asks something it can: `run_id` is the sorted dimension of an authenticated
+    // index range, so B's answer carries a completeness proof.
+    b.simple_query("SELECT run_id FROM records WHERE run_id = 'run-a'")
+        .await
+        .expect("B's select is served");
+
+    assert_eq!(
+        proof_on(&a).await,
+        "partial",
+        "A ran a query the index could not prove and was told B's verdict"
+    );
+    assert_eq!(
+        proof_on(&b).await,
+        "full",
+        "B ran a provable query and must be told about that one"
+    );
+
+    // The other way round, because a shared value is right in one direction by
+    // accident whenever the two clients happen to agree.
+    b.simple_query("SELECT run_id FROM records WHERE severity = 'info'")
+        .await
+        .expect("B's second select is served");
+    a.simple_query("SELECT run_id FROM records WHERE run_id = 'run-a'")
+        .await
+        .expect("A's second select is served");
+
+    assert_eq!(
+        proof_on(&b).await,
+        "partial",
+        "B ran a query the index could not prove and was told A's verdict"
+    );
+    assert_eq!(
+        proof_on(&a).await,
+        "full",
+        "A ran a provable query and must be told about that one"
+    );
+}
+
+/// A connection that has asked nothing has proved nothing, whatever anybody else has
+/// been asking on the same server.
+///
+/// The stronger half of the test above: the shared slot did not only mix two
+/// verdicts, it also gave a brand new connection a verdict about a query it had
+/// never run. "None" is the only true answer to "how provable was your last answer"
+/// when there has not been one.
+#[tokio::test]
+async fn a_fresh_connection_has_proved_nothing_however_busy_the_server_is() {
+    let gate = Arc::new(ReadGate::new(Box::new(OneReader), "acme"));
+    let address = start(Some(gate)).await;
+
+    let busy = connect(&address, SECRET).await.expect("the first connects");
+    busy.simple_query("SELECT run_id FROM records WHERE run_id = 'run-a'")
+        .await
+        .expect("a select is served");
+
+    let fresh = connect(&address, SECRET)
+        .await
+        .expect("the second connects");
+    assert_eq!(
+        proof_on(&fresh).await,
+        "none",
+        "a connection that has answered nothing was handed somebody else's proof"
+    );
+}
+
 /// A routable bind with no provider must not open a port, and the message must say
 /// what this port serves so an operator understands why.
 #[test]

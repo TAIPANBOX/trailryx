@@ -51,6 +51,11 @@ The guarantees are stated out loud, so a report can name the one it breaks:
 - **The offline verifier**: a pack it reports as VERIFIED must be internally
   consistent in every part it carries. A pack that passes while holding records
   nothing checked is a report.
+- **The proof a reader is handed**: `trailryx_proof()` answers about the session that
+  asked. A path by which one connection's verdict reaches another is a report, because
+  a reader who trusts it takes an unproved answer as proved. That was live until 5
+  August 2026, when one proof slot served every connection in the process;
+  `crates/trailryx-sql/tests/wire.rs` is where a new case belongs.
 - **The ingest gate**: an unauthenticated request that gets past
   `crates/trailryx-ingest/src/auth.rs`, or one that makes the server read a body
   before the gate has answered. The second is the subtler of the two and
@@ -83,6 +88,36 @@ Stated here so nobody spends their time on it:
   ever. A way past any of those is a report. Note that
   `datafusion_postgres::serve` does no authentication at all, which is why it is not
   used; a deployment that calls it directly has built its own hole.
+- **The SQL read surface does not filter rows, per principal or per tenant.** This is
+  the one on this list a deployer is most likely to assume the other way round, so it
+  is stated at length. Authorisation on the Postgres port is a single decision at
+  connect time: authenticate the credential, then `Action::Query` against a scope
+  string fixed when the server was built. Past that door, **every authenticated client
+  reads every record in every segment that server registered**, whatever the `tenant`
+  field on those records says. Nothing on the read path takes a principal or a tenant:
+  not `RecordTable::scan`, not the pushdown planner, not `records_as_of`,
+  `causal_closure` or `journal`. A `WHERE tenant = ...` is a predicate the client
+  chose and can leave out.
+
+  **The deployment model is therefore one server per scope**, and separating two
+  tenants means two servers, two ports and two sets of segments. The tests in
+  `crates/trailryx-sql/src/server.rs` showing two gates with different scopes refusing
+  each other's principals are two servers in one test; they are not one server keeping
+  two tenants apart, and reading them as tenant isolation is the mistake this entry
+  exists to prevent. A client reading another tenant's rows through one server is
+  therefore not a report, it is this design. A way past the door itself is.
+- **Raw journal access is a server-wide build flag, not a per-principal grant.**
+  `Session::with_raw_access` decides once, for every client that will connect. The
+  architecture asks for `Action::ReadMetadata` to be requested separately from the
+  deployment's `AuthProvider`, and it is not: the only `authorize` call on this
+  surface carries `Action::Query`. A deployment that wants raw access for one auditor
+  and not for everybody else runs a second server for that auditor.
+- **`trailryx_proof()` races within one session.** It reports the last answer on the
+  session, and a second statement between a query and the proof that asks about it
+  overwrites the slot, so a client pipelining statements or sharing one connection
+  between two tasks can read a verdict about the wrong query **of its own**. Reading
+  the proof immediately after the answer is what makes it true. Across connections
+  there is no race at all and a case where there is one is a report, above.
 - **A path that gets SQL past `trailryx_sql::gate`.** A statement kind the gate lets
   through that can name a filesystem path, or a way to reach `SessionContext::sql`
   without the gate, is arbitrary local file read on the store's host and is the most

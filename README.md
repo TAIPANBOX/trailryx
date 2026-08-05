@@ -7,7 +7,7 @@
 ![Stage](https://img.shields.io/badge/stage-13%20of%2013-blue.svg)
 ![Core](https://img.shields.io/badge/core-frozen-success.svg)
 ![Rust](https://img.shields.io/badge/rust-1.85%2B-orange.svg)
-![Tests](https://img.shields.io/badge/tests-1064-success.svg)
+![Tests](https://img.shields.io/badge/tests-1066-success.svg)
 ![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)
 ![Dependencies](https://img.shields.io/badge/deps-0%20in%20the%20verifier-success.svg)
 ![Unsafe](https://img.shields.io/badge/unsafe-forbidden-success.svg)
@@ -304,7 +304,7 @@ migration. What stage 13 still wants is measured absence rather than a guess, an
 | `trailryx-anchor` | RFC 3161 timestamping: TSP, the CMS subset, and RSA over Montgomery arithmetic | 52 |
 | `trailryx-ingest` | the OTLP/HTTP server: HTTP/1.1, gzip, bearer auth, all hand-written | 119 |
 | `trailryx-compliance` | a versioned map from what is proved to what a framework asks, and what it does not | 12 |
-| `trailryx-sql` | the SQL facade: DataFusion and the Postgres wire protocol, predicates pushed into the index, statements gated, reads authorised, four dialect extensions | 59 |
+| `trailryx-sql` | the SQL facade: DataFusion and the Postgres wire protocol, predicates pushed into the index, statements gated, reads authorised, four dialect extensions | 61 |
 | `trailryx-demo` | the eight acceptance steps, and a reader for a collector's file | - |
 
 **The verifier and the core have no third-party dependencies.** `unsafe` forbidden
@@ -461,7 +461,7 @@ not repeated here: a number written twice is a number that will disagree with it
 ## Try it
 
 ```bash
-cargo test                                    # 1064 tests
+cargo test                                    # 1066 tests
 cargo run --bin trailryx-sim-run -- --help
 ```
 
@@ -576,6 +576,22 @@ store holds events, so the name says which of the two is on offer.
 `trailryx_proof()` reports "none" before any query has been answered, not "full". A
 session that has proved nothing must not report the strongest value for the absence of
 an answer.
+
+**And it answers about your session, which over the Postgres port means your
+connection.** That was not true until 5 August 2026: one session, one DataFusion
+context and one proof slot served every connection in the process, so a client that
+ran a query the index could not prove and then asked for its proof could be handed a
+stranger's `full`. A reader who believed it would take an unproved answer as proved,
+through the one function whose whole purpose is to stop that. Each accepted socket now
+gets a session of its own over the same sealed segments, which costs a pointer rather
+than a copy of the trail, and two tests in `crates/trailryx-sql/tests/wire.rs` drive
+two real connections and hold it. Both failed against the code that shared the slot,
+each reporting `full` where the answer was `partial` and `none`.
+
+What is left is one session's own race and it is stated rather than fixed: a second
+statement between the query and the `trailryx_proof()` that asks about it overwrites
+the slot. Reading the proof immediately after the answer is what makes it true, and
+`WITH PROOF` is the shape that would make the two atomic.
 
 ### S3 without an SDK: one HTTP client and a signature
 
@@ -779,11 +795,44 @@ All four of its decisions apply here and all four are copied rather than re-deri
 | a table function taking a range | `journal(from_seq, to_seq)` | there is no `SELECT * FROM wal`, because a client that could ask for all of a log could ask the server to read all of it |
 | errors when the start is unavailable | errors when the sequence is in no **sealed** segment | a silent empty answer is indistinguishable from "that range is empty", and the two mean very different things in forensics |
 | permissive about the upper bound | the same | erroring would make "everything from here" a moving target |
-| a **different privilege** from ordinary SQL | `Action::ReadMetadata`, not `Action::Query` | reading past the proofs is a stronger permission than querying, which is the opposite of how the names read |
+| a **different privilege** from ordinary SQL | a build-time flag on the server, **not** a per-principal grant | reading past the proofs is a stronger permission than querying, which is the opposite of how the names read |
 
-The fourth is the one that would have been got wrong. A session without the grant does
-not get the function **registered at all**, so it does not have it rather than being
-refused when it reaches for it: the catalog a session can see is what it may use.
+Three of the four are copied. The fourth is copied halfway and the honest version is
+the one in the table: `Session::with_raw_access(segments, raw)` is decided once, by
+whoever builds the server, for every client that will ever connect to it. Nothing asks
+the deployment's `AuthProvider` about it. The only authorisation on this surface is a
+single `Action::Query` at connect time, and a grep for `.authorize(` across this
+workspace finds eleven call sites, of which the only ones carrying `ReadMetadata` are
+in the contracts crate's own conformance suite, where the point is to check that a
+provider tells the actions apart. So raw journal access is a property of the server,
+and a deployment
+that wants it for one auditor and not for everybody else runs a second server for that
+auditor. Making it a real grant means a second `authorize` call somewhere the
+principal is actually known, which is not where the flag is: the catalog is fixed when
+the session is built and the principal arrives later.
+
+What the shape does buy, and this is the half that is copied: a session without raw
+access does not get the function **registered at all**, so it does not have it rather
+than being refused when it reaches for it. The catalog a session can see is what it
+may use.
+
+### What the read surface does not do: filter rows
+
+Stated here because a deployer meets it here and nowhere else. Authorisation on the
+SQL port is one decision, at connect time, about one scope fixed when the server was
+built. **Past it there is no row filtering of any kind.** Every authenticated client
+reads every record in every segment that server registered, whatever the `tenant`
+field on those records says. Nothing on the read path takes a principal or a tenant:
+not the table provider's scan, not the pushdown planner, not `records_as_of`,
+`causal_closure` or `journal`. A `WHERE tenant = ...` is a predicate the client chose
+and can leave out.
+
+**So the deployment model is one server per scope.** Separating two tenants means two
+servers, two ports and two sets of segments. This is not a multi-tenant read surface,
+and the unit tests that show two gates with different scopes refusing each other's
+principals are two servers in one test rather than one server keeping two tenants
+apart. Per-principal row filtering is a design decision with its own questions, and it
+is scheduled rather than built.
 
 And the answer carries no proof and says so, rather than reporting the strongest value
 for a scan that deliberately went round the thing that proves.
