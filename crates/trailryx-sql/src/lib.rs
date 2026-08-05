@@ -2,8 +2,25 @@
 //!
 //! # The only crate here with third-party dependencies
 //!
-//! Two hundred and forty-three of them, transitively, against zero in every other
-//! crate in this workspace. That number is published rather than buried: it is the
+//! A whole tree of them, transitively, against zero in every other crate in this
+//! workspace. **The count is in the README**, with the command that produces it and
+//! the platform it was measured on, and it is deliberately not repeated here: one
+//! value, one owner (`CLAUDE.md` invariant 16). The owner is
+//! `scripts/readme-numbers.sh`, which runs that command on every push and refuses
+//! the push when the README and the tree disagree. It has nothing to say about a
+//! sentence in a doc comment.
+//!
+//! The paragraph above is the demonstration. It opened with "two hundred and
+//! forty-three of them" from 30 July 2026, the day the dependencies arrived, until
+//! 5 August 2026.
+//! The README's copy of that same figure was written by the same commit and moved
+//! three times before that first day was out: 243, then 279, then 297, then a pair
+//! of host-specific numbers, because each move was somebody measuring rather than
+//! remembering, and by the last one a script was doing the measuring. Nothing ever
+//! measured this copy. It stood about fifty crates short for six days, under a
+//! heading about nothing else.
+//!
+//! The count is published rather than buried, wherever it is written: it is the
 //! cost of the decision, and `docs/planning/trailryx-architecture.md` §3.1 argues
 //! the trade in one sentence, from the lesson that made VictoriaMetrics: **it is
 //! compatibility that wins, not speed.** Speaking the Postgres wire protocol means
