@@ -1,6 +1,6 @@
 name: ci
 
-# The same sixteen checks `.githooks/pre-push` runs, so a green push is a green pull
+# The same seventeen checks `.githooks/pre-push` runs, so a green push is a green pull
 # request and neither can drift from the other.
 #
 # THE GUARD ON `if:` STAYS, and it is not decoration. Actions minutes are metered on
@@ -15,7 +15,7 @@ name: ci
 #
 # WHY TWO JOBS AND NOT ONE, measured 2026-08-04.
 #
-# One job ran all sixteen serially and reached 33 minutes without finishing
+# One job ran them all serially and reached 33 minutes without finishing
 # `cargo test`. Nothing was cached, so every run compiled DataFusion and pgwire
 # from nothing; that is `Swatinem/rust-cache` below.
 #
@@ -88,7 +88,7 @@ jobs:
       # This is the one step the pre-push hook cannot stand in for. Every other
       # check here is the same script the hook calls, so the two cannot drift;
       # this one is about the MACHINE, and a developer whose laptop has protoc
-      # gets sixteen green checks locally while the runner fails on the first
+      # gets every check green locally while the runner fails on the first
       # cargo invocation that touches the crate. That is exactly what happened.
       #
       # The version is printed rather than pinned. protoc is a compiler and its
@@ -133,6 +133,12 @@ jobs:
       # One file, shared with .githooks/pre-push, so the two cannot drift.
       - name: no unsafe
         run: ./scripts/no-unsafe.sh
+
+      # A limit nothing reads is worse than no limit, because the paragraph beside it
+      # reads as a mitigation already applied. `Config::max_connections` on the SQL
+      # surface was exactly that for four days.
+      - name: every configuration field is read
+        run: ./scripts/config-fields.sh
 
       # The exit criterion of stage 0, checked on every push rather than once. If a
       # seed stops reproducing a run, every guarantee built on the simulator stops

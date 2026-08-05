@@ -10,7 +10,9 @@
 //! to be free and two tests can run at once.
 
 use std::sync::Arc;
+use std::time::Duration;
 
+use tokio_postgres::error::SqlState;
 use trailryx_contracts::contracts::{
     Action, AdapterError, AdapterResult, AuthProvider, Decision, Principal,
 };
@@ -92,14 +94,18 @@ impl AuthProvider for OneReader {
 }
 
 /// Start a server on a throwaway port and return its address.
-async fn start(gate: Option<Arc<ReadGate>>) -> String {
+///
+/// The configuration is passed rather than defaulted because `max_connections` is a
+/// bound this crate has to keep, and a test that could not set it could not watch it
+/// hold. The bind in it is ignored: the listener is already open.
+async fn start(config: Config, gate: Option<Arc<ReadGate>>) -> String {
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
         .await
         .expect("port zero binds");
     let address = listener.local_addr().expect("an address").to_string();
     let session = Arc::new(Session::new(vec![segment()]));
     tokio::spawn(async move {
-        let _ = serve_on(listener, session, gate).await;
+        let _ = serve_on(listener, config, session, gate).await;
     });
     address
 }
@@ -109,11 +115,17 @@ fn conninfo(address: &str, password: &str) -> String {
     format!("host={host} port={port} user=auditor password={password} dbname=trailryx")
 }
 
-async fn connect(address: &str, password: &str) -> Result<tokio_postgres::Client, String> {
+/// The driver's own error type, not a string.
+///
+/// It used to be flattened to `to_string()`, which is enough to see that a connection
+/// failed and not enough to see what it was told: a refusal carries a SQLSTATE, and a
+/// SQLSTATE is the part a client's retry logic reads.
+async fn connect(
+    address: &str,
+    password: &str,
+) -> Result<tokio_postgres::Client, tokio_postgres::Error> {
     let (client, connection) =
-        tokio_postgres::connect(&conninfo(address, password), tokio_postgres::NoTls)
-            .await
-            .map_err(|e| e.to_string())?;
+        tokio_postgres::connect(&conninfo(address, password), tokio_postgres::NoTls).await?;
     tokio::spawn(async move {
         let _ = connection.await;
     });
@@ -124,7 +136,7 @@ async fn connect(address: &str, password: &str) -> Result<tokio_postgres::Client
 #[tokio::test]
 async fn a_postgres_client_connects_authenticates_and_queries() {
     let gate = Arc::new(ReadGate::new(Box::new(OneReader), "acme"));
-    let address = start(Some(gate)).await;
+    let address = start(Config::default(), Some(gate)).await;
 
     let client = connect(&address, SECRET)
         .await
@@ -147,7 +159,7 @@ async fn a_postgres_client_connects_authenticates_and_queries() {
 #[tokio::test]
 async fn a_wrong_password_is_refused_and_the_server_keeps_serving() {
     let gate = Arc::new(ReadGate::new(Box::new(OneReader), "acme"));
-    let address = start(Some(Arc::clone(&gate))).await;
+    let address = start(Config::default(), Some(Arc::clone(&gate))).await;
 
     let refused = connect(&address, "guess").await;
     assert!(refused.is_err(), "a wrong password must not connect");
@@ -164,7 +176,7 @@ async fn a_wrong_password_is_refused_and_the_server_keeps_serving() {
 #[tokio::test]
 async fn the_statement_gate_refuses_over_the_wire() {
     let gate = Arc::new(ReadGate::new(Box::new(OneReader), "acme"));
-    let address = start(Some(gate)).await;
+    let address = start(Config::default(), Some(gate)).await;
     let client = connect(&address, SECRET).await.expect("connects");
 
     let attempt = client
@@ -197,7 +209,7 @@ async fn the_statement_gate_refuses_over_the_wire() {
 #[tokio::test]
 async fn the_gate_is_on_the_prepared_statement_path_as_well() {
     let gate = Arc::new(ReadGate::new(Box::new(OneReader), "acme"));
-    let address = start(Some(gate)).await;
+    let address = start(Config::default(), Some(gate)).await;
     let client = connect(&address, SECRET).await.expect("connects");
 
     let prepared = client.prepare("DROP TABLE records").await;
@@ -249,7 +261,7 @@ async fn proof_on(client: &tokio_postgres::Client) -> String {
 #[tokio::test]
 async fn two_connections_each_read_their_own_proof_and_never_the_others() {
     let gate = Arc::new(ReadGate::new(Box::new(OneReader), "acme"));
-    let address = start(Some(gate)).await;
+    let address = start(Config::default(), Some(gate)).await;
 
     let a = connect(&address, SECRET).await.expect("A connects");
     let b = connect(&address, SECRET).await.expect("B connects");
@@ -307,7 +319,7 @@ async fn two_connections_each_read_their_own_proof_and_never_the_others() {
 #[tokio::test]
 async fn a_fresh_connection_has_proved_nothing_however_busy_the_server_is() {
     let gate = Arc::new(ReadGate::new(Box::new(OneReader), "acme"));
-    let address = start(Some(gate)).await;
+    let address = start(Config::default(), Some(gate)).await;
 
     let busy = connect(&address, SECRET).await.expect("the first connects");
     busy.simple_query("SELECT run_id FROM records WHERE run_id = 'run-a'")
@@ -322,6 +334,96 @@ async fn a_fresh_connection_has_proved_nothing_however_busy_the_server_is() {
         "none",
         "a connection that has answered nothing was handed somebody else's proof"
     );
+}
+
+/// The connection cap is a bound the server keeps, not a sentence in a struct.
+///
+/// It was documented as a bound on live connections and read by nothing: a deployer
+/// who lowered it got a server that behaved exactly as before, and a field like that
+/// is worse than no field, because it reads as a mitigation somebody has applied.
+///
+/// The refusal is an answer rather than a vanishing, which is the choice the ingest
+/// side made for the same reason. 53300 is `too_many_connections`, and a client that
+/// is told it can back off; a client whose socket simply closes cannot tell this
+/// apart from a crash, a firewall or a wrong password.
+#[tokio::test]
+async fn a_connection_past_the_cap_is_refused_and_the_server_keeps_serving() {
+    let gate = Arc::new(ReadGate::new(Box::new(OneReader), "acme"));
+    let address = start(
+        Config {
+            max_connections: 1,
+            ..Config::default()
+        },
+        Some(gate),
+    )
+    .await;
+
+    let held = connect(&address, SECRET)
+        .await
+        .expect("the first connection is under the cap");
+    assert!(held.simple_query("SELECT 1").await.is_ok());
+
+    let refused = connect(&address, SECRET)
+        .await
+        .expect_err("a second connection is over the cap");
+    assert_eq!(
+        refused.code(),
+        Some(&SqlState::TOO_MANY_CONNECTIONS),
+        "refused, but not in a way a client can act on: {refused}"
+    );
+    assert!(
+        refused
+            .as_db_error()
+            .is_some_and(|e| e.message().contains("connection limit")),
+        "and the half a person reads must say what happened: {refused}"
+    );
+
+    // The point of a cap: the connections under it keep working while the one over it
+    // is turned away.
+    assert!(
+        held.simple_query("SELECT run_id FROM records")
+            .await
+            .is_ok(),
+        "the refusal took the server with it"
+    );
+}
+
+/// A connection that ends gives its slot back.
+///
+/// The failure this guards is the one that only shows up later: a count that leaks on
+/// some exit path reaches the cap once and then refuses everything for ever, and the
+/// server looks healthy the whole time.
+#[tokio::test]
+async fn a_connection_that_ends_gives_its_slot_back() {
+    let gate = Arc::new(ReadGate::new(Box::new(OneReader), "acme"));
+    let address = start(
+        Config {
+            max_connections: 1,
+            ..Config::default()
+        },
+        Some(gate),
+    )
+    .await;
+
+    let held = connect(&address, SECRET).await.expect("the first connects");
+    assert!(held.simple_query("SELECT 1").await.is_ok());
+    drop(held);
+
+    // The slot comes back when the server's side of that connection ends, which is
+    // not the instant the client drops it. Polled with a bound rather than slept on
+    // for a guessed interval: a test that waits without one reports nothing at all.
+    let mut back = None;
+    for _ in 0..100 {
+        match connect(&address, SECRET).await {
+            Ok(client) => {
+                back = Some(client);
+                break;
+            }
+            Err(_) => tokio::time::sleep(Duration::from_millis(20)).await,
+        }
+    }
+    let next = back.expect("the slot never came back, so the cap is reached once and for ever");
+    assert!(next.simple_query("SELECT 1").await.is_ok());
 }
 
 /// A routable bind with no provider must not open a port, and the message must say
@@ -341,7 +443,7 @@ fn a_routable_bind_without_a_provider_will_not_start() {
 /// and it still only permits querying.
 #[tokio::test]
 async fn a_loopback_bind_with_no_provider_serves_reads_and_nothing_else() {
-    let address = start(None).await;
+    let address = start(Config::default(), None).await;
     let client = connect(&address, "anything")
         .await
         .expect("loopback connects");

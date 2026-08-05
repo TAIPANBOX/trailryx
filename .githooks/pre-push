@@ -101,6 +101,12 @@ step "core builds without adapters" \
 # No unsafe, in one file this hook and CI both call.
 step "no unsafe" ./scripts/no-unsafe.sh
 
+# Every field of every configuration struct, against the code meant to read it. A
+# bound that nothing reads is worse than an absent one: the reason written beside it
+# reads as a mitigation somebody has already applied, and the sentence is what gets
+# believed. `Config::max_connections` on the SQL surface was that for four days.
+say "configuration fields are read" ./scripts/config-fields.sh
+
 # The exit criterion of stage 0, checked on every push rather than once, in one
 # file this hook and CI both call. A seed must reproduce a run exactly; if that
 # stops holding, every other guarantee built on the simulator stops meaning

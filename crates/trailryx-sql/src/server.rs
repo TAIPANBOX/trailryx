@@ -45,8 +45,9 @@
 
 use std::fmt::Debug;
 use std::net::SocketAddr;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 use futures::{Sink, SinkExt};
 use pgwire::api::auth::{
@@ -57,6 +58,7 @@ use pgwire::api::{ClientInfo, PgWireServerHandlers};
 use pgwire::error::{ErrorInfo, PgWireError, PgWireResult};
 use pgwire::messages::startup::Authentication;
 use pgwire::messages::{PgWireBackendMessage, PgWireFrontendMessage};
+use tokio::io::AsyncWriteExt;
 
 use trailryx_contracts::contracts::{Action, AdapterError, AuthProvider, Decision};
 
@@ -69,6 +71,11 @@ pub struct Config {
     /// Live connections. Each is a tokio task rather than a thread, so this is a
     /// memory bound rather than a thread bound, but it is still a bound: a read
     /// surface with none is a read surface that can be exhausted.
+    ///
+    /// Kept by [`serve_on`], which is where a bound has to be kept and not here: this
+    /// field was documented as a bound and read by nothing for the first four days it
+    /// existed, which is worse than not having it, because a deployer lowering it
+    /// reads it as a mitigation they have applied.
     pub max_connections: usize,
 }
 
@@ -86,6 +93,88 @@ impl Config {
     pub fn is_routable(&self) -> bool {
         !self.bind.ip().is_loopback()
     }
+}
+
+/// Gives a connection's slot back however its task ends.
+///
+/// A guard rather than a line at the end of the task, for the reason the ingest side
+/// wrote next to the same type: an early return on one error path is how a count leaks
+/// until the cap is reached and the server refuses everything for ever, looking
+/// healthy the whole time.
+struct Live(Arc<AtomicUsize>);
+
+impl Drop for Live {
+    fn drop(&mut self) {
+        self.0.fetch_sub(1, Ordering::AcqRel);
+    }
+}
+
+/// How long the refusal below may take to leave.
+///
+/// Bounded because everything done on a socket a stranger controls is bounded. Sixty
+/// bytes fit in any send buffer, so a write still unfinished after this is a peer that
+/// is not reading, and holding a task for it is the exhaustion the cap exists to stop.
+const REFUSAL_TIMEOUT: Duration = Duration::from_secs(1);
+
+/// Tell a connection past the cap why, then close.
+///
+/// **Answer rather than vanish**, which is the same choice `trailryx-ingest` made at
+/// its own cap and for the same reason: a socket that simply closes leaves a client
+/// with "connection closed", which is what it also sees on a crash, a firewall, a
+/// wrong protocol and a half-written startup handler. 53300 is `too_many_connections`,
+/// the code a driver's own retry logic reads, and this is the one condition here that
+/// is worth retrying.
+///
+/// On its own task rather than on the accept loop: a peer that never reads would
+/// otherwise hold the listener, and a listener held is every other client refused.
+async fn refuse(mut socket: tokio::net::TcpStream) {
+    let refusal = at_the_connection_limit();
+    let _ = tokio::time::timeout(REFUSAL_TIMEOUT, async move {
+        if socket.write_all(&refusal).await.is_ok() {
+            // A close alone would be the vanishing this function exists to avoid: the
+            // bytes are only an answer once they have left.
+            let _ = socket.flush().await;
+        }
+        let _ = socket.shutdown().await;
+    })
+    .await;
+}
+
+/// A Postgres `ErrorResponse` saying the server is at its connection limit.
+///
+/// Encoded here rather than taken from pgwire because pgwire's encoder writes into a
+/// `bytes::BytesMut`, and that is a dependency this crate would be taking for one
+/// forty-byte message whose layout the protocol froze. What establishes the bytes are
+/// right is not this comment but a real driver reading them: the test asserts on the
+/// SQLSTATE `tokio-postgres` parsed out, which it cannot report unless every field
+/// landed where the protocol says.
+///
+/// `S`, `C` and `M` because a client refuses to parse an error missing any of the
+/// three; `V` beside `S` because every server since 9.6 sends the unlocalised
+/// severity, and a fake that skipped it would be teaching clients a shape no real
+/// server has.
+fn at_the_connection_limit() -> Vec<u8> {
+    let mut fields = Vec::new();
+    for (tag, value) in [
+        (b'S', "FATAL"),
+        (b'V', "FATAL"),
+        (b'C', "53300"),
+        (b'M', "this server is at its connection limit"),
+    ] {
+        fields.push(tag);
+        fields.extend_from_slice(value.as_bytes());
+        fields.push(0);
+    }
+    // Ends the field list, and is not the same zero as the one ending the last field.
+    fields.push(0);
+
+    let mut out = vec![b'E'];
+    // The length counts itself and the fields, and never the type byte. Derived from
+    // the bytes rather than written out, so the two cannot disagree.
+    let length = i32::try_from(fields.len() + 4).expect("four short constant fields");
+    out.extend_from_slice(&length.to_be_bytes());
+    out.extend_from_slice(&fields);
+    out
 }
 
 /// What a refused connection was refused for.
@@ -400,7 +489,7 @@ pub async fn serve(
     let listener = tokio::net::TcpListener::bind(config.bind)
         .await
         .map_err(StartError::Io)?;
-    serve_on(listener, session, gate).await
+    serve_on(listener, config, session, gate).await
 }
 
 /// Serve on a listener somebody else bound.
@@ -409,6 +498,10 @@ pub async fn serve(
 /// hand over a socket it opened under different privileges. The policy check has
 /// already happened by then, which is why this one does not repeat it: a listener is
 /// past the point where refusing helps.
+///
+/// The configuration is still taken, and [`Config::bind`] in it is the one field this
+/// function ignores, because the socket is already open. [`Config::max_connections`]
+/// is kept here and nowhere else.
 ///
 /// # One session per connection
 ///
@@ -420,19 +513,44 @@ pub async fn serve(
 /// a client asking about its own partial answer could be told about a stranger's
 /// proved one. A reader who believed it would take an unproved answer as proved,
 /// through the one function whose entire purpose is to stop exactly that.
+///
+/// A session forked per connection is also what makes the cap above a memory bound
+/// worth having rather than an abstraction: each admitted connection now costs a
+/// catalog of its own, so the number of them is a number somebody has to keep.
 pub async fn serve_on(
     listener: tokio::net::TcpListener,
+    config: Config,
     session: Arc<crate::Session>,
     gate: Option<Arc<ReadGate>>,
 ) -> Result<(), StartError> {
     // With no gate the port is loopback, which `check` has already established. The
     // permissive provider is only reachable in that case and it says so in its name.
     let gate = gate.unwrap_or_else(|| Arc::new(ReadGate::loopback_only()));
+    let live = Arc::new(AtomicUsize::new(0));
     loop {
         let (socket, _peer) = listener.accept().await.map_err(StartError::Io)?;
+
+        // Taken before the decision and given back by the guard, so one number answers
+        // the question on both sides of it. `>` and not `>=` because this connection is
+        // already counted: at a cap of one, the first connection is the one allowed.
+        //
+        // Decided here rather than inside the task, because a task is the thing being
+        // bounded: counting after spawning would bound nothing that had not already
+        // happened.
+        let taken = live.fetch_add(1, Ordering::AcqRel) + 1;
+        let guard = Live(Arc::clone(&live));
+        if taken > config.max_connections {
+            // The slot goes back before the refusal is written, because a connection
+            // being turned away is not occupying one.
+            drop(guard);
+            tokio::spawn(refuse(socket));
+            continue;
+        }
+
         let session = Arc::clone(&session);
         let gate = Arc::clone(&gate);
         tokio::spawn(async move {
+            let _guard = guard;
             // Forked inside the task rather than on the accept loop, so a slow
             // registration cannot hold up the next client, and bound to a name rather
             // than left as a temporary, so what keeps this connection's catalog alive

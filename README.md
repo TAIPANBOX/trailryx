@@ -7,7 +7,7 @@
 ![Stage](https://img.shields.io/badge/stage-13%20of%2013-blue.svg)
 ![Core](https://img.shields.io/badge/core-frozen-success.svg)
 ![Rust](https://img.shields.io/badge/rust-1.85%2B-orange.svg)
-![Tests](https://img.shields.io/badge/tests-1066-success.svg)
+![Tests](https://img.shields.io/badge/tests-1068-success.svg)
 ![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)
 ![Dependencies](https://img.shields.io/badge/deps-0%20in%20the%20verifier-success.svg)
 ![Unsafe](https://img.shields.io/badge/unsafe-forbidden-success.svg)
@@ -304,7 +304,7 @@ migration. What stage 13 still wants is measured absence rather than a guess, an
 | `trailryx-anchor` | RFC 3161 timestamping: TSP, the CMS subset, and RSA over Montgomery arithmetic | 52 |
 | `trailryx-ingest` | the OTLP/HTTP server: HTTP/1.1, gzip, bearer auth, all hand-written | 119 |
 | `trailryx-compliance` | a versioned map from what is proved to what a framework asks, and what it does not | 12 |
-| `trailryx-sql` | the SQL facade: DataFusion and the Postgres wire protocol, predicates pushed into the index, statements gated, reads authorised, four dialect extensions | 61 |
+| `trailryx-sql` | the SQL facade: DataFusion and the Postgres wire protocol, predicates pushed into the index, statements gated, reads authorised, connections bounded, four dialect extensions | 63 |
 | `trailryx-demo` | the eight acceptance steps, and a reader for a collector's file | - |
 
 **The verifier and the core have no third-party dependencies.** `unsafe` forbidden
@@ -461,7 +461,7 @@ not repeated here: a number written twice is a number that will disagree with it
 ## Try it
 
 ```bash
-cargo test                                    # 1066 tests
+cargo test                                    # 1068 tests
 cargo run --bin trailryx-sim-run -- --help
 ```
 
@@ -1847,15 +1847,22 @@ first number is only evidence because the second one exists.
 git config core.hooksPath .githooks   # once
 ```
 
-`.githooks/pre-push` runs sixteen checks and refuses the push if any fails:
+`.githooks/pre-push` runs seventeen checks and refuses the push if any fails:
 formatting, clippy with warnings as errors, the tests, a standalone build of the
 substrate crate, a zero-dependency check on every crate outside the SQL facade, a
-build and test of the core with the facade absent, an `unsafe` check, the determinism
+build and test of the core with the facade absent, an `unsafe` check, every field of
+every configuration struct against the code meant to read it, the determinism
 criterion, the published seed corpus, the two verifiers agreeing on the same packs, a
 reproducible build of the verifier from two different paths, the TLS build of the HTTP
 client, every parser against hostile bytes, every number this README states about the
 repository, a 200-seed durability sweep, and the advisories. About a minute and a
 half, most of it the facade's dependency tree.
+
+The one about configuration fields was added on 5 August 2026, for a bound on the
+SQL port's live connections that was declared, documented with the reason it
+mattered, and read by nothing. Lowering it did exactly nothing, and that is worse
+than the field not existing: an absent limit is a gap somebody can see, while a
+declared one with a paragraph beside it reads as a mitigation already applied.
 
 The one about numbers is the least glamorous and the most useful. An audit of this page on 30
 July 2026 found six crate test counts that had drifted as tests were added, a
@@ -1874,7 +1881,7 @@ file may now state a dependency count of its own, and a sentence recording what 
 figure used to be has to be declared as history and say when, the same way a silenced
 advisory has to carry a reason that is re-derived rather than remembered.
 
-`.github/workflows/ci.yml` runs the same sixteen, so a green push
+`.github/workflows/ci.yml` runs the same seventeen, so a green push
 is a green pull request. The advisory check was CI-only until 4 August 2026, and
 that gap cost exactly what a gap like that costs: fifteen green checks on a laptop
 and a red gate on the runner. It is one file now, `scripts/audit.sh`, and the half
