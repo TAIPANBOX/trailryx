@@ -78,7 +78,19 @@ impl Tsa {
     /// exercised, because the digest is the authority's choice and not ours: a
     /// verifier that only handles the one it prefers handles no real authority.
     fn new(name: &str, digest: &'static str, bits: &str) -> Result<Self, String> {
-        let dir = std::env::temp_dir().join(format!("trailryx-tsa-{name}"));
+        // The process id is in the path because the fixture name alone does not make
+        // it unique. `$TMPDIR` is shared by every process of one user, and both wipes
+        // of this directory (the one below, and `Drop`'s) name it by path rather than
+        // by ownership, so a second run of this same binary deleted an authority the
+        // first run was still using. That happened on 6 August 2026, in a pre-push
+        // hook running beside a `cargo test`, and it surfaced far from its cause: as
+        // `exchange` writing `query.tsq` into a directory that had ceased to exist.
+        // The eight fixture names below are distinct, so no run ever collided with
+        // itself, and the whole of the collision was between processes.
+        //
+        // The wipe below stays. A run killed before `Drop` leaves its directory
+        // behind, and a later process handed that pid must not inherit what it left.
+        let dir = std::env::temp_dir().join(format!("trailryx-tsa-{}-{name}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
 
