@@ -1,39 +1,65 @@
 # Validation
 
-Every number here was measured on **31 July 2026**, with the command printed next to
-it, on the machine described at the bottom. Nothing in this file is an estimate, and
-nothing in it is a promise about a machine other than the one it ran on.
+Nothing in this file is an estimate, and nothing in it is a promise about a machine
+other than the one it ran on, which is described at the bottom.
 
 Two kinds of number appear, and the difference matters more than any individual
 figure:
 
-- **Held by the gate.** Re-measured on every push, and the push is refused if the
-  number moves. These cannot rot.
-- **Measured on demand.** Run when somebody asks, dated here. These *can* rot, so
-  each one carries its command and its date, and this file is the only place they are
-  quoted.
+- **Held by the gate.** Re-derived on every push, and the push is refused if the
+  number moves. **This section carries no date, on purpose.** The only date anybody
+  could honestly put on it is the day somebody last typed it out, which says nothing
+  about when it was last true. A fixed date over numbers that are re-derived on every
+  push reads as reassurance while providing none.
+- **Measured on demand.** Run when somebody asks. These *can* rot, so each one
+  carries its command and its date. Unless its own section says otherwise, the date
+  is **31 July 2026**; the federation transport below is 4 August 2026.
+
+This header used to open with "every number here was measured on 31 July 2026", over
+both kinds at once. It was true on the day it was written and could not stay true in
+either direction: the gate re-measured its half on every push afterwards, and the
+figures transcribed from it moved while the date stood still.
 
 ---
 
 ## Held by the gate
 
-`.githooks/pre-push` runs fifteen checks and `.github/workflows/ci.yml` runs the same
-fifteen plus `cargo audit`, so a green push is a green pull request.
+`.githooks/pre-push` runs sixteen checks and `.github/workflows/ci.yml` runs the same
+sixteen, so a green push is a green pull request. The old wording here, "the same
+fifteen plus `cargo audit`", recorded a real difference: the advisories check was
+CI's alone until 4 August 2026. It is in both now, and the sets are identical.
+
+What a row may state, and it is a narrow licence: **what the check is set to do, and
+what it refuses to see.** A parameter (200 seeds, 300 cases, 13 targets, 16 corpus
+rows) moves only when somebody edits the check, and a zero the check refuses to move
+past is the check itself. An *output* moves on its own, so a test count and a digest
+are named here rather than quoted, and live where something owns them. Two rows below
+used to quote an output. The test count had drifted, by 33 tests and by the crate that
+arrived with the federation transport. The determinism digest had not, and that is
+worth being exact about: nothing was holding it either. That check compares two runs
+of one seed against each other and never against this page, so the figure here was
+only ever as fresh as the last person who typed it out, and it happened to be fresh.
+
+The commands are now the scripts, wherever a script exists, for the reason invariant
+17 gives: a command retyped into a table loses a flag. The determinism row printed
+`--seed 1 --steps 300` while the check runs seed 20260729 for 800 steps, and the
+durability row left out `--honest-disk`, without which almost every seed reports a
+violation, the exact opposite of the 0 standing beside it.
 
 | What | Number | Command |
 |---|---|---|
-| Tests | 1,031 across 28 crates | `cargo test --workspace` |
+| Tests | the whole workspace suite, green. The count and the per-crate table are in the README, checked against the suite rather than against a copy of themselves | `cargo test --workspace` |
 | Third-party dependencies in the verifier | 0 | `cargo tree -p trailryx-verify` |
 | Third-party dependencies in the core | 0 | `./scripts/declared-deps.sh` |
 | `unsafe` | forbidden at the workspace level, and grepped for | `grep -rn unsafe crates` |
-| Determinism: same seed, twice | identical digest `b9b9663ec65feb8a` | `trailryx-sim-run --seed 1 --steps 300` |
-| Published seed corpus | 16 rows, 0 digest mismatches | `trailryx-sim-run --corpus sim/corpus.tsv` |
-| Durability sweep | 200 seeds, 0 violations | `trailryx-sim-run --seed 1 --sweep 200 --hostile` |
+| Determinism: same seed, twice | two runs of one seed, identical byte for byte. The digest is printed by the check, not recorded here; the recorded ones are the corpus's | `./scripts/determinism.sh` |
+| Published seed corpus | 16 rows, 0 digest mismatches | `./scripts/seed-corpus.sh` |
+| Durability sweep | 200 seeds, 0 violations | `./scripts/durability-sweep.sh` |
 | Two verifiers, one verdict | agree on every pack | `cargo test -p trailryx-store --test two_verifiers` |
 | Verifier build reproducibility | same binary from two paths | `./scripts/reproduce.sh` |
 | Parsers under hostile bytes | 13 targets, 300 cases each, 0 panics | `cargo test -p trailryx-fuzz` |
 | The durability check can fail | a lying `fsync` is caught | `cargo test -p trailryx-core --test determinism` |
-| README numbers | badge, totals and every crate row | `./scripts/readme-numbers.sh` |
+| README numbers | the badge, the quoted total, every crate row, the rows' sum, the dependency count for the host it runs on, the image tag it tells people to pull, and the stage badge against the roadmap | `./scripts/readme-numbers.sh` |
 
 The gate takes about two minutes, most of it the SQL facade's dependency tree.
 
@@ -346,7 +372,13 @@ cargo tree -p trailryx-sql
 
 297 distinct third-party crates behind the SQL facade on macOS, 294 on Linux, because
 part of any dependency tree is platform-specific. 279 of them ship (`-e normal`); the
-rest arrive to build and to test it. Everything outside the facade, the cryptographic
+rest arrive to build and to test it.
+
+Two of those three sit in the wrong section and are left here for one place to look:
+`scripts/readme-numbers.sh` runs that command on every push and compares the README's
+figure for the host it is running on, so 297 is held by the hook on a Mac and 294 by
+CI on Linux. The 279 is the one that is genuinely measured on demand: nothing checks
+it, and it is the 31 July figure. Everything outside the facade, the cryptographic
 provider and the demo has none, and the verifier has none by design: an auditor reads
 it, and every crate pulled in is a crate they are asked to trust instead.
 
@@ -469,11 +501,19 @@ opposite.
 cargo test -p trailryx-federation-grpc
 ```
 
-15 tests, 4 August 2026: six over the codec, nine that bind a loopback listener and
-complete a real TLS 1.3 handshake against a certificate authority the test creates.
+18 tests, 5 August 2026: six over the codec, nine that bind a loopback listener and
+complete a real TLS 1.3 handshake against a certificate authority the test creates,
+and three that carry a chain across that wire and re-verify it on the far side.
 Nothing is mocked, because a mocked transport agrees with whatever the transport
 does, including its mistakes, and two of its mistakes are the only interesting
 results here.
+
+This line said 15 until today, and it was right when it was written: the nine and
+this paragraph arrived in the same commit on 4 August, and `replication_over_the_wire`
+added three more to the same crate later the same day. Half a day of accuracy, from a
+figure that carried its own date and its own command and still needed somebody to come
+back and run it. The copy with an owner is the crate's row in the README, which the
+gate checks against the suite, and it says 18 as well.
 
 **What the run establishes.** Two environments answering completely compose to a
 complete answer, and the roadmap's stage-12 criterion holds on a wire rather than in
@@ -482,6 +522,11 @@ with the third named. A peer that is down is silent rather than empty. A peer's 
 partial answer stays partial after crossing. A stream that ends before its trailer is
 refused outright, and inside a fan-out that peer contributes nothing rather than a
 plausible-looking two thirds.
+
+The three added later hold the assumption verified replication rests on: the bytes a
+chain covers cross protobuf unchanged, a chain still verifies after the round trip,
+and a record altered after the wire is still refused. Without them a lossy codec would
+report a broken chain rather than reporting itself.
 
 **What it found.** Two things, both by a test failing first.
 
@@ -633,5 +678,7 @@ Stated so the absence is visible rather than inferred:
 
 ## The machine
 
-Apple silicon, macOS, APFS, Rust 1.96.1, 31 July 2026. Every command above was run on
-it, and none of the numbers should be assumed to hold on hardware that is not it.
+Apple silicon, macOS, APFS, Rust 1.96.1, 31 July 2026. Every command under *measured
+on demand* was run on it, and none of those numbers should be assumed to hold on
+hardware that is not it. The gate's sixteen also run on CI's Linux runners, which is
+the whole reason the dependency count is two figures rather than one.
