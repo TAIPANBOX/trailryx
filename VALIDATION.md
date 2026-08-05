@@ -501,11 +501,19 @@ opposite.
 cargo test -p trailryx-federation-grpc
 ```
 
-15 tests, 4 August 2026: six over the codec, nine that bind a loopback listener and
-complete a real TLS 1.3 handshake against a certificate authority the test creates.
+18 tests, 5 August 2026: six over the codec, nine that bind a loopback listener and
+complete a real TLS 1.3 handshake against a certificate authority the test creates,
+and three that carry a chain across that wire and re-verify it on the far side.
 Nothing is mocked, because a mocked transport agrees with whatever the transport
 does, including its mistakes, and two of its mistakes are the only interesting
 results here.
+
+This line said 15 until today, and it was right when it was written: the nine and
+this paragraph arrived in the same commit on 4 August, and `replication_over_the_wire`
+added three more to the same crate later the same day. Half a day of accuracy, from a
+figure that carried its own date and its own command and still needed somebody to come
+back and run it. The copy with an owner is the crate's row in the README, which the
+gate checks against the suite, and it says 18 as well.
 
 **What the run establishes.** Two environments answering completely compose to a
 complete answer, and the roadmap's stage-12 criterion holds on a wire rather than in
@@ -514,6 +522,11 @@ with the third named. A peer that is down is silent rather than empty. A peer's 
 partial answer stays partial after crossing. A stream that ends before its trailer is
 refused outright, and inside a fan-out that peer contributes nothing rather than a
 plausible-looking two thirds.
+
+The three added later hold the assumption verified replication rests on: the bytes a
+chain covers cross protobuf unchanged, a chain still verifies after the round trip,
+and a record altered after the wire is still refused. Without them a lossy codec would
+report a broken chain rather than reporting itself.
 
 **What it found.** Two things, both by a test failing first.
 
