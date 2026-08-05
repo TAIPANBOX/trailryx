@@ -59,7 +59,7 @@ violation, the exact opposite of the 0 standing beside it.
 | Verifier build reproducibility | same binary from two paths | `./scripts/reproduce.sh` |
 | Parsers under hostile bytes | 13 targets, 300 cases each, 0 panics | `cargo test -p trailryx-fuzz` |
 | The durability check can fail | a lying `fsync` is caught | `cargo test -p trailryx-core --test determinism` |
-| README numbers | the badge, the quoted total, every crate row, the rows' sum, the dependency count for the host it runs on, the image tag it tells people to pull, and the stage badge against the roadmap | `./scripts/readme-numbers.sh` |
+| README numbers | the badge, the quoted total, every crate row, the rows' sum, the dependency count for the host it runs on, the image tag it tells people to pull, the stage badge against the roadmap, and no other tracked file stating a dependency count of its own | `./scripts/readme-numbers.sh` |
 
 The gate takes about two minutes, most of it the SQL facade's dependency tree.
 
@@ -377,8 +377,12 @@ rest arrive to build and to test it.
 Two of those three sit in the wrong section and are left here for one place to look:
 `scripts/readme-numbers.sh` runs that command on every push and compares the README's
 figure for the host it is running on, so 297 is held by the hook on a Mac and 294 by
-CI on Linux. The 279 is the one that is genuinely measured on demand: nothing checks
-it, and it is the 31 July figure. Everything outside the facade, the cryptographic
+CI on Linux. The 279 is the one nothing measures: it is the 31 July figure, and what
+the gate holds about it is only that no file disagrees with the README about it.
+
+Since 6 August 2026 that last part is the rule for all three. The README is the one
+place any of them is stated as a measurement, and the gate refuses a push when any
+other tracked file states a count of its own, this file included. Everything outside the facade, the cryptographic
 provider and the demo has none, and the verifier has none by design: an auditor reads
 it, and every crate pulled in is a crate they are asked to trust instead.
 

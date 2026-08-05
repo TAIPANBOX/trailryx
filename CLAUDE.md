@@ -42,7 +42,7 @@ Everything below is a rule, not a description. Each one says what holds it today
 
 15. **Never fix the shard count by counting cores, and never re-split it.** Shard identity is inside proof paths, so redistributing afterwards breaks proofs already issued; a different count is a new store epoch with explicit lineage. *(not checked)*
 
-16. **If two places need the same value, export it from one and import it in both.** Two functions computing what is meant to be one number is how a publisher and a reader end up disagreeing about the same object. *(not checked)*
+16. **If two places need the same value, export it from one and import it in both.** Two functions computing what is meant to be one number is how a publisher and a reader end up disagreeing about the same object. The same holds for a number written in prose, and there it is worse, because nothing compiles it: the facade's dependency count sat in five places, the README's copy was corrected within hours of being wrong and a doc comment's copy was fifty crates out for six days, in the file whose subject it was. One value in prose now means one owner in prose. For that count the owner is the README, whose figure the gate measures against `cargo tree`, and no other tracked file may state a count of its own. A superseded figure may appear where a sentence is recording history, and it has to be declared with a reason that is re-derived on every run, exactly as invariant 24 requires of a silenced advisory: `history` means the paragraph carrying the number also says when, and a paragraph that stops saying when stops being exempt. *(gate: scripts/readme-numbers.sh, for the dependency count; the general rule about two functions computing one number is still not checked)*
 
 17. **A check with any logic or parameters of its own goes in `scripts/`, and both the hook and CI call it.** Bare `cargo` invocations may stay written out in both; anything carrying a seed, a flag, a pattern or a list may not, because that is what drifts. *(not checked, and it is a rule because a drifted copy once made CI refuse a push the hook had passed)*
 
@@ -70,11 +70,11 @@ Everything below is a rule, not a description. Each one says what holds it today
 
 ## What is a gate, and what is still only a sentence
 
-**Decisions that became gates.** Zero dependencies outside the declared list, the core standing up without adapters, no `unsafe`, a seed reproducing a run byte for byte, the published seed corpus, two independent verifiers agreeing on one pack, a reproducible verifier binary, the TLS builds, every parser under hostile bytes, every number the README states including the image tag it tells people to pull, a 200-seed durability sweep, and the advisories with the reasons the silenced ones are silenced. Sixteen checks, run by `.githooks/pre-push` and again by CI.
+**Decisions that became gates.** Zero dependencies outside the declared list, the core standing up without adapters, no `unsafe`, a seed reproducing a run byte for byte, the published seed corpus, two independent verifiers agreeing on one pack, a reproducible verifier binary, the TLS builds, every parser under hostile bytes, every number the README states including the image tag it tells people to pull, the facade's dependency count wherever else in the tree it is written down, a 200-seed durability sweep, and the advisories with the reasons the silenced ones are silenced. Sixteen checks, run by `.githooks/pre-push` and again by CI.
 
 **Decisions with no gate yet.** This list is debt, and it is here so it stays visible:
 
-- Invariants 9, 10, 15, 16, 17, 18 and 27 above are held by nothing but their own sentence.
+- Invariants 9, 10, 15, 17, 18 and 27 above are held by nothing but their own sentence. Invariant 16 is half held: the facade's dependency count is gated in every tracked file, and the general rule about two computations of one value is not.
 - Invariants 21, 22, 23 and 26 are held by tests rather than by a gate. A gate would have to prove a negative about code that has not been written yet ("no future call path reads a name out of the body"), and a grep that pretended to do so would be worse than the honest sentence.
 - The fuzz step differs between the hook and CI on purpose, 300 cases against 3,000: the hook is fast and CI is thorough. Do not "fix" it into agreement.
 - `qryx scan --policy cnsa` is run on demand, not on push.

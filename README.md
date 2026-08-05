@@ -1866,6 +1866,14 @@ is a claim with no owner. So the badge, the totals and every row of the crate ta
 are now checked against what the suite actually runs, and the push fails when they
 disagree.
 
+Since 6 August 2026 it also reaches off this page. The dependency figure above is
+stated in four other places, and the copies are where it rotted: a doc comment in the
+facade said "two hundred and forty-three" for six days after this page had been
+corrected, because this page had a gate and the doc comment did not. No other tracked
+file may now state a dependency count of its own, and a sentence recording what the
+figure used to be has to be declared as history and say when, the same way a silenced
+advisory has to carry a reason that is re-derived rather than remembered.
+
 `.github/workflows/ci.yml` runs the same sixteen, so a green push
 is a green pull request. The advisory check was CI-only until 4 August 2026, and
 that gap cost exactly what a gap like that costs: fifteen green checks on a laptop
