@@ -108,6 +108,12 @@ step "no unsafe" ./scripts/no-unsafe.sh
 # after itself and nothing else is a fixture two runs share.
 say "temp paths are per process" ./scripts/temp-paths.sh
 
+# How many checks this file runs, against how many CI runs, and against the one place
+# a reader is told. The header above promises a green push is a green pull request and
+# nothing counted the two sides until now. It also holds the number in prose down to
+# one file: it moved three times in one day and cost five hand edits each time.
+say "the gate's own count" ./scripts/gate-count.sh
+
 # Every field of every configuration struct, against the code meant to read it. A
 # bound that nothing reads is worse than an absent one: the reason written beside it
 # reads as a mitigation somebody has already applied, and the sentence is what gets

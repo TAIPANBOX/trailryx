@@ -24,8 +24,9 @@ figures transcribed from it moved while the date stood still.
 
 ## Held by the gate
 
-`.githooks/pre-push` runs eighteen checks and `.github/workflows/ci.yml` runs the same
-eighteen, so a green push is a green pull request. The old wording here, "the same
+`.githooks/pre-push` and `.github/workflows/ci.yml` run the same checks, so a green
+push is a green pull request, and since 6 August 2026 something counts both sides
+rather than trusting a sentence. The number lives in the README. The old wording here, "the same
 fifteen plus `cargo audit`", recorded a real difference: the advisories check was
 CI's alone until 4 August 2026. It is in both now, and the sets are identical. The
 seventeenth arrived on 5 August, for a configuration field that was declared, given a
@@ -64,6 +65,7 @@ violation, the exact opposite of the 0 standing beside it.
 | The durability check can fail | a lying `fsync` is caught | `cargo test -p trailryx-core --test determinism` |
 | README numbers | the badge, the quoted total, every crate row, the rows' sum, the dependency count for the host it runs on, the image tag it tells people to pull, the stage badge against the roadmap, and no other tracked file stating a dependency count of its own | `./scripts/readme-numbers.sh` |
 | Configuration fields nothing reads | 0, across every `Config`, `Limits` and `Policy` struct in the workspace. How many fields that is moves on its own, so the check prints it rather than this page quoting it | `./scripts/config-fields.sh` |
+| Checks in the hook against checks in CI | equal, counted on both sides rather than promised by either header, and the README's figure checked against them. No other tracked file may state it | `./scripts/gate-count.sh` |
 | Temp paths two processes would share | 0. Every path built from `temp_dir()` carries `std::process::id()`, so two runs of one test binary cannot take each other's scratch directory. How many such paths exist moves on its own, so the check prints it | `./scripts/temp-paths.sh` |
 
 The gate takes about two minutes, most of it the SQL facade's dependency tree.
@@ -689,5 +691,5 @@ Stated so the absence is visible rather than inferred:
 
 Apple silicon, macOS, APFS, Rust 1.96.1, 31 July 2026. Every command under *measured
 on demand* was run on it, and none of those numbers should be assumed to hold on
-hardware that is not it. The gate's eighteen also run on CI's Linux runners, which is
+hardware that is not it. The gate's checks also run on CI's Linux runners, which is
 the whole reason the dependency count is two figures rather than one.
