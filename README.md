@@ -7,7 +7,7 @@
 ![Stage](https://img.shields.io/badge/stage-13%20of%2013-blue.svg)
 ![Core](https://img.shields.io/badge/core-frozen-success.svg)
 ![Rust](https://img.shields.io/badge/rust-1.85%2B-orange.svg)
-![Tests](https://img.shields.io/badge/tests-1102-success.svg)
+![Tests](https://img.shields.io/badge/tests-1117-success.svg)
 ![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)
 ![Dependencies](https://img.shields.io/badge/deps-0%20in%20the%20verifier-success.svg)
 ![Unsafe](https://img.shields.io/badge/unsafe-forbidden-success.svg)
@@ -306,7 +306,7 @@ migration. What stage 13 still wants is measured absence rather than a guess, an
 | `trailryx-compliance` | a versioned map from what is proved to what a framework asks, and what it does not | 12 |
 | `trailryx-sql` | the SQL facade: DataFusion and the Postgres wire protocol, predicates pushed into the index, statements gated, reads authorised, connections bounded, four dialect extensions | 64 |
 | `trailryx-agentevent` | the estate's shared agent-event envelope, mapped into records: the same `agent://` grammar, the same run and delegation chain | 17 |
-| `trailryx-node` | the record plane as one process: ingest, journal, sealing on a schedule, and a reader that rebuilds a segment from the journal | 10 |
+| `trailryx-node` | the record plane as one process: ingest, journal, sealing on a schedule, a reader that rebuilds a segment from the journal, and a cursor that makes an import safe to repeat | 25 |
 | `trailryx-demo` | the eight acceptance steps, and a reader for a collector's file | - |
 
 **The verifier and the core have no third-party dependencies.** `unsafe` forbidden
@@ -485,6 +485,31 @@ a third command takes a file of them:
 trailryx-node events --file traces.ndjson --data ./trailryx-data
 ```
 
+**It is safe to put on a timer.** The command remembers where it stopped in each
+file, so running it again on an unchanged file reads nothing, writes nothing and
+says where it is standing:
+
+```text
+sent.ndjson: nothing new. The cursor is at byte 1947 of 1947 (5 line(s), 5 record(s) so far)
+```
+
+A file that has grown gives up only its new lines. A file that was truncated or
+replaced under the same name is read from the beginning, and the run says which
+of those happened rather than resuming into a stream that is not the one it
+remembers: the position is committed together with the hash of exactly the bytes
+it covers, so resuming needs that prefix to still be there. A last line whose
+terminator has not arrived is left for the next run and counted out loud, because
+a collector that flushes on a timer has not finished writing it.
+
+The position is written **after** the segment holding its records is sealed. That
+ordering is the guarantee: a crash can leave the position behind the evidence,
+which reads lines twice and reports doing so, and can never leave it ahead, which
+would skip lines nobody stored and say nothing. A run that is killed before its
+seal therefore costs a re-import of everything it was reading, not of the part it
+had reached, because the position moves once per run. Measured in
+[`VALIDATION.md`](VALIDATION.md): no line is ever missing, and a killed run's
+lines are stored twice.
+
 ### What this process does not do, and why each one is absent rather than stubbed
 
 Stated here because an adopter meets it here, and printed by `run` at startup so
@@ -535,7 +560,7 @@ not repeated here: a number written twice is a number that will disagree with it
 ## Try it
 
 ```bash
-cargo test                                    # 1102 tests
+cargo test                                    # 1117 tests
 cargo run --bin trailryx-sim-run -- --help
 ```
 

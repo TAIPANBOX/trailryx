@@ -13,6 +13,10 @@ description = "The record plane as one process: ingest, journal, sealing on a sc
 trailryx-agentevent = { path = "../trailryx-agentevent" }
 trailryx-assemble = { path = "../trailryx-assemble" }
 trailryx-contracts = { path = "../trailryx-contracts" }
+# The hash a cursor commits a file's consumed prefix with, and the one the
+# journal already chains with. One primitive rather than a second one chosen for
+# a smaller job.
+trailryx-crypto = { path = "../trailryx-crypto" }
 trailryx-index = { path = "../trailryx-index" }
 trailryx-ingest = { path = "../trailryx-ingest" }
 trailryx-journal = { path = "../trailryx-journal" }

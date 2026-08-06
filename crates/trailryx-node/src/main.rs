@@ -16,7 +16,6 @@ use std::process::ExitCode;
 use std::sync::Arc;
 use std::time::Duration;
 
-use trailryx_agentevent::EnvelopeConfig;
 use trailryx_contracts::contracts::Source;
 use trailryx_index::completeness::Dimension;
 use trailryx_ingest::auth::Gate;
@@ -25,7 +24,7 @@ use trailryx_ingest::config::Config;
 use trailryx_ingest::handler::Ingest;
 use trailryx_ingest::server::{Server, stderr_log};
 use trailryx_node::plane::{Plane, SealPolicy, seed_from_process};
-use trailryx_node::{ingest_file, reader};
+use trailryx_node::{Resume, Ship, reader, ship};
 use trailryx_otlp::{MapperConfig, OtlpSource};
 use trailryx_record::{ShardIx, TenantId, Timestamp};
 use trailryx_store::query::{Query, query_segment};
@@ -51,6 +50,10 @@ read  rebuilds every sealed segment from the journal's own bytes, refuses any
 events reads a file of the estate's shared agent-event NDJSON envelope
       (taipanbox.dev/agent-event v0.1 or v0.2), maps every line it can into a
       record, seals what it wrote, and says by name what it could not map.
+      It is safe to put on a timer: it remembers where it stopped in each file,
+      beside the data, and takes only what has arrived since. A file that was
+      truncated or replaced under the same name is read from the beginning and
+      the run says which of those happened.
 
 This process keeps the metadata plane only. It has no key custodian, so payload
 parts a source hands over are declined and counted, and the count is written
@@ -363,44 +366,60 @@ fn events(args: Vec<String>) -> ExitCode {
         seal_after_nanos: u64::MAX,
         sync_every: 64,
     };
-    let Ok(cfg) = EnvelopeConfig::new(tenant.clone(), &trust_domain) else {
-        return fail(&format!("--trust-domain {trust_domain} is not usable"));
-    };
 
-    let (mut plane, opened) = match Plane::open(
-        &dir,
+    let shipped = match ship(&Ship {
+        dir: &dir,
         shard,
         tenant,
-        &trust_domain,
+        trust_domain: &trust_domain,
         policy,
-        seed_from_process(),
-    ) {
-        Ok(pair) => pair,
-        Err(why) => return fail(&format!("{}: {why}", dir.display())),
-    };
-    let now = plane.now();
-    let ingested = match ingest_file(&mut plane, &cfg, std::path::Path::new(file), now) {
-        Ok(ingested) => ingested,
+        seed: seed_from_process(),
+        file: std::path::Path::new(file),
+    }) {
+        Ok(shipped) => shipped,
         Err(why) => return fail(&format!("{file}: {why}")),
     };
-    // Sealed here rather than left for a schedule, because this command ends: a
-    // record that is written and never sealed is a record no proof covers.
-    let sealed = match plane.seal(plane.now()) {
-        Ok(sealed) => sealed,
-        Err(why) => return fail(&format!("sealing: {why}")),
-    };
 
-    println!(
-        "{file}: {} mapped, {} record(s) written into {} (was {}), {} payload part(s) declined",
-        ingested.report.mapped,
-        ingested.accepted.written,
-        plane.segment(),
-        opened.segment,
-        ingested.accepted.declined_payload_parts
-    );
+    // Why this run read what it read, before what it read. A run that started at
+    // byte zero because a file was rotated and a run that started there because
+    // it had never seen the file are the same output otherwise, and an operator
+    // watching a schedule needs to tell them apart.
+    if let Resume::Whole(why) = &shipped.resume {
+        println!("{file}: {why}");
+    }
+
+    if shipped.nothing_new() {
+        // The whole point of the command being safe to run again: a reader has to
+        // be able to tell "nothing new" from "nothing happened", so this says
+        // where it is standing rather than printing a row of zeroes.
+        println!(
+            "{file}: nothing new. The cursor is at byte {} of {} ({} line(s), {} record(s) so far)",
+            shipped.cursor.bytes,
+            shipped.cursor.bytes + shipped.held_back,
+            shipped.cursor.lines,
+            shipped.cursor.records
+        );
+    } else {
+        println!(
+            "{file}: bytes {}..{}, {} mapped, {} record(s) written, {} payload part(s) declined",
+            shipped.from,
+            shipped.to,
+            shipped.ingested.report.mapped,
+            shipped.ingested.accepted.written,
+            shipped.ingested.accepted.declined_payload_parts
+        );
+    }
+    if shipped.held_back > 0 {
+        println!(
+            "  {} byte(s) of a line with no terminator were left for the next run: a \
+             producer that flushes on a timer has not finished writing it",
+            shipped.held_back
+        );
+    }
+
     // Every reason, by name, including the zeroes: a report that prints only what
     // went wrong cannot be compared with the last one.
-    let r = ingested.report;
+    let r = shipped.ingested.report;
     println!(
         "  refused: not_an_envelope {} unknown_schema {} no_agent {} foreign_trust_domain {} \
          unknown_type {} no_run_id {} bad_time {}",
@@ -412,14 +431,24 @@ fn events(args: Vec<String>) -> ExitCode {
         r.no_run_id,
         r.bad_time
     );
-    match sealed {
+    match &shipped.sealed {
         Some(sealed) => println!(
             "sealed {} with {} record(s); manifest {}",
             sealed.segment,
             sealed.records,
             sealed.manifest_path.display()
         ),
+        None if shipped.nothing_new() => {}
         None => println!("nothing durable to seal"),
+    }
+    if shipped.cursor_written {
+        println!(
+            "cursor: byte {}, {} line(s), {} record(s), in {}",
+            shipped.cursor.bytes,
+            shipped.cursor.lines,
+            shipped.cursor.records,
+            shipped.cursor_path.display()
+        );
     }
     if r.lost() > 0 {
         // Not a failure of this command: the file was read, and what it could not

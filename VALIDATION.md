@@ -842,8 +842,132 @@ their build is older than the record.
 
 **What this is not.** One machine, one shard, four records, debug builds, and a
 file transport rather than a mail server. It measures the seam and the
-vocabulary, and nothing about throughput or scheduling: `trailryx-node events`
-still keeps no cursor, so importing the same journal twice writes it twice.
+vocabulary, and nothing about throughput or scheduling. It also, as of the day it
+was written, measured a command that kept no cursor, so importing the same
+journal twice wrote it twice; the section below is that gap being closed and
+measured, and this paragraph is left saying what was true on 6 August 2026 rather
+than edited into agreeing with the code.
+
+---
+
+### Running the same import again, and the cursor that makes that safe
+
+6 August 2026, on the machine at the bottom, debug builds throughout, APFS.
+
+**The defect, measured on `d5bf3fa` before anything was changed.** Three imports
+of one unchanged two-line heraldyx journal into one data directory:
+
+```
+=== run 1
+sent.ndjson: 2 mapped, 2 record(s) written into seg-0000000000000002 (was seg-0000000000000001), 2 payload part(s) declined
+=== run 2
+sent.ndjson: 2 mapped, 2 record(s) written into seg-0000000000000003 (was seg-0000000000000002), 2 payload part(s) declined
+=== run 3
+sent.ndjson: 2 mapped, 2 record(s) written into seg-0000000000000004 (was seg-0000000000000003), 2 payload part(s) declined
+=== read back
+3 sealed segment(s), 9 record(s)
+```
+
+Nine records for two lines, three segments, and every run reported the same
+counts, so nothing in the output distinguished the second import from the first.
+
+**After.** The journal was produced by heraldyx itself, `go build ./cmd/heraldyx`,
+run twice with `--once --from-now=false` against a growing plane event log and a
+file transport, which wrote five chained `alert_sent` records:
+
+| Run | The file | What the command did |
+|---|---|---|
+| 1 | 3 lines, 1140 bytes | `bytes 0..1140, 3 mapped, 3 record(s) written`, sealed `seg-...001` with 5 |
+| 2 | unchanged | `nothing new. The cursor is at byte 1140 of 1140 (3 line(s), 3 record(s) so far)` |
+| 3 | unchanged | the same line again, and the data directory unchanged byte for byte |
+| 4 | grown to 5 lines, 1947 bytes | `bytes 1140..1947, 2 mapped, 2 record(s) written`, sealed `seg-...002` with 3 |
+| 5 | unchanged | `nothing new. The cursor is at byte 1947 of 1947 (5 line(s), 5 record(s) so far)` |
+
+`trailryx-node read`, a separate process over the directory that left behind, and
+then the offline verifier over the pack it wrote:
+
+```
+2 sealed segment(s), 8 record(s)
+  seg-0000000000000001 5 record(s), history root d1cf1dd7726b402e
+  seg-0000000000000002 3 record(s), history root cab944dd67f347dc
+  seg-0000000000000001 answered 5 row(s), proof Full
+  seg-0000000000000002 answered 3 row(s), proof Full
+8 row(s)
+
+trailryx-verify: 8 records in 2 segments
+VERIFIED
+exit 0
+```
+
+Five dispatches and three store notes, which is one note per run that lost a
+payload part, and no line stored twice.
+
+**What one `SIGKILL` costs.** An 800-line journal whose full import takes 0.17 s,
+killed at three points across it, and then a run nobody interferes with:
+
+```
+one kill over a 800-line journal; a full import takes 0.17s
+  killed at 0.35 of the import: 1600 lines stored, 800 distinct, 0 missing, 800 stored twice
+    the run after the kill: bytes 0..256000, 800 mapped, 800 record(s) written, 800 payload part(s) declined
+  killed at 0.60 of the import: 1600 lines stored, 800 distinct, 0 missing, 800 stored twice
+    the run after the kill: bytes 0..256000, 800 mapped, 800 record(s) written, 800 payload part(s) declined
+  killed at 0.85 of the import: 1600 lines stored, 800 distinct, 0 missing, 800 stored twice
+    the run after the kill: bytes 0..256000, 800 mapped, 800 record(s) written, 800 payload part(s) declined
+```
+
+**No line is ever missing, and a killed run's whole region is stored twice.** Not
+the part it had written: the whole region, because the cursor moves once per run
+and a run that did not reach its seal moves it not at all, while the records it
+had already put on the file are recovered by the next run and kept. That is the
+cursor being behind the evidence, which is the direction the write order chooses,
+and the run that does the re-importing says `800 record(s) written` rather than
+doing it quietly. Bounding it further means committing the cursor per sealed
+batch instead of per run, which is a change to how often this command seals and
+is not made here.
+
+**Twenty kills in a row**, the pathological case, over a 2,000-line journal in one
+directory, none of the twenty runs allowed to finish before the next starts. The
+delays sweep the whole span of a full import deliberately: the first version of
+this harness used 30 to 125 ms against a 1.7 s import, every kill landed while the
+file was still being parsed, no record ever reached the journal, and it reported
+no losses while proving nothing at all. That is invariant 19 met in the harness
+written for it, and the journal size printed per round is what makes the
+difference visible rather than assumed.
+
+```
+  round  1: KILLED after 30469us       exit 137  no cursor yet            journal   462117 bytes, 0 sealed
+  round  2: KILLED after 60938us       exit 137  no cursor yet            journal   924341 bytes, 0 sealed
+  ...
+  round 19: KILLED after 438911us      exit 137  no cursor yet            journal  8803785 bytes, 0 sealed
+  round 20: KILLED after 469380us      exit 137  no cursor yet            journal  9268010 bytes, 0 sealed
+
+finishing the import with runs nobody kills
+  bytes 0..640000, 2000 mapped, 2000 record(s) written, 2000 payload part(s) declined
+  nothing new. The cursor is at byte 640000 of 640000 (2000 line(s), 2000 record(s) so far)
+  nothing new. The cursor is at byte 640000 of 640000 (2000 line(s), 2000 record(s) so far)
+
+20 kill(s), 0 run(s) that beat the kill
+lines in the journal:          2000
+distinct lines stored:         2000
+records stored:                42000
+lines stored more than once:   2000
+lines MISSING:                 0
+```
+
+Every round reached the write path, which the growing journal is the evidence for, and **not one of the twenty reached a seal**: `no cursor yet, 0 sealed`, twenty times. So each round recovered what the last one had written and added its own copy on top, and the run that finally finished added the twenty-first. Forty-two thousand records for two thousand lines, twenty-one copies of each, and **nothing missing**. That is the worst case the ordering permits and it is the right shape: too many is a number an operator can see, too few is one nobody can.
+
+**What this does not measure.** The window between the manifest's rename and the
+cursor's is a few file operations wide and no kill landed in it. It is measured
+the only way a window that narrow can be, by producing its outcome directly: the
+cursor of a run that had sealed is removed, and the next run re-imports the lines
+rather than losing them
+(`a_cursor_lost_after_its_records_were_sealed_re_imports_rather_than_losing_the_lines`).
+The opposite ordering is measured too, by writing a cursor ahead of the evidence
+by hand and watching four dispatches never reach the store with nothing saying so
+(`a_cursor_ahead_of_the_evidence_would_lose_lines_which_is_why_it_is_written_last`).
+And a `SIGKILL` is not a power cut: the kernel and its page cache survive it,
+which the *Not yet measured* section below already says about every kill run
+here.
 
 ---
 
