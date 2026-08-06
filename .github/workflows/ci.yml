@@ -27,7 +27,11 @@ name: ci
 # What the numbers actually say. The release job finished in 44 SECONDS while
 # the debug job was still on clippy, and it was never expensive: the three
 # crates it touches (`trailryx-sim`, `trailryx-verify`, `trailryx-fuzz`) have
-# ZERO third-party dependencies between them, while `trailryx-sql` has 424. The
+# ZERO third-party dependencies between them, while `trailryx-sql` carries the
+# tree the README counts, with the command that counts it beside the figure.
+# This line carried a count of its own until 6 August 2026 and that count was
+# reproducible by no reading of the tree, so it was replaced by the pointer
+# rather than by a guess at which reading it had meant. The
 # whole cost is the facade, and only the debug job builds it. There was no
 # thrash. There were four cheap checks queued behind a thirty-minute compile for
 # no reason at all, and now they are not.

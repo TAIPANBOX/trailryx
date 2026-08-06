@@ -11,12 +11,20 @@
 # with no owner, and the only way one stays true is if something refuses the push
 # when it stops being true.
 #
-# It checks four things, and each one is a claim a reader would take at face value:
+# It checks five things, and each one is a claim a reader would take at face value:
 #
 #   1. the tests badge equals what `cargo test` actually runs;
 #   2. every crate row's count equals that crate's own suite;
 #   3. the rows sum to the total, so the table is checkable at a glance;
-#   4. the stage badge is not behind the roadmap.
+#   4. the stage badge is not behind the roadmap;
+#   5. no other file in the tree states a dependency count of its own.
+#
+# The fifth arrived on 6 August 2026 and is the one that reaches outside this page.
+# The doc comment on `trailryx-sql` had said "two hundred and forty-three" since the
+# day the dependencies landed, while the README, corrected within hours of the same
+# mistake by the commit that added this script, said 294 and 297. One of the two had
+# a gate. That is the whole difference, and it is invariant 16 exactly: if two places
+# need one value, it is exported from one of them, and here the README is the one.
 #
 # It does not check prose. Prose needs a reader; numbers need a script.
 
@@ -25,6 +33,7 @@ cd "$(git rev-parse --show-toplevel)" || exit 1
 
 readme="README.md"
 problems=0
+unmeasured=0
 
 note() {
   printf '%s\n' "$1"
@@ -32,10 +41,18 @@ note() {
 }
 
 # Total, from the suite itself rather than from anything that quotes it.
-total=$(cargo test --workspace --quiet 2>/dev/null |
-  grep -E '^test result' | awk '{s += $4} END {print s + 0}')
-if [ "$total" -eq 0 ]; then
-  note "the suite reported no tests at all, which means this check measured nothing"
+#
+# The exit status is read, and this is not defensive programming for its own sake: a
+# run that is blocked on another process's build lock, or that dies partway, prints
+# the results it did reach and nothing about the ones it did not. On 6 August 2026
+# that produced "the badge says 1066 tests and the suite runs 51" and refused a push
+# over a drift that did not exist, because the only guard here was against a total of
+# exactly zero. A partial count is worse than no count: it looks like a measurement.
+suite=$(cargo test --workspace --quiet 2>/dev/null)
+suite_status=$?
+total=$(printf '%s\n' "$suite" | grep -E '^test result' | awk '{s += $4} END {print s + 0}')
+if [ "$suite_status" -ne 0 ] || [ "$total" -eq 0 ]; then
+  note "the suite did not finish (cargo exited $suite_status, $total tests seen), so nothing here was compared against it"
   exit 1
 fi
 
@@ -56,15 +73,30 @@ while IFS= read -r line; do
   [ -n "$crate" ] || continue
   # A crate whose row says "-" has no suite of its own by design.
   [ "$stated" != "-" ] || continue
-  actual=$(cargo test -p "$crate" --quiet 2>/dev/null |
+  # Same reason as the total above: a crate whose run never completed has not been
+  # measured, and saying so is the only honest answer. Reporting its row as drifted
+  # would send somebody to edit a number that was right.
+  crate_out=$(cargo test -p "$crate" --quiet 2>/dev/null)
+  crate_status=$?
+  actual=$(printf '%s\n' "$crate_out" |
     grep -E '^test result' | awk '{s += $4} END {print s + 0}')
+  if [ "$crate_status" -ne 0 ]; then
+    note "$crate: its suite did not finish (cargo exited $crate_status), so its row was not checked"
+    unmeasured=1
+    continue
+  fi
   sum=$((sum + actual))
   [ "$stated" = "$actual" ] ||
     note "$crate: the table says $stated tests and the crate runs $actual"
 done < <(grep '^| `trailryx-' "$readme")
 
-[ "$sum" -eq "$total" ] ||
-  note "the table's rows sum to $sum and the workspace runs $total"
+# Only meaningful when every row was actually measured: a crate whose run never
+# finished contributes nothing to the sum, and a sum short by that crate would read
+# as a drifted table rather than as a run that did not happen.
+if [ "$unmeasured" -eq 0 ]; then
+  [ "$sum" -eq "$total" ] ||
+    note "the table's rows sum to $sum and the workspace runs $total"
+fi
 
 # The dependency figure behind the SQL facade. It is the number the whole
 # zero-dependency argument is spent against, and it is the one that moved twice in a
@@ -89,6 +121,98 @@ else
   # Said out loud rather than passed silently: a check that cannot run is not a
   # check that passed.
   printf 'skipped the dependency count: cargo tree could not resolve offline\n'
+fi
+
+# The same figure, everywhere else in the tree it is written down.
+#
+# The check above gives the README an owner. This one gives every copy of it one,
+# because the copies are where it actually rotted: `SECURITY.md`, `CONTRIBUTING.md`,
+# `VALIDATION.md` and a CI comment all state it, and a doc comment stated it wrongly
+# for six days while every gate stayed green.
+#
+# It runs on text this repository tracks, not only on markdown, because the fourth
+# copy was in `.github/workflows/ci.yml`. The allowed figures come from the README
+# and nowhere else, so a change to the tree moves one number, in one file, and every
+# other copy is refused until it follows.
+#
+# Two things it does deliberately narrowly, both learned by running it.
+#
+# It looks only where a phrase NAMES this count: "third-party crates", "third-party
+# dependencies", "transitive crates", "transitive dependencies". Wider wording was
+# tried first, "dependency count" and "dependency tree" among it, and it swept up the
+# durability sweep's seeds and the fuzzer's cases per target out of paragraphs that
+# mention dependencies only in passing. A check that cries wolf has its trigger
+# widened by the next person it wakes, which is how a gate becomes a `|| true`.
+#
+# Numbers are whole tokens, and a comma inside one joins rather than splits. An
+# identifier with digits in it (`SHA256SUMS` in the Dockerfile is the one that made
+# this necessary) is a word, and a figure written with a thousands separator is one
+# number rather than two, the second of which is three digits long and looks briefly
+# like a count of crates.
+readme_mac=$(grep -o 'and \*\*[0-9]*\*\* on macOS' "$readme" | grep -o '[0-9]*')
+readme_lin=$(grep -o '\*\*[0-9]* third-party crates\*\*' "$readme" | grep -o '[0-9]*')
+readme_ships=$(grep -oE '[0-9]+ of the [0-9]+ are what actually ships' "$readme" |
+  grep -oE '^[0-9]+')
+
+if [ -z "$readme_mac" ] || [ -z "$readme_lin" ] || [ -z "$readme_ships" ]; then
+  # The allowed set is read out of the README, so an unreadable README would make
+  # every copy look wrong. Refuse rather than report a hundred false failures.
+  note "could not read the dependency figures out of $readme, so the copies were not checked"
+else
+  # A figure that is NOT the current count, and may appear anyway. Each entry is a
+  # file, a number and a reason, and the reason is re-derived below rather than
+  # believed: `history` requires the paragraph carrying the number to carry a year
+  # as well, so a sentence that stops saying when it was true stops being exempt.
+  # This is invariant 24's rule, applied to a second kind of silence. An entry whose
+  # reason is not re-derivable fails the gate, and so does a number with no entry.
+  exceptions="crates/trailryx-sql/src/lib.rs 243 history"
+
+  while IFS= read -r f; do
+    [ "$f" = "$readme" ] && continue
+    [ -f "$f" ] || continue
+    file "$f" | grep -q text || continue
+
+    # Paragraphs, except that a table row is its own paragraph: a row about the
+    # dependency count sits in the same block as rows about seeds and cases, and
+    # those numbers have nothing to do with this one.
+    found=$(awk '{ if (/^\|/) print "\n" $0 "\n"; else print }' "$f" |
+      awk -v RS='' -v allow="$readme_mac $readme_lin $readme_ships" '
+        tolower($0) ~ /third-party crates|third-party dependenc|transitive crates|transitive dependenc/ {
+          para = $0
+          year = (para ~ /(19|20)[0-9][0-9]/) ? "dated" : "undated"
+          body = para
+          gsub(/,/, "", body)
+          n = split(body, tok, /[^0-9A-Za-z]+/)
+          for (i = 1; i <= n; i++) {
+            if (tok[i] !~ /^[0-9][0-9][0-9]$/) continue
+            ok = 0
+            split(allow, a, " ")
+            for (j in a) if (a[j] == tok[i]) ok = 1
+            if (!ok) print tok[i] " " year
+          }
+        }' | sort -u)
+
+    [ -n "$found" ] || continue
+    while read -r number dated; do
+      [ -n "$number" ] || continue
+      reason=$(printf '%s\n' "$exceptions" |
+        awk -v f="$f" -v n="$number" '$1 == f && $2 == n { print $3 }')
+      case "$reason" in
+        history)
+          [ "$dated" = "dated" ] ||
+            note "$f: $number is allowed as history and the paragraph holding it no longer says when, so the reason cannot be re-derived"
+          ;;
+        "")
+          note "$f: $number is a dependency count the README does not state (it states $readme_mac on macOS, $readme_lin on Linux, $readme_ships shipping)"
+          ;;
+        *)
+          note "$f: $number is exempted for the reason \"$reason\", which this check does not know how to re-derive"
+          ;;
+      esac
+    done <<EOF
+$found
+EOF
+  done < <(git ls-files)
 fi
 
 # The image tag the README tells people to pull, against the version this
