@@ -324,7 +324,7 @@ fn a_stream_with_optional_headers_still_decodes() {
         println!("skipped: no gzip on PATH");
         return;
     };
-    let dir = std::env::temp_dir().join("trailryx-gzip-name");
+    let dir = std::env::temp_dir().join(format!("trailryx-gzip-name-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     let path = dir.join("a-name-worth-storing.bin");
     std::fs::write(&path, b"contents").unwrap();

@@ -41,7 +41,7 @@ fn somebody_elses_reader_agrees_with_every_cell() {
     let projection = project(&[&s]).unwrap();
     let columns = project_columns(&[&s]);
 
-    let dir = std::env::temp_dir().join("trailryx-oracle");
+    let dir = std::env::temp_dir().join(format!("trailryx-oracle-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     let parquet = dir.join("projection.parquet");
     let expected = dir.join("expected.tsv");
@@ -122,7 +122,7 @@ fn pyarrow_agrees_about_lists_with_empties_at_every_position() {
     ];
 
     let bytes = trailryx_projection::parquet::write(&columns).expect("the file writes");
-    let dir = std::env::temp_dir().join("trailryx-oracle-lists");
+    let dir = std::env::temp_dir().join(format!("trailryx-oracle-lists-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     let parquet = dir.join("lists.parquet");
     let expected = dir.join("expected.tsv");

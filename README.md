@@ -1847,10 +1847,11 @@ first number is only evidence because the second one exists.
 git config core.hooksPath .githooks   # once
 ```
 
-`.githooks/pre-push` runs seventeen checks and refuses the push if any fails:
+`.githooks/pre-push` runs eighteen checks and refuses the push if any fails:
 formatting, clippy with warnings as errors, the tests, a standalone build of the
 substrate crate, a zero-dependency check on every crate outside the SQL facade, a
-build and test of the core with the facade absent, an `unsafe` check, every field of
+build and test of the core with the facade absent, an `unsafe` check, every temp path
+a test builds, every field of
 every configuration struct against the code meant to read it, the determinism
 criterion, the published seed corpus, the two verifiers agreeing on the same packs, a
 reproducible build of the verifier from two different paths, the TLS build of the HTTP
@@ -1881,7 +1882,7 @@ file may now state a dependency count of its own, and a sentence recording what 
 figure used to be has to be declared as history and say when, the same way a silenced
 advisory has to carry a reason that is re-derived rather than remembered.
 
-`.github/workflows/ci.yml` runs the same seventeen, so a green push
+`.github/workflows/ci.yml` runs the same eighteen, so a green push
 is a green pull request. The advisory check was CI-only until 4 August 2026, and
 that gap cost exactly what a gap like that costs: fifteen green checks on a laptop
 and a red gate on the runner. It is one file now, `scripts/audit.sh`, and the half

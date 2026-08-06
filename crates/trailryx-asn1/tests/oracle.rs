@@ -116,7 +116,7 @@ fn this_reader_accepts_what_openssl_emits() {
     if !have("openssl", &["version"]) {
         return skip("reading OpenSSL's own DER", "openssl");
     }
-    let dir = std::env::temp_dir().join("trailryx-asn1-oracle");
+    let dir = std::env::temp_dir().join(format!("trailryx-asn1-oracle-{}", std::process::id()));
     let _ = std::fs::create_dir_all(&dir);
     let conf = dir.join("gen.cnf");
     let der = dir.join("gen.der");

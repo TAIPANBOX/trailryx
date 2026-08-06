@@ -302,7 +302,7 @@ use trailryx_sql::{QueryError, Session};
 /// a `Session` refuses before the engine is asked.
 #[tokio::test]
 async fn a_session_cannot_be_talked_into_reading_a_local_file() {
-    let dir = std::env::temp_dir().join("trailryx-sql-gate");
+    let dir = std::env::temp_dir().join(format!("trailryx-sql-gate-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     let secret = dir.join("secret.csv");
     std::fs::write(&secret, "a,b\n1,hunter2\n").unwrap();

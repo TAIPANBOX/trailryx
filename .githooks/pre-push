@@ -101,6 +101,13 @@ step "core builds without adapters" \
 # No unsafe, in one file this hook and CI both call.
 step "no unsafe" ./scripts/no-unsafe.sh
 
+# No fixture builds a temp path a second process would build too. This is here
+# because of what it costs when it is not: two pushes refused by a panic that named a
+# missing file and not the run that had removed it, and an hour spent on a test that
+# was correct. `$TMPDIR` is shared by every process one user runs, so a fixture named
+# after itself and nothing else is a fixture two runs share.
+say "temp paths are per process" ./scripts/temp-paths.sh
+
 # Every field of every configuration struct, against the code meant to read it. A
 # bound that nothing reads is worse than an absent one: the reason written beside it
 # reads as a mitigation somebody has already applied, and the sentence is what gets

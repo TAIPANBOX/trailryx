@@ -230,7 +230,8 @@ else:
 /// is allowed to be skipped. Anything else the interpreter says is a failure.
 fn oracle(check: &str) -> Option<String> {
     let json = spec::encode_json(&spec::fixture());
-    let dir = std::env::temp_dir().join("trailryx-otlp-json-oracle");
+    let dir =
+        std::env::temp_dir().join(format!("trailryx-otlp-json-oracle-{}", std::process::id()));
     std::fs::create_dir_all(&dir).expect("a scratch directory");
     // Per check and per process, because `cargo test` runs these in parallel and
     // two of them writing one path would race.
