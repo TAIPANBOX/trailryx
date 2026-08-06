@@ -1847,6 +1847,11 @@ first number is only evidence because the second one exists.
 git config core.hooksPath .githooks   # once
 ```
 
+Relative on purpose: it then resolves inside whichever worktree git runs in. If you
+use `git worktree`, `git config --worktree --get core.hooksPath` should answer with
+nothing, and `git config --worktree --unset core.hooksPath` if it does not. An
+absolute value there runs a different checkout's hook against your tree.
+
 `.githooks/pre-push` runs nineteen checks and refuses the push if any fails:
 formatting, clippy with warnings as errors, the tests, a standalone build of the
 substrate crate, a zero-dependency check on every crate outside the SQL facade, a

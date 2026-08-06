@@ -53,6 +53,36 @@ say() {
 
 echo "pre-push gate"
 
+# Before a single check: is this the hook belonging to the worktree being pushed?
+#
+# `core.hooksPath` can be overridden per worktree with an absolute path into another
+# checkout, and then this file comes from one commit while every script it calls comes
+# from another, because of the `cd` above. `scripts/hooks-path.sh` says what that
+# costs and prints the one command that repairs it.
+#
+# Not a `step`: it checks the gate rather than the code, it has to answer before the
+# expensive checks start, and CI has no hooks for it to ask about. So it is not one of
+# the checks `scripts/gate-count.sh` counts, and the two counts stay equal.
+if [ -x ./scripts/hooks-path.sh ]; then
+  if ! why=$(./scripts/hooks-path.sh "$0" 2>&1); then
+    printf '%s\n' "$why"
+    echo
+    echo "pre-push: refused before running a single check."
+    exit 1
+  fi
+else
+  # The same fault seen from its other side. This hook calls a script this worktree
+  # does not have, so the hook is not from the commit being pushed.
+  printf 'this hook is %s\n' "$0"
+  printf 'and this worktree has no scripts/hooks-path.sh for it to call, so the hook\n'
+  printf 'and the tree it is checking are from different commits.\n'
+  printf '\n'
+  printf '  git config --worktree --unset core.hooksPath\n'
+  echo
+  echo "pre-push: refused before running a single check."
+  exit 1
+fi
+
 # Formatting and lints. Warnings are failures: a warning nobody fixes is a
 # warning everybody stops reading.
 step "cargo fmt --check" cargo fmt --all --check
