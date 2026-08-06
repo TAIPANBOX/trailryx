@@ -1,7 +1,9 @@
 name: ci
 
-# The same eighteen checks `.githooks/pre-push` runs, so a green push is a green pull
-# request and neither can drift from the other.
+# The same checks `.githooks/pre-push` runs, so a green push is a green pull request
+# and neither can drift from the other. How many that is, `scripts/gate-count.sh`
+# counts on both sides and refuses a push when the two disagree; the README is where
+# the number is written for a reader.
 #
 # THE GUARD ON `if:` STAYS, and it is not decoration. Actions minutes are metered on
 # a private repository and free on a public one. This file was written while the
@@ -140,6 +142,11 @@ jobs:
       # jobs of one workspace can end up side by side.
       - name: temp paths are per process
         run: ./scripts/temp-paths.sh
+
+      # This file and the hook must run the same number of checks, and this is the
+      # step that says so. It counts both sides rather than trusting either header.
+      - name: the gate's own count
+        run: ./scripts/gate-count.sh
 
       # A limit nothing reads is worse than no limit, because the paragraph beside it
       # reads as a mitigation already applied. `Config::max_connections` on the SQL
