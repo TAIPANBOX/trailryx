@@ -42,10 +42,12 @@
 //! live in the data directory. That is a smaller claim than "a database", and it
 //! is the one this process can keep.
 
+pub mod cursor;
 pub mod events;
 pub mod plane;
 pub mod reader;
 
-pub use events::{Ingested, ingest_bytes, ingest_file};
+pub use cursor::{Cursor, Remembered, Resume};
+pub use events::{Ingested, Ship, Shipped, ingest_bytes, ingest_file, ship};
 pub use plane::{Accepted, Opened, Plane, PlaneError, SealPolicy, Sealed};
 pub use reader::{ReadError, Sealed as SealedSegments};
