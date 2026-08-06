@@ -16,6 +16,21 @@ git config core.hooksPath .githooks   # once
 cargo test
 ```
 
+That value is relative on purpose, so it resolves inside whichever worktree git is
+running in and one setting is right for all of them. **If you work in `git worktree`s,
+check that nothing set an absolute one behind your back**, which some tooling does when
+it creates a worktree:
+
+```bash
+git config --worktree --get core.hooksPath   # expect nothing
+git config --worktree --unset core.hooksPath # if it answered with a path
+```
+
+An absolute value runs another checkout's hook against your tree, so the list of
+checks and the checks themselves come from different commits. The hook now refuses
+when it notices, and it can only notice from the version that carries the check;
+`scripts/hooks-path.sh` says what that does and does not cover.
+
 There is nothing to install beyond a Rust toolchain. Every crate except
 `trailryx-sql` has **no third-party dependencies in the verifier or the core** and the gate enforces it, so a
 pull request that adds one outside the facade needs to argue for it in the description
