@@ -230,14 +230,21 @@ else:
 /// is allowed to be skipped. Anything else the interpreter says is a failure.
 fn oracle(check: &str) -> Option<String> {
     let json = spec::encode_json(&spec::fixture());
-    let dir =
-        std::env::temp_dir().join(format!("trailryx-otlp-json-oracle-{}", std::process::id()));
+    // Per check as well as per process, and both halves are load-bearing. The process
+    // id keeps two concurrent runs of this binary apart, which is invariant 29. The
+    // check name keeps the eight parallel test threads within one run apart, and that
+    // is what lets the wipes below take the whole directory: wiping a directory the
+    // other seven threads were sharing would put the same bug back one level down.
+    //
+    // Both used to sit in the file names instead, under a directory nothing ever
+    // deleted, so every run left its scratch behind for good.
+    let dir = std::env::temp_dir().join(format!(
+        "trailryx-otlp-json-oracle-{}-{check}",
+        std::process::id()
+    ));
     std::fs::create_dir_all(&dir).expect("a scratch directory");
-    // Per check and per process, because `cargo test` runs these in parallel and
-    // two of them writing one path would race.
-    let stem = format!("{check}-{}", std::process::id());
-    let compact = dir.join(format!("{stem}.json"));
-    let pretty = dir.join(format!("{stem}.pretty.json"));
+    let compact = dir.join("fixture.json");
+    let pretty = dir.join("fixture.pretty.json");
     std::fs::write(&compact, &json).expect("the fixture should be writable");
     std::fs::write(&pretty, jsonenc::pretty(&json)).expect("the fixture should be writable");
 
@@ -256,6 +263,9 @@ fn oracle(check: &str) -> Option<String> {
                 "skipped: no {python} on this machine, so the OTLP/JSON fixture was not \
                  checked against a parser we did not write. Set TRAILRYX_PYTHON to one."
             );
+            // A machine with no interpreter must not accumulate scratch either, and
+            // this is the exit that would do it on every run.
+            let _ = std::fs::remove_dir_all(&dir);
             return None;
         }
         Err(e) => panic!("{python} would not run: {e}"),
@@ -263,11 +273,17 @@ fn oracle(check: &str) -> Option<String> {
 
     let stdout = String::from_utf8_lossy(&output.stdout);
     let stderr = String::from_utf8_lossy(&output.stderr);
+    // Deliberately above the wipe and not below it. This assertion names the file, and
+    // a failure here is somebody being told to go and read it: a message pointing at a
+    // path that was deleted on the way out is worse than no path at all. So the
+    // scratch survives a failure on purpose, and is cleaned up only when the check
+    // passed and there is nothing left to look at.
     assert!(
         output.status.success(),
         "the {check} check failed against {}:\n{stdout}\n{stderr}",
         compact.display()
     );
+    let _ = std::fs::remove_dir_all(&dir);
     Some(stdout.into_owned())
 }
 
