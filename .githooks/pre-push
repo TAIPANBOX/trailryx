@@ -15,6 +15,51 @@ set -uo pipefail
 
 cd "$(git rev-parse --show-toplevel)" || exit 1
 
+# FIRST, before even deciding whether there is anything to do: is this the hook
+# belonging to the worktree being pushed?
+#
+# `core.hooksPath` can be overridden per worktree with an absolute path into another
+# checkout, and then this file comes from one commit while every script it calls comes
+# from another, because of the `cd` above. `scripts/hooks-path.sh` says what that costs
+# and prints the one command that repairs it.
+#
+# THE ORDER HERE IS LOAD-BEARING and the deletion shortcut below must not move above
+# it. Two reasons, and the second is the one that makes it correctness rather than
+# courtesy:
+#
+#   1. Deleting branches is when somebody is moving between worktrees, which is exactly
+#      when a stale absolute `core.hooksPath` is most likely to be in force. Skipping
+#      first would make that the one push where they never hear about it, and the fault
+#      is silent by construction, which is the whole of invariant 30.
+#   2. The decision to skip is made BY the hook whose provenance is in question. An
+#      unverified hook's idea of what counts as a deletion is itself unverified: it may
+#      be older than the block below, or newer, or wrong. Asking "have I anything to
+#      do" before "am I the right file to be asking" takes the answer from the file
+#      under suspicion.
+#
+# Not a `step`: it checks the gate rather than the code, it has to answer before the
+# expensive checks start, and CI has no hooks for it to ask about. So it is not one of
+# the checks `scripts/gate-count.sh` counts, and the two counts stay equal.
+if [ -x ./scripts/hooks-path.sh ]; then
+  if ! why=$(./scripts/hooks-path.sh "$0" 2>&1); then
+    printf '%s\n' "$why"
+    echo
+    echo "pre-push: refused before running a single check."
+    exit 1
+  fi
+else
+  # The same fault seen from its other side. This hook calls a script this worktree
+  # does not have, so the hook is not from the commit being pushed.
+  printf 'this hook is %s\n' "$0"
+  printf 'and this worktree has no scripts/hooks-path.sh for it to call, so the hook\n'
+  printf 'and the tree it is checking are from different commits.\n'
+  printf '\n'
+  printf '  git config --worktree --unset core.hooksPath\n'
+  echo
+  echo "pre-push: refused before running a single check."
+  exit 1
+fi
+
 # A push that only deletes refs has nothing to check, and checking it anyway is not
 # free. Measured on 6 August 2026 while removing four merged branches: `git push
 # --delete` ran the entire gate, the first one was abandoned after five minutes, and
@@ -115,36 +160,6 @@ say() {
 }
 
 echo "pre-push gate"
-
-# Before a single check: is this the hook belonging to the worktree being pushed?
-#
-# `core.hooksPath` can be overridden per worktree with an absolute path into another
-# checkout, and then this file comes from one commit while every script it calls comes
-# from another, because of the `cd` above. `scripts/hooks-path.sh` says what that
-# costs and prints the one command that repairs it.
-#
-# Not a `step`: it checks the gate rather than the code, it has to answer before the
-# expensive checks start, and CI has no hooks for it to ask about. So it is not one of
-# the checks `scripts/gate-count.sh` counts, and the two counts stay equal.
-if [ -x ./scripts/hooks-path.sh ]; then
-  if ! why=$(./scripts/hooks-path.sh "$0" 2>&1); then
-    printf '%s\n' "$why"
-    echo
-    echo "pre-push: refused before running a single check."
-    exit 1
-  fi
-else
-  # The same fault seen from its other side. This hook calls a script this worktree
-  # does not have, so the hook is not from the commit being pushed.
-  printf 'this hook is %s\n' "$0"
-  printf 'and this worktree has no scripts/hooks-path.sh for it to call, so the hook\n'
-  printf 'and the tree it is checking are from different commits.\n'
-  printf '\n'
-  printf '  git config --worktree --unset core.hooksPath\n'
-  echo
-  echo "pre-push: refused before running a single check."
-  exit 1
-fi
 
 # Formatting and lints. Warnings are failures: a warning nobody fixes is a
 # warning everybody stops reading.
