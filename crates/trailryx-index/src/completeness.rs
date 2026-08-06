@@ -169,6 +169,14 @@ impl Dimension {
     }
 }
 
+/// The index key for an event type, which must be the journal's own discriminant.
+///
+/// The same byte, and not merely a byte with the same ordering: `trailryx-verify`
+/// reads `event_type` straight out of the record as one opaque byte and uses it as
+/// the index key, so if this function and `trailryx_journal::wire` ever disagreed,
+/// the offline verifier would rebuild a different index from the same records and
+/// condemn a pack that was correct. That is the strongest reason a new code is
+/// appended in both places at once and never renumbered in either.
 fn event_code(e: EventType) -> u8 {
     match e {
         EventType::RequestReceived => 1,
@@ -181,6 +189,7 @@ fn event_code(e: EventType) -> u8 {
         EventType::RunCompleted => 8,
         EventType::Erasure => 9,
         EventType::StoreEvent => 10,
+        EventType::NotificationDispatched => 11,
     }
 }
 

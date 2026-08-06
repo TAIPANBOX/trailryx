@@ -53,9 +53,32 @@
 //! `evidence_signed`, `eval_run`, `quality_score`, `quality_drift`, `sim_run`,
 //! `sim_finding`, `blast_radius_measured` and `console_command`. Each is a
 //! finding or an observation about infrastructure rather than a decision an agent
-//! took, and the ten event types are decisions. Extending the table means either
-//! a new event type, which is a format version and an owner's decision, or
-//! mapping a finding onto a decision, which is the thing this paragraph refuses.
+//! took, and ten of the eleven event types are decisions.
+//!
+//! # The one that got a type of its own, and what that cost
+//!
+//! `alert_sent` is heraldyx saying it mailed a person about a run. It is not a
+//! decision either, and it was refused here until 6 August 2026 for exactly that
+//! reason. What made it different from the fourteen above is that it is not a
+//! finding about infrastructure: it is an event in the run's own history, with a
+//! subject, a time and an auditor's question attached to it ("when was this
+//! escalated, and to whom"), and no other event type can answer that question
+//! without saying something untrue about what happened. So the owner took the
+//! other way out of the two this paragraph used to name, and the record
+//! vocabulary grew an eleventh type,
+//! [`trailryx_record::EventType::NotificationDispatched`].
+//!
+//! That paragraph also used to say the new type would be a format version under
+//! invariant 7. It is not, and the difference was worth measuring rather than
+//! assuming: invariant 7 forbids **redefining a field in place**, and an appended
+//! discriminant redefines nothing. Every code ever written still decodes to the
+//! name it was written as, and a build older than the eleventh code refuses it by
+//! name instead of reading it as something else. The reasoning and the runs are in
+//! the pull request that added it.
+//!
+//! Extending the table further still means one of the same two things, and the
+//! second is still refused here: a new event type, which is the owner's decision,
+//! or mapping a finding onto a decision, which is not.
 
 pub mod time;
 
@@ -71,11 +94,18 @@ use trailryx_record::{
 
 /// Which reading of the registry produced a record.
 ///
-/// One, and it will move when the table below does. The registry is documented
-/// as growing within a source without a schema bump, so a record has to say which
-/// reading of it was in force when the record was written, exactly as an
-/// OTLP-sourced record says which reading of the GenAI conventions was.
-pub const MAPPER_VERSION: MapperVersion = MapperVersion(101);
+/// It moves when the table below does. The registry is documented as growing
+/// within a source without a schema bump, so a record has to say which reading of
+/// it was in force when the record was written, exactly as an OTLP-sourced record
+/// says which reading of the GenAI conventions was.
+///
+/// 102 is the reading that maps `alert_sent`. Records written by 101 are not
+/// wrong and are not migrated: they were produced by a reader that had no event
+/// type for a dispatched notification, so a line it refused stayed a counted
+/// refusal rather than becoming a record, and this field is how somebody reading
+/// the store years from now can tell that apart from a run in which nothing was
+/// dispatched.
+pub const MAPPER_VERSION: MapperVersion = MapperVersion(102);
 
 /// The schema values this reader accepts.
 ///
@@ -328,6 +358,25 @@ fn mapping_for(kind: &str) -> Option<Mapping> {
         "memory_written" | "memory_forgotten" | "reflection_run" | "contradiction_found" => {
             m(EventType::MemoryAccess, None, None, Severity::Info)
         }
+        // A notification left for a person. No verdict and no error, and both are
+        // deliberate rather than unfinished: heraldyx's `data` carries an
+        // `outcome` member reading "accepted" or "refused", and reading either
+        // into a typed field would be this store asserting a producer's free-form
+        // member as a decision it stands behind. `data` is not read here, by the
+        // rule at the top of this file, and the recipients in `data.to` are the
+        // reason that rule is not negotiable: they are personal data, and the
+        // metadata plane is the one erasure cannot reach.
+        //
+        // Info rather than a warning band. A notification is a thing that
+        // happened, not a signal about anything; the severity of what it was
+        // about belongs to the event it was about, which is already in the store
+        // under its own type.
+        "alert_sent" => m(
+            EventType::NotificationDispatched,
+            None,
+            None,
+            Severity::Info,
+        ),
         _ => None,
     }
 }

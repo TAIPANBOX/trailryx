@@ -332,11 +332,18 @@ macro_rules! disc {
     };
 }
 
+// A code is assigned once and never moved. A new variant takes the next unused
+// number and nothing above it changes, which is why `SigAlg::Es384` is 4 rather
+// than sitting beside `Es256`, and why `NotificationDispatched` is 11 rather than
+// beside the decisions it is not one of. Renumbering would redefine a field in
+// place, which invariant 7 forbids; appending leaves every record ever written
+// decoding to exactly what it was written as, and leaves a build that predates
+// the new code refusing it by name rather than reading it as something else.
 disc!(event_type, EventType, "event_type",
     EventType::RequestReceived => 1, EventType::ModelCall => 2, EventType::ToolCall => 3,
     EventType::PolicyDecision => 4, EventType::BudgetCheck => 5, EventType::MemoryAccess => 6,
     EventType::Delegation => 7, EventType::RunCompleted => 8, EventType::Erasure => 9,
-    EventType::StoreEvent => 10,
+    EventType::StoreEvent => 10, EventType::NotificationDispatched => 11,
 );
 
 disc!(severity, Severity, "severity",

@@ -7,7 +7,7 @@
 ![Stage](https://img.shields.io/badge/stage-13%20of%2013-blue.svg)
 ![Core](https://img.shields.io/badge/core-frozen-success.svg)
 ![Rust](https://img.shields.io/badge/rust-1.85%2B-orange.svg)
-![Tests](https://img.shields.io/badge/tests-1094-success.svg)
+![Tests](https://img.shields.io/badge/tests-1101-success.svg)
 ![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)
 ![Dependencies](https://img.shields.io/badge/deps-0%20in%20the%20verifier-success.svg)
 ![Unsafe](https://img.shields.io/badge/unsafe-forbidden-success.svg)
@@ -278,11 +278,11 @@ migration. What stage 13 still wants is measured absence rather than a guess, an
 | Crate | What it is | Tests |
 |---|---|---|
 | `trailryx-sim` | injectable clock, rng, io and bus; a crash model and fault injection | 18 |
-| `trailryx-record` | the canonical record, its schema, and the plane boundary | 27 |
+| `trailryx-record` | the canonical record, its schema, and the plane boundary | 28 |
 | `trailryx-crypto` | SHA-384 and the hash chain | 22 |
 | `trailryx-core` | the simulated store the determinism criterion runs against | 15 |
 | `trailryx-contracts` | eight adapter traits and a conformance suite | 26 |
-| `trailryx-journal` | wire format, append-only write path, recovery | 29 |
+| `trailryx-journal` | wire format, append-only write path, recovery | 30 |
 | `trailryx-index` | Merkle history tree, completeness proofs, segment composition | 58 |
 | `trailryx-store` | sealing, the read surface, causal reconstruction, hot and cold tiering | 88 |
 | `trailryx-json` | a strict bounded RFC 8259 reader and a JSON Lines framer. Depends on nothing | 116 |
@@ -296,7 +296,7 @@ migration. What stage 13 still wants is measured absence rather than a guess, an
 | `trailryx-s3` | SigV4, S3 and Google Cloud Storage over that client. No cloud SDK | 35 |
 | `trailryx-azure` | Azure Blob Storage: Shared Key signing, and the four operations | 18 |
 | `trailryx-federation` | composing an answer across environments, refusing to call it complete when it is not, and verifying a peer's chain before adopting its records | 18 |
-| `trailryx-federation-grpc` | that composition over the wire: gRPC with mutual TLS, and a peer named by its certificate rather than by what it sent | 18 |
+| `trailryx-federation-grpc` | that composition over the wire: gRPC with mutual TLS, and a peer named by its certificate rather than by what it sent | 19 |
 | `trailryx-fuzz` | every hand-written parser, fed bytes it did not expect, from a seed | 5 |
 | `trailryx-publish` | atomic publication of a sealed segment, and the fault model for it | 11 |
 | `trailryx-crypto-aws` | the validated cipher and ML-KEM, behind the erasure seam. The one adapter with a dependency | 7 |
@@ -304,9 +304,9 @@ migration. What stage 13 still wants is measured absence rather than a guess, an
 | `trailryx-anchor` | RFC 3161 timestamping: TSP, the CMS subset, and RSA over Montgomery arithmetic | 52 |
 | `trailryx-ingest` | the OTLP/HTTP server: HTTP/1.1, gzip, bearer auth, all hand-written | 119 |
 | `trailryx-compliance` | a versioned map from what is proved to what a framework asks, and what it does not | 12 |
-| `trailryx-sql` | the SQL facade: DataFusion and the Postgres wire protocol, predicates pushed into the index, statements gated, reads authorised, connections bounded, four dialect extensions | 63 |
-| `trailryx-agentevent` | the estate's shared agent-event envelope, mapped into records: the same `agent://` grammar, the same run and delegation chain | 15 |
-| `trailryx-node` | the record plane as one process: ingest, journal, sealing on a schedule, and a reader that rebuilds a segment from the journal | 9 |
+| `trailryx-sql` | the SQL facade: DataFusion and the Postgres wire protocol, predicates pushed into the index, statements gated, reads authorised, connections bounded, four dialect extensions | 64 |
+| `trailryx-agentevent` | the estate's shared agent-event envelope, mapped into records: the same `agent://` grammar, the same run and delegation chain | 17 |
+| `trailryx-node` | the record plane as one process: ingest, journal, sealing on a schedule, and a reader that rebuilds a segment from the journal | 10 |
 | `trailryx-demo` | the eight acceptance steps, and a reader for a collector's file | - |
 
 **The verifier and the core have no third-party dependencies.** `unsafe` forbidden
@@ -535,7 +535,7 @@ not repeated here: a number written twice is a number that will disagree with it
 ## Try it
 
 ```bash
-cargo test                                    # 1094 tests
+cargo test                                    # 1101 tests
 cargo run --bin trailryx-sim-run -- --help
 ```
 
