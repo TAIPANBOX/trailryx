@@ -138,6 +138,11 @@ step "no unsafe" ./scripts/no-unsafe.sh
 # after itself and nothing else is a fixture two runs share.
 say "temp paths are per process" ./scripts/temp-paths.sh
 
+# The debt the check above took on. A constant path nothing deletes is one stale
+# directory; the same path with a process id in it is a new one on every run, and the
+# worst of them held a private key per fixture per run.
+say "scratch paths are cleaned up" ./scripts/scratch-cleanup.sh
+
 # How many checks this file runs, against how many CI runs, and against the one place
 # a reader is told. The header above promises a green push is a green pull request and
 # nothing counted the two sides until now. It also holds the number in prose down to

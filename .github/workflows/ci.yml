@@ -143,6 +143,11 @@ jobs:
       - name: temp paths are per process
         run: ./scripts/temp-paths.sh
 
+      # The debt the check above took on: a per-process path that nothing removes is
+      # a new directory on every run rather than one stale one.
+      - name: scratch paths are cleaned up
+        run: ./scripts/scratch-cleanup.sh
+
       # This file and the hook must run the same number of checks, and this is the
       # step that says so. It counts both sides rather than trusting either header.
       - name: the gate's own count
