@@ -120,6 +120,7 @@ fn event_type_to_wire(v: EventType) -> pb::EventType {
         EventType::RunCompleted => pb::EventType::RunCompleted,
         EventType::Erasure => pb::EventType::Erasure,
         EventType::StoreEvent => pb::EventType::StoreEvent,
+        EventType::NotificationDispatched => pb::EventType::NotificationDispatched,
     }
 }
 
@@ -136,6 +137,7 @@ fn event_type_from_wire(raw: i32) -> Result<EventType, WireError> {
         Ok(pb::EventType::RunCompleted) => Ok(EventType::RunCompleted),
         Ok(pb::EventType::Erasure) => Ok(EventType::Erasure),
         Ok(pb::EventType::StoreEvent) => Ok(EventType::StoreEvent),
+        Ok(pb::EventType::NotificationDispatched) => Ok(EventType::NotificationDispatched),
         Ok(pb::EventType::Unspecified) | Err(_) => Err(WireError::UnknownEnum { field: FIELD }),
     }
 }
@@ -561,6 +563,30 @@ mod tests {
         let original = a_fully_populated_record();
         let decoded = from_wire(to_wire(&original)).expect("a record we encoded ourselves decodes");
         assert_eq!(decoded, original);
+    }
+
+    /// Every event type, both ways, from the list rather than from a copy of it.
+    ///
+    /// What the compiler already holds is that both matches name every variant:
+    /// the decoder's last arm spells `Unspecified` and `Err(_)` rather than using
+    /// a wildcard, so a variant missing from either side is a build failure, and
+    /// removing this test's own subject from the decoder was checked to be one.
+    ///
+    /// What it does not hold, and what this test is for, is that the two names on
+    /// each line are the same name. `EventType::NotificationDispatched =>
+    /// pb::EventType::StoreEvent` compiles perfectly, and a record would arrive
+    /// at a peer as a different kind of event: a wrong event type, believed,
+    /// which is the failure the whole mapping vocabulary is arranged against.
+    #[test]
+    fn every_event_type_this_build_writes_is_one_it_can_read_back() {
+        for event_type in EventType::ALL {
+            let mut record = a_fully_populated_record();
+            record.event_type = *event_type;
+            let decoded = from_wire(to_wire(&record)).unwrap_or_else(|e| {
+                panic!("{} did not survive the wire: {e:?}", event_type.as_str())
+            });
+            assert_eq!(decoded.event_type, *event_type);
+        }
     }
 
     /// The federation port is an outside door, so it owes the same check the

@@ -474,6 +474,7 @@ const FIELDS: &[Field] = &[
             "run_completed",
             "erasure",
             "store_event",
+            "notification_dispatched",
         ]),
         optional: false,
         repeated: false,

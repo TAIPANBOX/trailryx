@@ -61,7 +61,7 @@ fn record(seq: u64, run: &str, event: EventType, agent: &str) -> Record {
 /// Six records: three runs, two event types, two agents, so every dimension has
 /// something to select on and something to leave behind.
 fn segment() -> Segment {
-    let records = [
+    seal(&[
         record(
             1,
             "run-a",
@@ -98,7 +98,11 @@ fn segment() -> Segment {
             EventType::ModelCall,
             "agent://acme.example/support",
         ),
-    ];
+    ])
+}
+
+/// Seal a segment out of records given in order, so a test can bring its own.
+fn seal(records: &[Record]) -> Segment {
     let mut link = genesis();
     let leaves: Vec<(Record, Hash)> = records
         .iter()
@@ -111,7 +115,11 @@ fn segment() -> Segment {
 }
 
 async fn ask(sql: &str) -> (usize, Provability) {
-    let table = Arc::new(RecordTable::new(vec![segment()]));
+    ask_on(segment(), sql).await
+}
+
+async fn ask_on(segment: Segment, sql: &str) -> (usize, Provability) {
+    let table = Arc::new(RecordTable::new(vec![segment]));
     let ctx = SessionContext::new();
     ctx.register_table("records", Arc::clone(&table) as Arc<_>)
         .expect("the table registers");
@@ -157,6 +165,52 @@ async fn every_provable_dimension_can_carry_a_proof() {
         assert_eq!(rows, expected, "{predicate}");
         assert_eq!(proof, Provability::Full, "{predicate} should be provable");
     }
+}
+
+/// The eleventh event type, asked for by name through the facade a reader uses.
+///
+/// This is the one place both halves of the key derivation are exercised by
+/// somebody typing a word: the index built a key from the record when the segment
+/// was sealed, and the pushdown builds a key from the literal in the SQL. If a new
+/// event type reached the enum and not `Dimension::key_from_text`, the answer here
+/// would be correct rows with no proof, which reads as a limitation of the store
+/// rather than as a variant somebody forgot.
+///
+/// Its own segment rather than a seventh record in the shared fixture, so that a
+/// count in another test never moves because of this one.
+#[tokio::test]
+async fn a_dispatched_notification_is_provable_by_its_own_name() {
+    let dispatches = seal(&[
+        record(
+            1,
+            "run-n",
+            EventType::NotificationDispatched,
+            "agent://acme.example/billing",
+        ),
+        record(
+            2,
+            "run-n",
+            EventType::ModelCall,
+            "agent://acme.example/billing",
+        ),
+        record(
+            3,
+            "run-n",
+            EventType::NotificationDispatched,
+            "agent://acme.example/support",
+        ),
+    ]);
+    let (rows, proof) = ask_on(
+        dispatches,
+        "SELECT * FROM records WHERE event_type = 'notification_dispatched'",
+    )
+    .await;
+    assert_eq!(rows, 2);
+    assert_eq!(
+        proof,
+        Provability::Full,
+        "a query about who was told what must be provable, or it answers nothing an auditor can use"
+    );
 }
 
 #[tokio::test]

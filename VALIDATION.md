@@ -780,6 +780,71 @@ measures nothing about throughput, nothing about many shards, and the kill is a
 process dying rather than a machine: the page cache survives it, exactly as the
 kill runs above.
 
+### The eleventh event type, from heraldyx's own binary to an old verifier
+
+6 August 2026, on the machine at the bottom, debug builds throughout. Four
+binaries, two of them built from `e9b2a2c` (the commit before this change) so
+that "an older build" is a binary rather than a claim.
+
+The journal was produced by **heraldyx itself**, not written by hand:
+`go build ./cmd/heraldyx` at `4825d64`, run with `--once --from-now=false`
+against three plane events and a file transport, which wrote three chained
+`alert_sent` records naming two operator addresses in `data.to`.
+
+**Before**, `trailryx-node events --file` built at `e9b2a2c`:
+
+```
+sent.ndjson: 0 mapped, 0 record(s) written into seg-0000000000000001 (was seg-0000000000000001), 0 payload part(s) declined
+  refused: not_an_envelope 0 unknown_schema 0 no_agent 0 foreign_trust_domain 0 unknown_type 3 no_run_id 0 bad_time 0
+nothing durable to seal
+```
+
+**After**, the same file and the same flags, this branch:
+
+```
+sent.ndjson: 2 mapped, 2 record(s) written into seg-0000000000000002 (was seg-0000000000000001), 2 payload part(s) declined
+  refused: not_an_envelope 0 unknown_schema 0 no_agent 0 foreign_trust_domain 0 unknown_type 0 no_run_id 1 bad_time 0
+sealed seg-0000000000000001 with 4 record(s); manifest .../s0-000001.mf
+```
+
+The remaining refusal is the correct one and is not a defect on either side:
+heraldyx recorded a dispatch about an event that carried no run, and refused to
+invent one.
+
+`trailryx-node read`, a separate process over the directory that left behind:
+
+```
+1 sealed segment(s), 4 record(s)
+  019fd8d32bf3ddae508e5874217cc5a6 seq 1 notification_dispatched agent://acme.example/support/tier1-bot run-8842
+  019fd8d32bf3ddae508e5874217cc5a7 seq 2 notification_dispatched agent://acme.example/eng/ci-fixer run-9001
+  019fd8d32bf46225960073a2da1032e9 seq 3 store_event agent://acme.example/trailryx.node run-8842
+  019fd8d32bf4b008cf7d6b341ca8e4fb seq 4 store_event agent://acme.example/trailryx.node run-9001
+  seg-0000000000000001 answered 4 row(s), proof Full
+```
+
+| Question | Answer |
+|---|---|
+| The pack that `read` wrote, checked by `trailryx-verify` built at `e9b2a2c` | **VERIFIED**, exit 0, 4 records in 1 segment |
+| The same pack, checked by this branch's verifier | identical output, and `crates/trailryx-verify` is byte for byte the same source |
+| `trailryx-node read` built at `e9b2a2c`, over a directory holding the new type | refused: `BadDiscriminant { field: "event_type", got: 11 }`, exit 2 |
+| The recipients, searched for in every sealed byte and in the pack | not present in any of them; present three times in heraldyx's journal |
+| The journal at mode `0444`, the way a read-only mount presents it | 2 mapped, exit 0, sha256 unchanged |
+
+The third row is the one worth reading twice, because it is the forward
+direction and it is a refusal rather than compatibility. It is also imprecise in
+a way worth writing down: the old reader reports the segment as **not the file
+that was sealed**, because a discriminant it cannot decode ends its walk and the
+walk then falls short of the manifest's count. The field and the number are in
+the message, so the cause is recoverable, and the direction is the safe one, a
+refusal rather than a shorter answer presented as a whole one. But the sentence
+an operator meets accuses the bytes of having changed when what happened is that
+their build is older than the record.
+
+**What this is not.** One machine, one shard, four records, debug builds, and a
+file transport rather than a mail server. It measures the seam and the
+vocabulary, and nothing about throughput or scheduling: `trailryx-node events`
+still keeps no cursor, so importing the same journal twice writes it twice.
+
 ---
 
 ## Not yet measured

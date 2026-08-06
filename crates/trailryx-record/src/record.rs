@@ -42,6 +42,24 @@ pub enum EventType {
     Erasure,
     /// The store said something about itself: a gap, a re-sign, a recovery.
     StoreEvent,
+    /// A notification about the run was dispatched to a person.
+    ///
+    /// The eleventh, and the first added after the vocabulary was written. It is
+    /// here rather than folded into one of the ten because none of them is true
+    /// of it: nothing was decided, no policy was consulted, no budget moved, and
+    /// the agent did not act at all. Somebody was told something, which is a fact
+    /// an auditor asks about directly ("when was this escalated, and to whom")
+    /// and which no other event type can answer without lying about what
+    /// happened.
+    ///
+    /// **Dispatched, not delivered.** The producer observes a transport taking
+    /// the message; whether it reached a mailbox, a spam folder or a silently
+    /// discarding filter is not knowable from where the record is written, and a
+    /// trail that claimed the stronger fact would be worse than one that admits
+    /// the weaker one. Who it went to is personal data and lives in the payload
+    /// plane like every other free-form member; this type says only that a
+    /// notification left.
+    NotificationDispatched,
 }
 
 impl EventType {
@@ -56,6 +74,7 @@ impl EventType {
         Self::RunCompleted,
         Self::Erasure,
         Self::StoreEvent,
+        Self::NotificationDispatched,
     ];
 
     pub fn as_str(self) -> &'static str {
@@ -70,6 +89,7 @@ impl EventType {
             Self::RunCompleted => "run_completed",
             Self::Erasure => "erasure",
             Self::StoreEvent => "store_event",
+            Self::NotificationDispatched => "notification_dispatched",
         }
     }
 }
@@ -442,6 +462,31 @@ mod tests {
                 "{s} is not a stable lower_snake token"
             );
         }
+    }
+
+    /// The vocabulary is written down twice: once as an enum the compiler checks,
+    /// and once in the schema document an auditor reads. Two places, one value,
+    /// which is invariant 16, and the schema is the copy nothing compiles.
+    ///
+    /// It is the copy that leaves the repository, too: `to_json()` publishes it,
+    /// so a variant added to the enum and not here is a record type the format's
+    /// own published description says does not exist.
+    #[test]
+    fn the_schema_document_lists_exactly_the_event_types_that_exist() {
+        let declared = crate::schema::RECORD_V1
+            .fields
+            .iter()
+            .find(|f| f.path == "event_type")
+            .map(|f| match f.kind {
+                crate::schema::Kind::Enum(variants) => variants,
+                _ => panic!("event_type is an enumeration or the boundary rule is not enforceable"),
+            })
+            .expect("the schema describes event_type");
+        let actual: Vec<&str> = EventType::ALL.iter().map(|e| e.as_str()).collect();
+        assert_eq!(
+            declared, actual,
+            "the schema document and the enum disagree about what an event type can be"
+        );
     }
 
     #[test]

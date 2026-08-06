@@ -211,6 +211,91 @@ fn a_schema_this_reader_does_not_accept_is_refused() {
     }
 }
 
+/// A dispatch journal line, at the door, with the members heraldyx actually
+/// writes.
+///
+/// The shape is `heraldyx/internal/record/record.go`: one agent-event per message
+/// sent, `type` is `alert_sent`, and `data` carries the dedup key, the transport,
+/// the outcome word and **the operator addresses that were written to**. The
+/// addresses are the reason this test exists rather than being a line in the one
+/// above it.
+const HERALDYX_DISPATCH: &str = concat!(
+    r#"{"schema":"taipanbox.dev/agent-event/v0.2","ts":"2026-08-06T03:14:00Z","#,
+    r#""source":"heraldyx","type":"alert_sent","#,
+    r#""agent_id":"agent://acme.example/support/tier1-bot","run_id":"run-8842","#,
+    r#""severity":"info","#,
+    r#""data":{"kind":"alert","about":"budget_exhausted:agent://acme.example/support/tier1-bot","#,
+    r#""to":["ops@acme.example","oncall@acme.example"],"transport":"smtp","outcome":"accepted"},"#,
+    r#""prev_hash":"sha256:2e81d20e76391693864bc8b7c0963b6aa87ef867c36bc80a0678166dcfb3168e"}"#,
+);
+
+/// A notification that was dispatched is a record, and the person it was
+/// dispatched to is not in the metadata plane.
+///
+/// Two claims, and the second is the one that could go wrong quietly. `data.to`
+/// holds operator email addresses, which are personal data by anybody's reading,
+/// and the only thing keeping them out of the plane that survives erasure is that
+/// this mapper reads **nothing** out of `data`. So the assertion is not that some
+/// particular member was skipped, it is that the whole of `data` is in the payload
+/// and none of it is in the metadata: `to`, and the transport beside it, and the
+/// outcome word beside that.
+///
+/// The verdict is the tempting mistake and it is asserted empty on purpose.
+/// `data.outcome` says "accepted", and reading that into `Verdict::Allowed` would
+/// put a producer's free-form member into a typed field that an auditor reads as
+/// a decision this store stands behind. A dispatch is not a decision with a
+/// verdict; it is a thing that happened.
+#[test]
+fn a_dispatched_notification_is_a_record_and_the_operator_written_to_is_not() {
+    let unit = map(OURS, HERALDYX_DISPATCH).expect("a dispatch journal line maps");
+    assert_eq!(
+        unit.meta.event_type.as_str(),
+        "notification_dispatched",
+        "a notification was dispatched to a human, which is not one of the ten decisions"
+    );
+    assert_eq!(unit.meta.severity, Severity::Info);
+    assert_eq!(unit.meta.mapper, MAPPER_VERSION);
+    assert_eq!(unit.meta.verdict, None, "a dispatch decides nothing");
+    assert_eq!(unit.meta.error, None);
+    assert_eq!(
+        unit.meta.run_id.as_str(),
+        "run-8842",
+        "the run the notification was about, carried whole"
+    );
+
+    let metadata = format!("{:?}", unit.meta);
+    let payload = payload_text(&unit);
+    for from_data in [
+        "ops@acme.example",
+        "oncall@acme.example",
+        "smtp",
+        "accepted",
+        "budget_exhausted",
+    ] {
+        assert!(
+            !metadata.contains(from_data),
+            "{from_data} came out of `data` and reached the metadata plane:\n{metadata}"
+        );
+        assert!(
+            payload.contains(from_data),
+            "{from_data} reached neither plane:\n{payload}"
+        );
+    }
+}
+
+/// The severity band, when the producer sends none.
+///
+/// heraldyx stamps `info` on every dispatch, so this is about the other producers
+/// that will write this type later: a notification is a thing that happened and
+/// not a warning about anything, so the fallback is the quietest band that is not
+/// debug.
+#[test]
+fn a_dispatch_with_no_severity_is_information_rather_than_a_warning() {
+    let no_severity = HERALDYX_DISPATCH.replace(r#""severity":"info","#, "");
+    let unit = map(OURS, &no_severity).expect("a dispatch with no severity maps");
+    assert_eq!(unit.meta.severity, Severity::Info);
+}
+
 /// A type this reading does not map is refused rather than mapped to something
 /// adjacent, which is the rule `map_span` states for an unknown operation.
 #[test]

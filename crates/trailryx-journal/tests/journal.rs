@@ -7,7 +7,7 @@ use trailryx_crypto::{ChainState, Sha384};
 use trailryx_journal::journal::{
     Appended, ChainStart, DurabilityViolation, Journal, JournalError, StoppedBecause,
 };
-use trailryx_journal::wire::{decode_frame, decode_record, encode_record};
+use trailryx_journal::wire::{WireError, decode_frame, decode_record, encode_record};
 use trailryx_record::{
     AgentId, Algorithms, Basis, ErrorCode, EventType, Hash, MapperVersion, ModelId, Outcome,
     PayloadClass, PayloadRef, PolicyVersion, PrincipalId, Record, RecordId, RunId, SegmentId,
@@ -930,4 +930,86 @@ fn a_reader_walks_the_bytes_without_repairing_them() {
         io.stats.appends, appends,
         "a reader appended to the journal"
     );
+}
+
+// ---------------------------------------------------------------------------
+// The event vocabulary, at the one byte where it meets the format
+// ---------------------------------------------------------------------------
+
+/// The offset of the `event_type` byte in a canonical record, found rather than
+/// counted.
+///
+/// Two encodings of one record that differ in nothing but the event type differ
+/// in exactly one byte, and that byte is the discriminant. Counting the offset by
+/// hand would be a second transcription of the writing order, which is the thing
+/// `trailryx-verify`'s own record reader says out loud it has to keep in step.
+fn event_type_offset(r: &Record) -> usize {
+    let mut a = r.clone();
+    a.event_type = EventType::ModelCall;
+    let mut b = r.clone();
+    b.event_type = EventType::PolicyDecision;
+    let (a, b) = (encode_record(&a), encode_record(&b));
+    assert_eq!(a.len(), b.len(), "one byte wide, so the length cannot move");
+    let differing: Vec<usize> = (0..a.len()).filter(|&i| a[i] != b[i]).collect();
+    assert_eq!(differing.len(), 1, "the discriminant is one byte");
+    differing[0]
+}
+
+/// Invariant 7, at the boundary a new event type actually moves.
+///
+/// The record format is frozen, and an event type is a one-byte discriminant in
+/// it. Adding one takes the next unused code and redefines nothing, so what has
+/// to hold is three things at once, and only the middle one is new: every code
+/// that was ever written keeps decoding to the name it was written as, the new
+/// code decodes to the new name, and the first code past it is still refused **by
+/// name** rather than half-read. The third is what makes this additive instead of
+/// a version: a build older than the new type meets it and says which field it
+/// could not read, which is the same answer it gives for any byte nobody defined.
+#[test]
+fn every_event_code_ever_written_still_decodes_and_the_next_unused_one_is_refused() {
+    let record = maximal(77);
+    let at = event_type_offset(&record);
+    let bytes = encode_record(&record);
+
+    // Every code this format has ever assigned, and the name it was assigned to.
+    // Written out rather than derived from `EventType::ALL`, because a list
+    // derived from the enum would agree with a renumbering of the enum.
+    let ever: &[(u8, &str)] = &[
+        (1, "request_received"),
+        (2, "model_call"),
+        (3, "tool_call"),
+        (4, "policy_decision"),
+        (5, "budget_check"),
+        (6, "memory_access"),
+        (7, "delegation"),
+        (8, "run_completed"),
+        (9, "erasure"),
+        (10, "store_event"),
+        (11, "notification_dispatched"),
+    ];
+    for (code, name) in ever {
+        let mut patched = bytes.clone();
+        patched[at] = *code;
+        let decoded = decode_record(&patched)
+            .unwrap_or_else(|e| panic!("code {code} must decode to {name}: {e}"));
+        assert_eq!(
+            decoded.event_type.as_str(),
+            *name,
+            "code {code} decoded to something other than {name}"
+        );
+    }
+
+    // And the first code past the vocabulary is refused by name. This is what an
+    // older build does when it meets a record carrying a type it has never heard
+    // of: it says which field it could not read and stops, rather than reading the
+    // rest of the record against a field it guessed at.
+    let mut past = bytes.clone();
+    past[at] = 12;
+    match decode_record(&past) {
+        Err(WireError::BadDiscriminant { field, got }) => {
+            assert_eq!(field, "event_type");
+            assert_eq!(got, 12);
+        }
+        other => panic!("an undefined event code must be refused by name: {other:?}"),
+    }
 }
