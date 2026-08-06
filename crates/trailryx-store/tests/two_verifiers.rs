@@ -123,6 +123,17 @@ fn rust(bytes: &[u8]) -> Verdict {
 }
 
 fn python(python: &str, bytes: &[u8], name: &str) -> Verdict {
+    // The pid is invariant 29, and this is the site where breaking it cost the most:
+    // `name` separates the cases within one run and nothing separated one run from
+    // another, so a second run deleted `good.trxevid` below while this one's Python
+    // was still reading it. Measured on 6 August 2026 at thirty concurrent copies,
+    // 86 of 150 processes failed.
+    //
+    // What made it expensive is what the failure said. The pack was fine and the
+    // reader was fine, and the assertion read "the second verifier rejected a pack
+    // the first accepted, so the format is ambiguous or one of them is wrong". This
+    // binary is also its own step of `.githooks/pre-push`, so it refused pushes
+    // rather than flaking a test, and a `cargo test` in a second worktree was enough.
     let dir = std::env::temp_dir().join(format!("trailryx-two-verifiers-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     let path = dir.join(format!("{name}.trxevid"));
