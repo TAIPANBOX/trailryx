@@ -148,6 +148,12 @@ jobs:
       - name: scratch paths are cleaned up
         run: ./scripts/scratch-cleanup.sh
 
+      # The hook's deletion shortcut, against the cases it must and must not take.
+      # CI has no hooks, so this is the only side that ever runs it here; it reads the
+      # hook as a file, which is a thing a runner can do as well as a laptop.
+      - name: the deletion shortcut is honest
+        run: ./scripts/deletion-skip-cases.sh
+
       # This file and the hook must run the same number of checks, and this is the
       # step that says so. It counts both sides rather than trusting either header.
       - name: the gate's own count

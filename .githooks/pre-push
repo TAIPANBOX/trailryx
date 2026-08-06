@@ -67,58 +67,20 @@ fi
 # because `--no-verify` is the same keystroke whether the push carries nothing or
 # carries everything, and a gate people have learned to bypass is not a gate.
 #
-# Git feeds this hook one line per ref on stdin:
+# The decision itself is `scripts/deletion-only-push.sh`, which reads the stdin git
+# feeds this hook, and it is a separate file for a reason that is not tidiness: a check
+# the gate runs cannot test this hook by running it, because the cases whose correct
+# answer is "run everything" would run the gate, which would run the check. Those are
+# the cases that matter, so the decision had to move somewhere a check can reach it.
+# `scripts/deletion-skip-cases.sh` is that check, and invariant 32 is the rule.
 #
-#     <local ref> <local sha> <remote ref> <remote sha>
-#
-# and a deletion is a line whose LOCAL sha is all zeroes. The question is asked of
-# every line rather than the first, so a push that deletes one branch and updates
-# another is still checked in full.
-#
-# NO LINES MEANS RUN EVERYTHING, and that is the case to be careful about, because it
-# is how this file is used by hand and by anybody reading CONTRIBUTING.md. Treating an
-# empty stdin as "no updates, so nothing to do" would turn every manual run into a
-# silent pass, which is the exact shape invariant 19 exists against: a check that
-# reports success without having run. A terminal on stdin is not read at all, so
-# typing `.githooks/pre-push` at a prompt cannot hang waiting for input either, which
-# invariant 18 would otherwise have something to say about.
-#
-# The read is bounded, for invariant 18's reason and not as belt and braces. Git writes
-# these lines and closes, so the bound is never reached in a real push; what it rules
-# out is this file being run with stdin on a pipe nobody closes, which would otherwise
-# hang here with no output at all and look exactly like a slow `cargo test`.
-#
-# A stall is asked about with the CLOCK and not with `read`'s exit status, which is
-# worth stating because the first version of this block asked the status and the
-# branch was dead. `read -t` returns above 128 on timeout in bash 4 and later; the bash
-# on this machine is 3.2.57, the one Apple ships, and it returns 1 for a timeout and 1
-# for the end of input, so the two cannot be told apart that way. Measured: on a pipe
-# held open and silent, `read -r -t 3` returns status 1 after three seconds. The bound
-# works, the reason for it does not survive being asked.
-#
-# A stall therefore means "there may have been more refs", which forces every check to
-# run, because the only dangerous mistake available in this block is to skip a push
-# that was carrying something.
-if [ ! -t 0 ]; then
-  refs=0
-  deletions=0
-  started=$SECONDS
-  while read -r -t 10 _local_ref local_sha _rest; do
-    [ -n "${local_sha:-}" ] || continue
-    refs=$((refs + 1))
-    case $local_sha in
-      *[!0]*) ;;
-      *) deletions=$((deletions + 1)) ;;
-    esac
-  done
-  if [ $((SECONDS - started)) -ge 10 ]; then
-    printf 'pre-push: stdin stalled, so the refs are unknown and every check will run.\n'
-    refs=0
-  fi
-  if [ "$refs" -gt 0 ] && [ "$refs" = "$deletions" ]; then
+# If the script is absent this hook checks everything, which is the safe direction and
+# the same answer the decision gives when it cannot tell.
+if [ -x ./scripts/deletion-only-push.sh ]; then
+  if refs=$(./scripts/deletion-only-push.sh); then
     # Said out loud rather than exiting quietly. A gate that declines to run has to
     # report that it declined, or it is indistinguishable from one that passed.
-    printf 'pre-push: %d ref(s) and every one a deletion, so no check ran.\n' "$refs"
+    printf 'pre-push: %s ref(s) and every one a deletion, so no check ran.\n' "$refs"
     exit 0
   fi
 fi
@@ -220,6 +182,12 @@ say "temp paths are per process" ./scripts/temp-paths.sh
 # directory; the same path with a process id in it is a new one on every run, and the
 # worst of them held a private key per fixture per run.
 say "scratch paths are cleaned up" ./scripts/scratch-cleanup.sh
+
+# The shortcut at the top of this file, against the cases it must and must not take.
+# It is the one check here whose subject is the gate rather than the code, and it is
+# here rather than earlier because it is not a precondition: by the time it runs the
+# decision has already been made correctly or this push would not be checking anything.
+say "the deletion shortcut is honest" ./scripts/deletion-skip-cases.sh
 
 # How many checks this file runs, against how many CI runs, and against the one place
 # a reader is told. The header above promises a green push is a green pull request and
