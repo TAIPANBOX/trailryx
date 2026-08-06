@@ -4086,6 +4086,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "trailryx-agentevent"
+version = "0.1.1"
+dependencies = [
+ "trailryx-contracts",
+ "trailryx-json",
+ "trailryx-record",
+]
+
+[[package]]
 name = "trailryx-anchor"
 version = "0.1.1"
 dependencies = [
@@ -4278,6 +4287,24 @@ name = "trailryx-json"
 version = "0.1.1"
 dependencies = [
  "trailryx-sim",
+]
+
+[[package]]
+name = "trailryx-node"
+version = "0.1.1"
+dependencies = [
+ "trailryx-agentevent",
+ "trailryx-assemble",
+ "trailryx-contracts",
+ "trailryx-index",
+ "trailryx-ingest",
+ "trailryx-journal",
+ "trailryx-json",
+ "trailryx-otlp",
+ "trailryx-record",
+ "trailryx-sim",
+ "trailryx-store",
+ "trailryx-verify",
 ]
 
 [[package]]

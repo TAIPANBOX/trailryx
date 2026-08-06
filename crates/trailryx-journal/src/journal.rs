@@ -506,6 +506,34 @@ impl Journal {
         self.genesis
     }
 
+    /// Walk a journal file's bytes without opening the journal.
+    ///
+    /// Read-only, which is the whole reason it exists. [`Journal::open`]
+    /// *recovers*: it writes a header onto a file that has none and truncates a
+    /// tail it will not trust. Both are right for a writer and wrong for a
+    /// reader, and a reader that repaired what it was auditing would be
+    /// repairing the evidence.
+    ///
+    /// It is the same walk all the same. `docs/durability.md` §9 is one walk and
+    /// not two, because two implementations of "read the journal" are two sets of
+    /// rules about what counts as valid and the weaker one becomes the foundation
+    /// of whatever is built next. So this decodes the header, derives the chain
+    /// start exactly as recovery derives it, and hands the file to the same
+    /// private function recovery uses.
+    ///
+    /// `start` is the caller's claim about where this file's chain begins, and it
+    /// is checked rather than believed: a wrong one makes the very first record
+    /// fail its chain step, which is [`StoppedBecause::ChainBroken`] at sequence
+    /// one rather than a file that quietly reads as empty.
+    pub fn walk_bytes(bytes: &[u8], start: ChainStart) -> JournalResult<Walked> {
+        let header = decode_segment_header(bytes).map_err(JournalError::NotAJournal)?;
+        let genesis = match start {
+            ChainStart::First => Self::genesis(&bytes[..header.len]),
+            ChainStart::After(head) => head,
+        };
+        Ok(Self::walk(bytes, &header, genesis))
+    }
+
     /// Where the **first** segment of a shard starts.
     ///
     /// The header rather than zero, so a file opened under a different shard or

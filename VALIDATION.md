@@ -736,6 +736,52 @@ machine's, and a rate is the least portable number in this file.
 
 ---
 
+### The record plane, run as three processes over one directory
+
+```
+trailryx-node run  --data DIR --bind 127.0.0.1:4318 --seal-records 5 --seal-seconds 3
+trailryx-node read --data DIR --all --pack incident.trxevid
+trailryx-verify incident.trxevid
+```
+
+6 August 2026, on the machine at the bottom, debug build. The point of the run is
+the boundaries it crosses rather than the numbers: a socket, a `SIGKILL`, a
+restart, and a verifier that shares no code with the store.
+
+| Step | Result |
+|---|---|
+| Three OTLP spans posted with `curl`, gzip off | `HTTP 200` |
+| The writing process, killed with `SIGKILL` before its segment sealed | 4 records on the journal, no manifest, so nothing was sealed |
+| A second process on the same directory | recovered 4, took 4 more, sealed one segment of **12** |
+| A third process, `read --all` | 1 segment, 12 records, proof **Full** |
+| `trailryx-verify` over the pack that `read` wrote | **VERIFIED**, exit 0, 12 records in 1 segment |
+
+The twelve are eight records from the two batches, one anomaly record the OTLP
+source raised about clock skew, and three notes the store wrote about payload
+parts it declined to keep. Every one of them is in the segment, which is the
+property the notes exist for.
+
+The same binary over the estate's own example file, which is six events in the
+shared NDJSON envelope:
+
+```
+trailryx-node events --file agent-passport/examples/events.ndjson --data DIR \
+  --trust-domain acme-bank.example
+```
+
+**2 mapped, 4 refused by name**: three types this reading of the registry does
+not map, and one event that carries no `run_id`, which the envelope permits and a
+record does not. That second one is a finding about the two formats rather than a
+defect in either, and it is the reason the count is printed per reason rather than
+as a total.
+
+**What this is not.** One machine, one shard, twelve records, a debug build. It
+measures nothing about throughput, nothing about many shards, and the kill is a
+process dying rather than a machine: the page cache survives it, exactly as the
+kill runs above.
+
+---
+
 ## Not yet measured
 
 Stated so the absence is visible rather than inferred:

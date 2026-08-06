@@ -1,0 +1,19 @@
+[package]
+name = "trailryx-agentevent"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+description = "The shared agent-event NDJSON envelope, mapped into records"
+
+[dependencies]
+trailryx-contracts = { path = "../trailryx-contracts" }
+# The same reader OTLP/JSON goes through, and a dependency rather than a copy for
+# the same reason: the grammar at a trust boundary must be one thing, so a bound
+# raised for one line format is the bound the other gets.
+trailryx-json = { path = "../trailryx-json" }
+trailryx-record = { path = "../trailryx-record" }
+
+[lints]
+workspace = true

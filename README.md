@@ -7,7 +7,7 @@
 ![Stage](https://img.shields.io/badge/stage-13%20of%2013-blue.svg)
 ![Core](https://img.shields.io/badge/core-frozen-success.svg)
 ![Rust](https://img.shields.io/badge/rust-1.85%2B-orange.svg)
-![Tests](https://img.shields.io/badge/tests-1068-success.svg)
+![Tests](https://img.shields.io/badge/tests-1094-success.svg)
 ![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)
 ![Dependencies](https://img.shields.io/badge/deps-0%20in%20the%20verifier-success.svg)
 ![Unsafe](https://img.shields.io/badge/unsafe-forbidden-success.svg)
@@ -278,11 +278,11 @@ migration. What stage 13 still wants is measured absence rather than a guess, an
 | Crate | What it is | Tests |
 |---|---|---|
 | `trailryx-sim` | injectable clock, rng, io and bus; a crash model and fault injection | 18 |
-| `trailryx-record` | the canonical record, its schema, and the plane boundary | 26 |
+| `trailryx-record` | the canonical record, its schema, and the plane boundary | 27 |
 | `trailryx-crypto` | SHA-384 and the hash chain | 22 |
 | `trailryx-core` | the simulated store the determinism criterion runs against | 15 |
 | `trailryx-contracts` | eight adapter traits and a conformance suite | 26 |
-| `trailryx-journal` | wire format, append-only write path, recovery | 28 |
+| `trailryx-journal` | wire format, append-only write path, recovery | 29 |
 | `trailryx-index` | Merkle history tree, completeness proofs, segment composition | 58 |
 | `trailryx-store` | sealing, the read surface, causal reconstruction, hot and cold tiering | 88 |
 | `trailryx-json` | a strict bounded RFC 8259 reader and a JSON Lines framer. Depends on nothing | 116 |
@@ -305,6 +305,8 @@ migration. What stage 13 still wants is measured absence rather than a guess, an
 | `trailryx-ingest` | the OTLP/HTTP server: HTTP/1.1, gzip, bearer auth, all hand-written | 119 |
 | `trailryx-compliance` | a versioned map from what is proved to what a framework asks, and what it does not | 12 |
 | `trailryx-sql` | the SQL facade: DataFusion and the Postgres wire protocol, predicates pushed into the index, statements gated, reads authorised, connections bounded, four dialect extensions | 63 |
+| `trailryx-agentevent` | the estate's shared agent-event envelope, mapped into records: the same `agent://` grammar, the same run and delegation chain | 15 |
+| `trailryx-node` | the record plane as one process: ingest, journal, sealing on a schedule, and a reader that rebuilds a segment from the journal | 9 |
 | `trailryx-demo` | the eight acceptance steps, and a reader for a collector's file | - |
 
 **The verifier and the core have no third-party dependencies.** `unsafe` forbidden
@@ -391,11 +393,19 @@ are different questions, and until this week that step answered only the second.
 
 Nothing here needs a Rust toolchain, a clone, or a build.
 
-**The server**, as an image:
+**The receiver**, as an image:
 
 ```bash
 docker pull ghcr.io/taipanbox/trailryx:v0.1.1
 ```
+
+That word used to be "the server", and it was doing work no reader could check.
+What is in the image is `trailryx-ingest`: it accepts OTLP over HTTP, refuses
+what it should refuse, and hands what arrives to whatever embeds it. **It stores
+nothing.** Its drain thread counts records and lets them go, which was right for
+a receiver and wrong for a page that called it the server. The process that
+stores is `trailryx-node`, one section below, and it is built from source today
+rather than shipped in this image.
 
 An immutable tag, never `latest`, so a pod that restarts comes back as the same
 program. `FROM scratch` with one statically linked file inside it: `trailryx-ingest`
@@ -438,6 +448,70 @@ answers for both. And `scripts/reproduce.sh` builds the verifier twice from two
 directories of different lengths and refuses if a byte differs, which is what makes
 that checksum worth checking rather than worth reading.
 
+## Run it as a store
+
+```bash
+cargo build --release --bin trailryx-node
+./target/release/trailryx-node run --data ./trailryx-data --bind 127.0.0.1:4318
+```
+
+One process. It accepts OTLP over HTTP on that port, assembles what arrives into
+records, writes every one of them to the journal, syncs on a policy and **seals a
+segment on a schedule**, at `--seal-records` records or `--seal-seconds` seconds,
+whichever comes first. A sealed segment's manifest is written beside its journal
+file, and that write is the commit point: a segment is sealed if and only if its
+manifest is there, which is the same rule publication to an object store follows,
+in the local spelling.
+
+Reading is a separate command and deliberately a separate process, because a
+reader that could repair what it was auditing would be repairing the evidence:
+
+```bash
+trailryx-node read --data ./trailryx-data --all --pack incident.trxevid
+trailryx-verify incident.trxevid
+```
+
+`read` rebuilds every sealed segment from the journal's own bytes, recomputes
+every chain link, and compares the manifest that falls out with the manifest that
+was published. A byte altered anywhere in a segment produces a different manifest
+and the read is **refused rather than answered**. What comes back carries a
+completeness proof, and `--pack` writes an evidence pack the offline verifier
+reads, which is the one check on this path that shares no code with the store.
+
+The estate's other products already emit events in a shared NDJSON envelope, and
+a third command takes a file of them:
+
+```bash
+trailryx-node events --file traces.ndjson --data ./trailryx-data
+```
+
+### What this process does not do, and why each one is absent rather than stubbed
+
+Stated here because an adopter meets it here, and printed by `run` at startup so
+that nobody has to have read this page.
+
+- **No payload plane.** A payload is sealed under a key a custodian holds, and
+  this tree has no key-custodian adapter: `trailryx-erasure` has the mechanics
+  and every `KeyProvider` in the workspace is a fake. A node that sealed prompts
+  under keys it generated itself and forgot on exit would be offering an erasure
+  it cannot perform, which is worse than not offering one. So payload parts are
+  **declined and counted**, and the count becomes a record in the run it belongs
+  to, where a reconstruction of that run finds it. The metadata plane, which is
+  the provable one, is kept in full, `prompt_hash` included.
+- **No object-store publication.** `trailryx-store`'s tier, the S3, GCS and Azure
+  adapters and the publication protocol all exist and are tested; nothing in this
+  binary calls them. Sealed segments live in the data directory.
+- **No SQL port.** The facade is in no binary, as the dependency section above
+  already says. A query here goes through `read`.
+- **No TLS**, on the same terms as the receiver: terminate it in front.
+- **One shard per process.** The plane is single-writer by construction, which is
+  what the journal's sequence requires; more shards means more processes.
+
+Two more absences worth naming, because they are the ones somebody would assume
+away: nothing here has been measured for throughput, and a segment that has been
+sealed is never re-read into memory by `run`, so the process holds one open
+journal and nothing else.
+
 ## Build it instead
 
 If you would rather build than download, that is fast and it is worth saying why,
@@ -461,7 +535,7 @@ not repeated here: a number written twice is a number that will disagree with it
 ## Try it
 
 ```bash
-cargo test                                    # 1068 tests
+cargo test                                    # 1094 tests
 cargo run --bin trailryx-sim-run -- --help
 ```
 
