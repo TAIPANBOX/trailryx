@@ -9,8 +9,8 @@
 use std::path::{Path, PathBuf};
 
 use trailryx_index::completeness::Dimension;
-use trailryx_node::cursor::{self, Whole};
-use trailryx_node::{Resume, SealPolicy, Ship, reader, ship};
+use trailryx_node::cursor::{self, Remembered, Whole};
+use trailryx_node::{PlaneError, Resume, SealPolicy, Ship, Shipped, reader, ship};
 use trailryx_record::{ShardIx, TenantId, Timestamp};
 use trailryx_store::query::{Query, query_segment};
 
@@ -49,17 +49,96 @@ fn policy() -> SealPolicy {
     }
 }
 
-fn run(dir: &Path, file: &Path) -> trailryx_node::Shipped {
+fn run(dir: &Path, file: &Path) -> Shipped {
+    attempt(policy(), dir, file, 0x63757273).expect("the file is shipped")
+}
+
+/// One run, with the policy and the seed named, and its failure handed back.
+///
+/// Separate from [`run`] because the tests below are about runs that do not
+/// finish, and about a policy that seals inside one. The seed differs per run for
+/// the reason `plane::seed_from_process` gives: two runs minting from one seed in
+/// one millisecond would mint one identity twice, and the journal would absorb the
+/// second record as a duplicate, which is exactly the thing these tests count.
+fn attempt(policy: SealPolicy, dir: &Path, file: &Path, seed: u64) -> Result<Shipped, PlaneError> {
     ship(&Ship {
         dir,
         shard: ShardIx(0),
         tenant: tenant(),
         trust_domain: TRUST_DOMAIN,
-        policy: policy(),
-        seed: 0x63757273,
+        policy,
+        seed,
         file,
     })
-    .expect("the file is shipped")
+}
+
+/// A policy that seals inside a run rather than only at the end of one.
+fn sealing_every(records: u64) -> SealPolicy {
+    SealPolicy {
+        seal_after_records: records,
+        seal_after_nanos: u64::MAX,
+        sync_every: 64,
+    }
+}
+
+/// A dispatch at an instant of its own, every line exactly as wide as every other.
+///
+/// The width is the point. With a constant line length the end of line *n* is at
+/// byte *n* times that length, so a test can name the byte a cursor must stand on
+/// rather than measuring the file and asserting it equals itself.
+fn dispatch_at(n: u32) -> String {
+    let (minute, second) = (n / 60, n % 60);
+    format!(
+        r#"{{"schema":"taipanbox.dev/agent-event/v0.2","ts":"2026-08-06T03:{minute:02}:{second:02}Z","source":"heraldyx","type":"alert_sent","agent_id":"agent://acme.example/support/tier1-bot","run_id":"run-8842","severity":"info","data":{{"kind":"alert","about":"budget_exhausted","to":["ops@acme.example"],"transport":"smtp","outcome":"accepted"}}}}
+"#
+    )
+}
+
+/// A line no reading of the registry maps, so it produces no record at all.
+fn unmappable(n: u32) -> String {
+    let (minute, second) = (n / 60, n % 60);
+    format!(
+        r#"{{"schema":"taipanbox.dev/agent-event/v0.2","ts":"2026-08-06T03:{minute:02}:{second:02}Z","source":"heraldyx","type":"heartbeat","agent_id":"agent://acme.example/support/tier1-bot","run_id":"run-8842","severity":"info"}}
+"#
+    )
+}
+
+/// A journal long enough to cross a seal boundary, and the width of one line.
+fn long_journal(lines: u32) -> String {
+    (0..lines).map(dispatch_at).collect()
+}
+
+fn line_width() -> u64 {
+    dispatch_at(0).len() as u64
+}
+
+/// How many segments in this directory are sealed, which is how many manifests
+/// there are: the manifest write is the commit point and nothing else says it.
+fn manifests(dir: &Path) -> usize {
+    contents(dir)
+        .into_iter()
+        .filter(|(name, _)| name.ends_with(".mf"))
+        .count()
+}
+
+/// Stop the seal of one segment, the way a crash stops it: at the commit point.
+///
+/// `write_committing` writes `<manifest>.part` and renames it, so a directory
+/// sitting on that name makes the create fail and the manifest never lands. The
+/// journal keeps every record that was appended, unsealed, which is precisely the
+/// state a `SIGKILL` between two seals leaves behind. `sealed_manifests` does not
+/// look at a name ending in `.part`, so nothing else in the run notices it.
+fn block_the_seal_of(dir: &Path, segment: u64) -> PathBuf {
+    let at = dir.join(format!("s0-{segment:06}.mf.part"));
+    std::fs::create_dir_all(&at).expect("the seal is blocked");
+    at
+}
+
+fn remembered(dir: &Path, file: &Path) -> cursor::Cursor {
+    match cursor::load(dir, ShardIx(0), file) {
+        Remembered::Cursor(cursor) => cursor,
+        other => panic!("no position was written down at all: {other:?}"),
+    }
 }
 
 /// Every dispatched notification in the directory, by the instant it happened at.
@@ -362,6 +441,181 @@ fn a_cursor_under_the_same_name_but_about_another_file_says_nothing_about_this_o
         after.resume
     );
     assert_eq!(after.ingested.accepted.written, 2);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+// ---------------------------------------------------------------------------
+// How wide the window is, and what closes it
+// ---------------------------------------------------------------------------
+
+#[test]
+fn an_import_longer_than_one_segment_seals_as_often_as_the_policy_says() {
+    // `--seal-records` was a flag on this command that nothing read: `ship` sealed
+    // once, at the end, whatever the number said. A run that seals once has a
+    // duplication window as wide as itself.
+    let dir = scratch("many-seals");
+    let file = dir.join("sent.ndjson");
+    std::fs::write(&file, long_journal(500)).expect("the fixture is written");
+
+    let shipped =
+        attempt(sealing_every(100), &dir, &file, 0x736f6d65).expect("the file is shipped");
+    assert_eq!(shipped.ingested.accepted.written, 500, "every line landed");
+    assert_eq!(
+        manifests(&dir),
+        5,
+        "five hundred records at a hundred to a segment is five sealed segments, and \
+         a command that seals once at the end of its run publishes one"
+    );
+    assert_eq!(shipped.sealed.len(), 5, "and the run says so");
+    assert_eq!(
+        shipped.cursor.bytes,
+        500 * line_width(),
+        "the position still ends at the end of the file"
+    );
+    assert_eq!(
+        shipped.cursor_commits, 5,
+        "one commit per sealed segment, and the one at the end of the run asked for \
+         the position the fifth seal had already written"
+    );
+    assert_eq!(occurred(&dir).len(), 500, "and no line was stored twice");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn a_run_that_stops_between_seals_resumes_from_the_last_one_and_not_from_the_start() {
+    // The whole point, measured. A crash costs a re-import of the records that were
+    // written and never sealed, and of nothing before them. Before this branch it
+    // cost a re-import of the entire run, because the position moved once, at the
+    // end, and a run that did not reach its end moved it not at all.
+    let dir = scratch("stopped");
+    let file = dir.join("sent.ndjson");
+    std::fs::write(&file, long_journal(500)).expect("the fixture is written");
+    let blocked = block_the_seal_of(&dir, 3);
+
+    let stopped = attempt(sealing_every(100), &dir, &file, 0x73746f70);
+    assert!(
+        stopped.is_err(),
+        "the run reached the end of a five-segment file without ever trying to seal a \
+         third segment, so it seals once per run rather than once per segment: {:?}",
+        stopped.map(|s| (s.cursor.bytes, s.cursor.lines))
+    );
+
+    // Two segments are sealed and the position stands on the second of them: behind
+    // the records that were written into the third and never committed, never ahead.
+    assert_eq!(manifests(&dir), 2, "the third seal never landed");
+    let at = remembered(&dir, &file);
+    assert_eq!(at.bytes, 200 * line_width(), "two segments' worth of bytes");
+    assert_eq!(at.lines, 200);
+    assert_eq!(at.records, 200);
+    assert_eq!(
+        occurred(&dir).len() as u64,
+        at.records,
+        "the position claims exactly the records a reader can find sealed"
+    );
+
+    // What resuming then costs. The next run reads from line 200, so the hundred
+    // records the dead run had put in the unsealed segment are the only ones stored
+    // twice, and nothing is missing.
+    std::fs::remove_dir(&blocked).expect("the seal is unblocked");
+    let after = attempt(sealing_every(100), &dir, &file, 0x61667465).expect("the rest is shipped");
+    assert_eq!(
+        after.from,
+        200 * line_width(),
+        "it carried on from the last seal"
+    );
+    assert_eq!(after.ingested.report.mapped, 300);
+
+    let instants = occurred(&dir);
+    let mut distinct = instants.clone();
+    distinct.dedup();
+    assert_eq!(distinct.len(), 500, "every line is in the store");
+    assert_eq!(
+        instants.len() - distinct.len(),
+        100,
+        "and exactly one unsealed segment's worth is in it twice, rather than the \
+         whole of the run that died"
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn a_line_that_produced_no_record_does_not_carry_the_position_past_itself() {
+    // A refused line advances the file offset and stores nothing, so a position
+    // committed past one rests on no evidence at all. Committing it at a seal would
+    // mean that a build which later learns to map that type never sees the line
+    // again, and nothing would say so. So a seal moves the position to the last line
+    // whose record is in the segment being sealed, and not one byte further.
+    let dir = scratch("refused");
+    let file = dir.join("sent.ndjson");
+    let mut text = long_journal(100);
+    for n in 100..103 {
+        text.push_str(&unmappable(n));
+    }
+    for n in 103..200 {
+        text.push_str(&dispatch_at(n));
+    }
+    std::fs::write(&file, &text).expect("the fixture is written");
+    let blocked = block_the_seal_of(&dir, 2);
+
+    let stopped = attempt(sealing_every(100), &dir, &file, 0x72656675);
+    assert!(
+        stopped.is_err(),
+        "the run finished without a second seal, so nothing was committed inside it: \
+         {:?}",
+        stopped.map(|s| (s.cursor.bytes, s.cursor.lines))
+    );
+
+    let at = remembered(&dir, &file);
+    assert_eq!(
+        at.bytes,
+        100 * line_width(),
+        "the position stands on the last line the sealed segment holds a record for, \
+         and not past the three that produced none"
+    );
+    assert_eq!(
+        at.lines, 100,
+        "three refused lines are not accounted for yet"
+    );
+    assert_eq!(at.records, 100);
+
+    // They are read again, refused again, and cost a parse rather than a record.
+    std::fs::remove_dir(&blocked).expect("the seal is unblocked");
+    let after = attempt(sealing_every(100), &dir, &file, 0x61676169).expect("the rest is shipped");
+    assert_eq!(
+        after.ingested.report.unknown_type, 3,
+        "the lines that produced nothing were read again"
+    );
+    assert_eq!(after.ingested.report.mapped, 97);
+    assert_eq!(
+        after.cursor.lines, 200,
+        "and the end of the run accounts for all of them, refused ones included, \
+         exactly as it did before"
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn a_run_that_seals_nothing_writes_its_position_down_as_it_always_did() {
+    // The no-regression half. A file this reading maps nothing in produces no
+    // record, no segment and no manifest, and the position still moves to the end of
+    // it, or every run afterwards would read the same unmappable lines for ever.
+    let dir = scratch("nothing-sealed");
+    let file = dir.join("sent.ndjson");
+    let text: String = (0..40).map(unmappable).collect();
+    std::fs::write(&file, &text).expect("the fixture is written");
+
+    let shipped = attempt(sealing_every(10), &dir, &file, 0x6e6f7468).expect("the file is shipped");
+    assert_eq!(shipped.ingested.accepted.written, 0);
+    assert_eq!(manifests(&dir), 0, "there was nothing durable to seal");
+    assert!(shipped.cursor_written, "and the position still moved");
+    assert_eq!(shipped.cursor.bytes, text.len() as u64);
+    assert_eq!(shipped.cursor.records, 0);
+
+    let again = attempt(sealing_every(10), &dir, &file, 0x6e6f7469).expect("the file is shipped");
+    assert!(
+        again.nothing_new(),
+        "a file of lines nothing maps must not be read again for ever"
+    );
     let _ = std::fs::remove_dir_all(&dir);
 }
 

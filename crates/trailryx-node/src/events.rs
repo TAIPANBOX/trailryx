@@ -24,6 +24,24 @@
 //! when the seal failed, and it must not consume a line whose terminator has not
 //! arrived. None of those is observable from outside a process, so none of them
 //! could be tested while they lived in a binary.
+//!
+//! # A seal boundary is not a place in the file
+//!
+//! The position moves once per sealed segment, so this file's job is to know which
+//! byte of the source each seal covers, and the two do not line up on their own.
+//! One import's lines can straddle two segments; a segment can hold records
+//! recovered from a run that died; and a line that produced no record advances the
+//! file and commits nothing. So "how far this run has read" is the wrong number to
+//! write at a seal: it reaches over lines whose records are in the next, still open
+//! segment.
+//!
+//! [`Batch`] is the answer, and it is small on purpose. Units are cut into batches
+//! that never span a seal, and each batch carries the offset one past the last line
+//! that put a unit **in that batch**. Accepting a batch puts every one of its
+//! records on the journal, so when the seal that follows lands, that offset is
+//! covered by a manifest and nothing past it is. Nothing is kept per line, no side
+//! index of the file is built, and no second file records any of it: the number
+//! rides with the units it is about and dies with them.
 
 use std::path::{Path, PathBuf};
 
@@ -49,6 +67,27 @@ pub struct Ingested {
     pub report: Report,
     /// Complete lines this run read, blank ones included.
     pub lines: u64,
+}
+
+/// Units to hand over at once, and the source position they account for.
+///
+/// The two numbers are the whole of the per-segment cursor. `through` is one past
+/// the terminator of the last line that put a unit in here, **absolute in the
+/// file**, and `lines` is that same line's number. Lines after it are not in this
+/// batch, whether because they produced no record or because they belong to the
+/// next one, and neither kind may carry a position over on this batch's evidence.
+struct Batch {
+    units: Vec<Ingest>,
+    through: u64,
+    lines: u64,
+}
+
+/// Everything framing one region produced.
+struct Framed {
+    batches: Vec<Batch>,
+    report: Report,
+    /// Complete lines in the region, blank and refused ones included.
+    lines: u64,
 }
 
 /// One run of `trailryx-node events --file`.
@@ -77,12 +116,27 @@ pub struct Shipped {
     pub ingested: Ingested,
     /// Absent when nothing was new, because then the plane is never opened.
     pub opened: Option<Opened>,
-    pub sealed: Option<Sealed>,
+    /// Every segment this run sealed, in order.
+    ///
+    /// A list rather than the one seal a run used to end with: the schedule decides
+    /// how many there are, and each of them is a commit point that moved the
+    /// position. Empty is a real answer and means nothing durable was produced.
+    pub sealed: Vec<Sealed>,
     /// Where the reader stands in this file now.
     pub cursor: Cursor,
     /// Whether that position was written down this run.
     pub cursor_written: bool,
+    /// How many times it was written. One per sealed segment, plus the one at the
+    /// end of the run, minus any that would have rewritten a position unchanged.
+    pub cursor_commits: u64,
     pub cursor_path: PathBuf,
+    /// The position that is on disk, as far as this run knows.
+    ///
+    /// Private, and it is the guard behind "an unchanged file is not written to":
+    /// with one commit per run that could be read off `resume`, and with several it
+    /// cannot, because the second commit has to be compared against the first
+    /// rather than against what the run started from.
+    committed: Option<(u64, u64, u64)>,
 }
 
 impl Shipped {
@@ -120,23 +174,33 @@ pub fn ship(ship: &Ship<'_>) -> Result<Shipped, PlaneError> {
     let to = cursor::complete_prefix(&bytes).max(from);
     let held_back = bytes.len() as u64 - to;
 
+    // The hash of the prefix a position claims. Carried across the run's commits,
+    // because there are now several of them and taking each from byte zero would
+    // make an import cost its own length times the number of seals.
+    let mut prefix = cursor::Prefix::default();
+
     let mut out = Shipped {
         from,
         to,
         held_back,
         ingested: Ingested::default(),
         opened: None,
-        sealed: None,
+        sealed: Vec::new(),
         cursor: Cursor {
             path: source.clone(),
-            bytes: to,
+            bytes: from,
             lines: resume.lines_before(),
             records: resume.records_before(),
-            prefix: cursor::digest(&bytes[..usize::try_from(to).unwrap_or(usize::MAX)]),
+            prefix: prefix.through(&bytes, from),
             at: Timestamp(SystemClock::new().wall_nanos()),
         },
         cursor_written: false,
+        cursor_commits: 0,
         cursor_path: cursor::path_of(ship.dir, ship.shard, ship.file),
+        committed: match &resume {
+            Resume::After(before) => Some((before.bytes, before.lines, before.records)),
+            Resume::Whole(_) => None,
+        },
         resume,
     };
 
@@ -149,7 +213,8 @@ pub fn ship(ship: &Ship<'_>) -> Result<Shipped, PlaneError> {
         // The position is still written down when it is not the position that was
         // remembered, which is how a file that was rotated away to nothing stops
         // being reported as rotated on every run afterwards.
-        out.cursor_written = out.wrote_a_new_position(ship)?;
+        let (lines, records) = (out.cursor.lines, out.cursor.records);
+        out.commit(ship, &bytes, &mut prefix, to, lines, records)?;
         return Ok(out);
     }
 
@@ -165,42 +230,99 @@ pub fn ship(ship: &Ship<'_>) -> Result<Shipped, PlaneError> {
     let now = plane.now();
     let region = &bytes
         [usize::try_from(from).unwrap_or(usize::MAX)..usize::try_from(to).unwrap_or(usize::MAX)];
-    out.ingested = ingest_bytes(&mut plane, &cfg, region, now, out.resume.lines_before())?;
+
+    // A batch may not span a seal, because the schedule is only asked between two
+    // of them. With the default policy this is the batch size and the run behaves
+    // as it always did; with a segment smaller than a batch it is the segment, or
+    // `--seal-records 100` would seal every thousand records and quietly mean
+    // something other than what it says.
+    let cut = BATCH
+        .min(usize::try_from(ship.policy.seal_after_records).unwrap_or(BATCH))
+        .max(1);
+    let framed = frame(&cfg, region, from, out.resume.lines_before(), cut)?;
+    out.ingested.report = framed.report;
+    out.ingested.lines = framed.lines;
+
+    for batch in framed.batches {
+        let (through, lines) = (batch.through, batch.lines);
+        absorb(&mut out.ingested.accepted, plane.accept(batch.units, now)?);
+        if !plane.seal_due(now) {
+            continue;
+        }
+        // THE ORDER HERE IS THE WHOLE DURABILITY ARGUMENT, and it is the same one
+        // the end of this function makes. The manifest write inside `seal` is the
+        // commit point; the position moves only after it returns a sealed segment,
+        // and only as far as the last line whose record is in that segment. So a
+        // crash can leave the position behind the evidence and never ahead of it.
+        // Behind means those lines are read again and stored twice, which the next
+        // run reports; ahead would mean lines nobody stored are skipped, and
+        // nothing at all would say so.
+        //
+        // `seal_due` is asked with the run's own `now`, the same instant the
+        // records carry, so where a run seals is a function of what it read and not
+        // of how long the machine took to read it.
+        let Some(sealed) = plane.seal(now)? else {
+            continue;
+        };
+        out.sealed.push(sealed);
+        let records = out.resume.records_before() + out.ingested.accepted.written;
+        out.commit(ship, &bytes, &mut prefix, through, lines, records)?;
+    }
 
     // Sealed here rather than left for a schedule, because this command ends: a
     // record that is written and never sealed is a record no proof covers.
     //
-    // THE ORDER BELOW IS THE WHOLE DURABILITY ARGUMENT. The manifest write inside
-    // `seal` is the commit point, and the cursor moves only after it, so a crash
-    // can leave the cursor behind the evidence and never ahead of it. Behind means
-    // this run's lines are read again and stored twice, which the next run
-    // reports; ahead would mean lines that were never stored are skipped, and
-    // nothing at all would say so. The `?` is part of it: a seal that failed never
-    // reaches the line below.
-    out.sealed = plane.seal(plane.now())?;
-    out.cursor.lines = out.resume.lines_before() + out.ingested.lines;
-    out.cursor.records = out.resume.records_before() + out.ingested.accepted.written;
-    out.cursor_written = out.wrote_a_new_position(ship)?;
+    // The last commit is the only one that may reach past a line that produced no
+    // record, and it is why a file of lines this build cannot map is not read for
+    // ever: the run has finished with them, nothing was stored for them, and
+    // nothing can be lost by not reading them again. A commit inside the run may
+    // not do that, because a crash would then have skipped lines a later build,
+    // taught to map them, would never see. The `?` is part of the order: a seal
+    // that failed never reaches the line below it.
+    if let Some(sealed) = plane.seal(plane.now())? {
+        out.sealed.push(sealed);
+    }
+    let lines = out.resume.lines_before() + out.ingested.lines;
+    let records = out.resume.records_before() + out.ingested.accepted.written;
+    out.commit(ship, &bytes, &mut prefix, to, lines, records)?;
     Ok(out)
 }
 
 impl Shipped {
-    /// Commit the position, unless it is the position that was already there.
+    /// Commit a position, unless it is the position that is already there.
     ///
-    /// The exception is what makes "an unchanged file is not written to" literal
-    /// rather than nearly true: a re-run over a file nobody has touched must leave
-    /// the data directory byte for byte as it found it, cursor included.
-    fn wrote_a_new_position(&self, ship: &Ship<'_>) -> Result<bool, PlaneError> {
-        if let Resume::After(before) = &self.resume
-            && before.bytes == self.cursor.bytes
-            && before.lines == self.cursor.lines
-            && before.records == self.cursor.records
-        {
-            return Ok(false);
+    /// **Every caller of this is after a seal or after a run that sealed nothing,
+    /// and there is no third case.** The argument for that is at both call sites;
+    /// what belongs here is the exception, which makes "an unchanged file is not
+    /// written to" literal rather than nearly true: a re-run over a file nobody has
+    /// touched must leave the data directory byte for byte as it found it, cursor
+    /// included. It also absorbs the ordinary end of an import, where the final
+    /// commit asks for the position the last seal already committed.
+    fn commit(
+        &mut self,
+        ship: &Ship<'_>,
+        bytes: &[u8],
+        prefix: &mut cursor::Prefix,
+        at: u64,
+        lines: u64,
+        records: u64,
+    ) -> Result<(), PlaneError> {
+        // The path is the one thing that does not move, so the position is edited
+        // rather than rebuilt around it.
+        self.cursor.bytes = at;
+        self.cursor.lines = lines;
+        self.cursor.records = records;
+        self.cursor.prefix = prefix.through(bytes, at);
+        self.cursor.at = Timestamp(SystemClock::new().wall_nanos());
+        if self.committed == Some((at, lines, records)) {
+            return Ok(());
         }
         cursor::save(ship.dir, ship.shard, ship.file, &self.cursor)
             .map_err(|e| PlaneError::Io(format!("{}: {e}", self.cursor_path.display())))?;
-        Ok(true)
+        self.committed = Some((at, lines, records));
+        self.cursor_written = true;
+        self.cursor_commits += 1;
+        Ok(())
     }
 }
 
@@ -233,17 +355,70 @@ pub fn ingest_bytes(
     now: Timestamp,
     lines_before: u64,
 ) -> Result<Ingested, PlaneError> {
-    let mut out = Ingested::default();
+    let framed = frame(cfg, bytes, 0, lines_before, BATCH)?;
+    let mut out = Ingested {
+        accepted: Accepted::default(),
+        report: framed.report,
+        lines: framed.lines,
+    };
+    // No seal here, and that is the division of labour rather than an omission:
+    // this reads bytes into a plane, and only [`ship`] owns a position, so only
+    // [`ship`] may decide when a segment closes. A caller with its own schedule
+    // keeps it.
+    for batch in framed.batches {
+        absorb(&mut out.accepted, plane.accept(batch.units, now)?);
+    }
+    Ok(out)
+}
+
+/// Frame a region into batches, mapping every line it can.
+///
+/// `base` is where `bytes[0]` sits in the file, so a batch's `through` is a
+/// position in the file rather than in whichever fragment this run was given.
+/// `cut` is how many units one batch may hold, and the caller chooses it: the seal
+/// is only asked about between batches, so a batch that spanned one would seal late
+/// and commit a position over records that are not in the segment.
+fn frame(
+    cfg: &EnvelopeConfig,
+    bytes: &[u8],
+    base: u64,
+    lines_before: u64,
+    cut: usize,
+) -> Result<Framed, PlaneError> {
+    let cut = cut.max(1);
+    let mut out = Framed {
+        batches: Vec::new(),
+        report: Report::default(),
+        lines: 0,
+    };
     let mut framer = Framer::new(Limits::default());
-    let mut batch: Vec<Ingest> = Vec::new();
 
     let mut take = |line: trailryx_json::Line<'_>| -> trailryx_json::JsonResult<()> {
         let at = lines_before.saturating_add(line.number);
         match map_line(cfg, line.bytes, SourceCursor(at)) {
             Ok(unit) => {
                 out.report.mapped = out.report.mapped.saturating_add(1);
-                batch.push(unit);
+                let open = match out.batches.last_mut() {
+                    Some(batch) if batch.units.len() < cut => batch,
+                    _ => {
+                        out.batches.push(Batch {
+                            units: Vec::new(),
+                            through: base,
+                            lines: lines_before,
+                        });
+                        out.batches.last_mut().expect("a batch was just pushed")
+                    }
+                };
+                open.units.push(unit);
+                // The batch reaches as far as the line that just put a unit in it,
+                // and no further. A line after this one either produced no record
+                // or will land in the next batch, and neither is evidence for a
+                // position past this point.
+                open.through = base.saturating_add(line.end);
+                open.lines = at;
             }
+            // Counted, and it moves nothing. The offset a refused line occupies is
+            // accounted for at the end of the run and never at a seal: see `ship`.
             Err(rejection) => out.report.note(rejection),
         }
         Ok(())
@@ -257,14 +432,14 @@ pub fn ingest_bytes(
         ));
     }
     out.lines = framer.line_no();
-
-    for chunk in batch.chunks(BATCH) {
-        let accepted = plane.accept(chunk.to_vec(), now)?;
-        out.accepted.written += accepted.written;
-        out.accepted.duplicates += accepted.duplicates;
-        out.accepted.declined_payload_parts += accepted.declined_payload_parts;
-    }
     Ok(out)
+}
+
+/// One batch's counts into a run's.
+fn absorb(total: &mut Accepted, one: Accepted) {
+    total.written += one.written;
+    total.duplicates += one.duplicates;
+    total.declined_payload_parts += one.declined_payload_parts;
 }
 
 /// Whether a rejection means a producer has to change something.

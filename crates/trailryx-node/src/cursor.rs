@@ -49,11 +49,26 @@
 //!
 //! **After the segment holding its records is sealed, never before.** A cursor
 //! that is behind the evidence re-imports; a cursor ahead of it loses. So the
-//! commit point of the data is the commit point of the cursor's right to move,
-//! and the remaining window, between the manifest's rename and the cursor's, can
-//! only ever duplicate one run's worth of lines. This is the journal watermark's
-//! discipline in [`trailryx_journal::journal::Journal::sync`], with the same
-//! answer to the same question: under-promise.
+//! commit point of the data is the commit point of the cursor's right to move.
+//! This is the journal watermark's discipline in
+//! [`trailryx_journal::journal::Journal::sync`], with the same answer to the same
+//! question: under-promise.
+//!
+//! # How far behind, which is a separate question
+//!
+//! The ordering says the cursor is never ahead. How far behind it may be is the
+//! sealing schedule's answer, not the ordering's, and until 6 August 2026 the two
+//! were confused: the position moved once, at the end of a run, so a run killed at
+//! any point moved it not at all and the next run re-imported the whole region
+//! rather than the part that was not sealed. Measured: twenty kills over a
+//! two-thousand-line journal left twenty-one copies of every line.
+//!
+//! So a position is committed **per sealed segment**, and the window is one
+//! unsealed segment's worth of lines. What that costs a caller is a shape rather
+//! than a number: [`crate::events::ship`] must know, at each seal, the offset of
+//! the last line whose record is in the segment being sealed. It is not "how far
+//! this run has read", because the lines after that one are either in the next,
+//! still open segment or produced no record at all, and neither is evidence.
 
 use std::path::{Path, PathBuf};
 
@@ -198,12 +213,70 @@ pub fn complete_prefix(bytes: &[u8]) -> u64 {
     }
 }
 
+/// The domain this module hashes in, written once.
+///
+/// Invariant 16 with a byte string instead of a count: two spellings of one
+/// separator are two different hashes, and the run that noticed would be the one
+/// that refused to resume a file nobody had touched.
+const DOMAIN: &[u8] = b"trailryx/source-cursor/v1\0";
+
 /// The hash of a byte range, in the same function every caller uses.
 pub fn digest(bytes: &[u8]) -> Hash {
     let mut h = Sha384::new();
-    Digest::update(&mut h, b"trailryx/source-cursor/v1\0");
+    Digest::update(&mut h, DOMAIN);
     Digest::update(&mut h, bytes);
     Digest::finish(h)
+}
+
+/// The digest of a growing prefix of one file, carried rather than retaken.
+///
+/// A position now moves once per sealed segment rather than once per run, and each
+/// one carries the hash of exactly the bytes it claims. Taking that hash from byte
+/// zero at every commit would cost the file's length times the number of seals,
+/// which for a fixed segment size is quadratic in the file: a long import would
+/// spend more time re-reading what it had already hashed than reading what it had
+/// not. So the hasher is fed each region once and cloned to answer.
+///
+/// This is a second way of computing a number [`digest`] already computes, which is
+/// the shape invariant 16 warns about. The two are therefore held equal by a test
+/// rather than by looking equal: `a_carried_prefix_agrees_with_one_taken_whole`.
+#[derive(Debug, Clone)]
+pub struct Prefix {
+    hasher: Sha384,
+    at: u64,
+}
+
+impl Default for Prefix {
+    fn default() -> Self {
+        let mut hasher = Sha384::new();
+        Digest::update(&mut hasher, DOMAIN);
+        Self { hasher, at: 0 }
+    }
+}
+
+impl Prefix {
+    /// The digest of `file[..to]`, having read only the bytes since the last ask.
+    ///
+    /// `to` never goes backwards for the caller this exists for, because a cursor
+    /// only moves forward. One that did would be answered with the digest of where
+    /// this stands instead, and that answer is deliberately the safe one rather
+    /// than the right one: a position whose hash does not cover its own byte count
+    /// fails [`decide`] on the next run and the file is read whole, which
+    /// duplicates. Reaching backwards into the hasher to produce the "right" hash
+    /// would let a position be written that nothing had checked.
+    pub fn through(&mut self, file: &[u8], to: u64) -> Hash {
+        let to = to.clamp(self.at, file.len() as u64);
+        let from = usize::try_from(self.at).unwrap_or(usize::MAX);
+        let upto = usize::try_from(to).unwrap_or(usize::MAX);
+        Digest::update(&mut self.hasher, &file[from..upto]);
+        self.at = to;
+        Digest::finish(self.hasher.clone())
+    }
+
+    /// How far this has read.
+    pub fn at(&self) -> u64 {
+        self.at
+    }
 }
 
 /// The cursor file for one source file in one shard's data directory.
@@ -417,6 +490,41 @@ mod tests {
             digest(with_extra.as_bytes()).to_hex()
         );
         assert_eq!(parse(&text), None);
+    }
+
+    #[test]
+    fn a_carried_prefix_agrees_with_one_taken_whole() {
+        // The equality invariant 16 asks for when one number has two computations.
+        // A position is committed per sealed segment, so this is asked several
+        // times in one run, and a carried hash that drifted from the whole one
+        // would write positions no later run could resume from.
+        let file: Vec<u8> = (0..1_000u32).map(|n| (n % 251) as u8).collect();
+        let mut carried = Prefix::default();
+        for to in [0u64, 1, 2, 63, 64, 65, 128, 999, 1_000] {
+            assert_eq!(
+                carried.through(&file, to),
+                digest(&file[..to as usize]),
+                "the carried prefix disagrees at {to}"
+            );
+            assert_eq!(carried.at(), to);
+        }
+    }
+
+    #[test]
+    fn a_prefix_asked_to_go_backwards_answers_for_where_it_stands() {
+        // Not a feature: the safe answer to a question this cannot answer. A hash
+        // that does not cover the byte count written beside it is refused by
+        // `decide` on the next run and the file is read whole, which duplicates and
+        // says so. The alternative is a position nothing checked.
+        let file: Vec<u8> = (0..64u32).map(|n| n as u8).collect();
+        let mut carried = Prefix::default();
+        assert_eq!(carried.through(&file, 64), digest(&file));
+        assert_eq!(
+            carried.through(&file, 8),
+            digest(&file),
+            "it did not rewind"
+        );
+        assert_eq!(carried.at(), 64);
     }
 
     #[test]

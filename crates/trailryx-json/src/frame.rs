@@ -55,6 +55,17 @@ pub struct Line<'a> {
     pub number: u64,
     /// Absolute byte offset of the first byte of the line in the stream.
     pub offset: u64,
+    /// Absolute byte offset one past this line's terminator, which is where the
+    /// next line starts. For a final line with no terminator, the end of the
+    /// stream.
+    ///
+    /// It rides on the line rather than being asked of the framer afterwards, and
+    /// that is the difference between a number that is always right and one that
+    /// is right only while the callback is running. A caller that resumes a file
+    /// needs exactly this: the position it may record as read once that line's
+    /// record is durable. `offset` cannot be turned into it, because the
+    /// terminator was one byte or two and `bytes` has already had it removed.
+    pub end: u64,
 }
 
 /// What the framing saw that was not a line.
@@ -213,6 +224,11 @@ impl Framer {
                     // `at <= room`, so this line is within the cap.
                     let start = self.offset.saturating_sub(self.carry.len() as u64);
                     self.advance(at + 1);
+                    // Read after the advance and never computed from `start`: the
+                    // terminator is one byte or two and the line handed over has
+                    // had it stripped, so this counter is the only thing that
+                    // knows where the next line begins.
+                    let end = self.offset;
                     let after = &rest[at + 1..];
                     self.line_no = self.line_no.saturating_add(1);
                     let number = self.line_no;
@@ -232,6 +248,7 @@ impl Framer {
                                 bytes,
                                 number,
                                 offset: start,
+                                end,
                             })?;
                         }
                     } else {
@@ -247,6 +264,7 @@ impl Framer {
                                 bytes: &self.carry,
                                 number,
                                 offset: start,
+                                end,
                             })
                         };
                         // Cleared before a refusal escapes, so a caller that keeps
@@ -330,6 +348,8 @@ impl Framer {
                 bytes: &self.carry,
                 number,
                 offset: start,
+                // No terminator arrived, so the line ends where the stream does.
+                end: self.offset,
             })
         };
         // Cleared whatever the caller said, so a second `finish` cannot hand the
@@ -454,6 +474,12 @@ mod tests {
     struct Framed {
         /// Bytes, line number and offset of each line handed over, in order.
         lines: Vec<(Vec<u8>, u64, u64)>,
+        /// Where each of those lines ended, terminator included.
+        ///
+        /// Beside the tuple rather than inside it, because two of the tests here
+        /// compare the lines of a file against the lines of the same file with a
+        /// terminator added, and those two agree about everything except this.
+        ends: Vec<u64>,
         report: FrameReport,
         unterminated: bool,
         line_no: u64,
@@ -466,9 +492,11 @@ mod tests {
     fn frame_chunks(chunks: &[&[u8]], limits: Limits) -> JsonResult<Framed> {
         let mut f = Framer::new(limits);
         let mut lines = Vec::new();
+        let mut ends = Vec::new();
         let unterminated = {
             let mut sink = |l: Line<'_>| -> JsonResult<()> {
                 lines.push((l.bytes.to_vec(), l.number, l.offset));
+                ends.push(l.end);
                 Ok(())
             };
             for c in chunks {
@@ -478,6 +506,7 @@ mod tests {
         };
         Ok(Framed {
             lines,
+            ends,
             report: f.report(),
             unterminated,
             line_no: f.line_no(),
@@ -825,6 +854,25 @@ mod tests {
         for size in SIZES.into_iter().chain([input.len()]) {
             let got = by_size(input, size, Limits::default()).expect("no mark");
             assert_eq!(got.lines, want, "chunk size {size}");
+            assert!(got.unterminated);
+        }
+    }
+
+    #[test]
+    fn each_line_ends_where_the_next_one_begins_whatever_its_terminator_was() {
+        // What a caller that resumes a file records once that line's record is
+        // durable, so it has to be past the terminator and past both bytes of a
+        // CRLF. The blank line between the first two is skipped and still counted
+        // in the byte positions, because it is bytes in the file either way.
+        let input: &[u8] = b"{\"a\":1}\n\n{\"bb\":2}\r\n{\"c\":3}";
+        for size in SIZES.into_iter().chain([input.len()]) {
+            let got = by_size(input, size, Limits::default()).expect("no mark");
+            assert_eq!(got.ends, vec![8, 19, 26], "chunk size {size}");
+            // Every line but the last one ends where the next line starts, and the
+            // last one has no terminator, so it ends at the end of the stream.
+            assert_eq!(got.ends[0], got.lines[1].2 - 1, "the blank line is a byte");
+            assert_eq!(got.ends[1], got.lines[2].2);
+            assert_eq!(got.ends[2], input.len() as u64);
             assert!(got.unterminated);
         }
     }
