@@ -148,6 +148,11 @@ jobs:
       - name: scratch paths are cleaned up
         run: ./scripts/scratch-cleanup.sh
 
+      # A test that hangs reports nothing at all, and a runner is where nobody is
+      # watching it fail to finish.
+      - name: waits in tests are bounded
+        run: ./scripts/bounded-waits.sh
+
       # The hook's deletion shortcut, against the cases it must and must not take.
       # CI has no hooks, so this is the only side that ever runs it here; it reads the
       # hook as a file, which is a thing a runner can do as well as a laptop.
