@@ -26,6 +26,21 @@
 # server reads whatever the code under test sends, and the code under test is the thing
 # that might be broken, so the fake is where a bug arrives as silence.
 #
+# It COUNTS accepts against read timeouts rather than asking whether the file contains
+# one, which is stronger but is NOT strong enough, and the difference was measured rather
+# than reasoned about. Counting catches a second `accept()` arriving in a file whose
+# timeouts do not keep pace. It does NOT catch the first `accept()` arriving in a file
+# whose existing `set_read_timeout` is on a different socket, a client one say, because
+# then the counts balance at one and one while the accepted socket is unbounded. Tried,
+# and it passes. Associating a timeout with the socket it bounds is past what a grep can
+# do, and pretending otherwise here would be the kind of paragraph this repository keeps
+# being caught by.
+#
+# The cost of counting is the opposite mistake: two accept loops sharing one `serve` need
+# a second call to satisfy it. That is the right way round to be wrong, because the
+# failure this invariant is about reports nothing at all and a redundant timeout reports
+# itself.
+#
 # The two are halves of one failure and the fix for either alone is not enough, which
 # is why both are here. `crates/trailryx-azure/tests/blob.rs` had neither: its fake
 # server blocked in `serve` on a client that had connected and said nothing, so the
@@ -96,8 +111,10 @@ for f in $tests; do
   accepts=$(grep -c '\.accept()' "$f")
   if [ "$accepts" -gt 0 ]; then
     waits=$((waits + accepts))
-    grep -q 'set_read_timeout' "$f" ||
-      note "$f: accepts a blocking connection and never calls set_read_timeout, so a client that connects and says nothing hangs the run"
+    bounds=$(grep -c 'set_read_timeout' "$f")
+    if [ "$bounds" -lt "$accepts" ]; then
+      note "$f: $accepts accept(s) and $bounds set_read_timeout, so a client that connects and says nothing hangs the run"
+    fi
   fi
 done
 
