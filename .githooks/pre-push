@@ -183,6 +183,11 @@ say "temp paths are per process" ./scripts/temp-paths.sh
 # worst of them held a private key per fixture per run.
 say "scratch paths are cleaned up" ./scripts/scratch-cleanup.sh
 
+# No test waits without a bound. A hanging test reports nothing at all: no failure, no
+# name, no output, which is less than a wrong answer tells you. Cheap, and it found a
+# live one the first time it ran.
+say "waits in tests are bounded" ./scripts/bounded-waits.sh
+
 # The shortcut at the top of this file, against the cases it must and must not take.
 # It is the one check here whose subject is the gate rather than the code, and it is
 # here rather than earlier because it is not a precondition: by the time it runs the

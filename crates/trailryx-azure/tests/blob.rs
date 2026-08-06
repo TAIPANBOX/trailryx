@@ -51,6 +51,18 @@ impl Fake {
         Self { port, seen }
     }
 
+    /// The next request the fake saw, bounded rather than blocking.
+    ///
+    /// `recv` waits for ever when the request never arrives, and a test that waits for
+    /// ever reports nothing at all: no failure, no name, no output, just a run that
+    /// never ends. The S3 fake has carried this note since the day it cost an
+    /// afternoon; this one was written from the same template and did not.
+    fn seen(&self) -> Seen {
+        self.seen
+            .recv_timeout(std::time::Duration::from_secs(10))
+            .expect("the fake never saw the request")
+    }
+
     fn store(&self) -> Azure {
         Azure::new(
             &format!("http://127.0.0.1:{}", self.port),
@@ -70,6 +82,15 @@ fn serve(
     blobs: &mut HashMap<String, Vec<Vec<u8>>>,
     tx: &mpsc::Sender<Seen>,
 ) {
+    // A fake that hangs is worse than a fake that is wrong: the run stops with no
+    // output and no failing test name, and somebody goes looking in the wrong place.
+    // The S3 fake learned this the moment it started refusing bad requests, and this
+    // one is the same fake without the lesson: a client that connects and says nothing
+    // leaves the read below waiting for ever, and because this thread never returns,
+    // the channel never closes and `Fake::seen` waits for ever too.
+    let _ = stream.set_read_timeout(Some(std::time::Duration::from_secs(5)));
+    let _ = stream.set_write_timeout(Some(std::time::Duration::from_secs(5)));
+
     let mut raw = Vec::new();
     let mut chunk = [0u8; 4096];
     let head_end = loop {
@@ -253,7 +274,7 @@ fn a_second_publication_loses_the_race_rather_than_overwriting() {
         Some(b"the winner's bytes".to_vec())
     );
 
-    let sent = fake.seen.recv().expect("the first request");
+    let sent = fake.seen();
     assert!(
         sent.line.starts_with("PUT /records/segments/000001.trx"),
         "{}",
