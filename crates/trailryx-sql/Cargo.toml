@@ -23,7 +23,16 @@ pgwire = "0.40"
 # The runtime the facade lives on, in its OWN threads. architecture.md §3.2a requires
 # the facade never to run on a shard core: tokio's scheduler would cost that shard the
 # determinism deterministic simulation testing needs, and DST is the correctness method.
-tokio = { version = "1", features = ["rt-multi-thread", "net", "macros"] }
+# `io-util` and `time` are for the refusal written to a connection past
+# `Config::max_connections`: the bytes go out through `AsyncWriteExt` and the write is
+# bounded, because everything done on a socket a stranger controls is bounded.
+tokio = { version = "1", features = [
+  "rt-multi-thread",
+  "net",
+  "macros",
+  "io-util",
+  "time",
+] }
 trailryx-contracts = { path = "../trailryx-contracts" }
 trailryx-index = { path = "../trailryx-index" }
 trailryx-projection = { path = "../trailryx-projection" }
