@@ -7,7 +7,7 @@
 ![Stage](https://img.shields.io/badge/stage-13%20of%2013-blue.svg)
 ![Core](https://img.shields.io/badge/core-frozen-success.svg)
 ![Rust](https://img.shields.io/badge/rust-1.85%2B-orange.svg)
-![Tests](https://img.shields.io/badge/tests-1101-success.svg)
+![Tests](https://img.shields.io/badge/tests-1102-success.svg)
 ![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)
 ![Dependencies](https://img.shields.io/badge/deps-0%20in%20the%20verifier-success.svg)
 ![Unsafe](https://img.shields.io/badge/unsafe-forbidden-success.svg)
@@ -278,7 +278,7 @@ migration. What stage 13 still wants is measured absence rather than a guess, an
 | Crate | What it is | Tests |
 |---|---|---|
 | `trailryx-sim` | injectable clock, rng, io and bus; a crash model and fault injection | 18 |
-| `trailryx-record` | the canonical record, its schema, and the plane boundary | 28 |
+| `trailryx-record` | the canonical record, its schema, and the plane boundary | 29 |
 | `trailryx-crypto` | SHA-384 and the hash chain | 22 |
 | `trailryx-core` | the simulated store the determinism criterion runs against | 15 |
 | `trailryx-contracts` | eight adapter traits and a conformance suite | 26 |
@@ -535,7 +535,7 @@ not repeated here: a number written twice is a number that will disagree with it
 ## Try it
 
 ```bash
-cargo test                                    # 1101 tests
+cargo test                                    # 1102 tests
 cargo run --bin trailryx-sim-run -- --help
 ```
 

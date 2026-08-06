@@ -444,6 +444,101 @@ pub const PROVABLE_DIMENSIONS: &[&str] = &["id", "recorded_at", "agent_id", "run
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::schema::{Kind, RECORD_V1};
+
+    /// Every closed vocabulary, as the pair it actually is: the path the schema
+    /// document publishes it under, and the enum the compiler checks.
+    ///
+    /// This table is itself a second place, so
+    /// `every_closed_vocabulary_in_the_schema_is_held_against_an_enum` holds it.
+    /// Without that, a field added to the schema and not to this list would be a
+    /// vocabulary nothing compares, which is the same drift one level up.
+    fn vocabularies() -> Vec<(&'static str, Vec<&'static str>)> {
+        macro_rules! names {
+            ($ty:ty) => {
+                <$ty>::ALL
+                    .iter()
+                    .map(|v| v.as_str())
+                    .collect::<Vec<&'static str>>()
+            };
+        }
+        vec![
+            ("event_type", names!(EventType)),
+            ("severity", names!(Severity)),
+            ("outcome.verdict", names!(Verdict)),
+            ("outcome.error", names!(ErrorCode)),
+            ("payload.class", names!(PayloadClass)),
+            ("algorithms.hash", names!(HashAlg)),
+            ("algorithms.signature", names!(SigAlg)),
+            ("algorithms.kem", names!(KemAlg)),
+        ]
+    }
+
+    fn schema_enum(path: &str) -> &'static [&'static str] {
+        let field = RECORD_V1
+            .fields
+            .iter()
+            .find(|f| f.path == path)
+            .unwrap_or_else(|| panic!("the schema describes {path}"));
+        match field.kind {
+            Kind::Enum(variants) => variants,
+            _ => panic!("{path} is an enumeration or the boundary rule is not enforceable"),
+        }
+    }
+
+    /// Each vocabulary is written down twice: once as an enum the compiler
+    /// checks, and once in the schema document an auditor reads. Two places, one
+    /// value, which is invariant 16, and the schema is the copy nothing compiles.
+    ///
+    /// It is the copy that leaves the repository, too: `to_json()` publishes it
+    /// and `schema/record.v1.json` is committed, so a variant present in the enum
+    /// and missing here is a value the format's own published description says
+    /// does not exist.
+    ///
+    /// That was not hypothetical. `algorithms.signature` listed `es256`,
+    /// `ml-dsa-65` and `slh-dsa` while `Algorithms::default()` signed with
+    /// `SigAlg::Es384`, so every record the store wrote declared an algorithm the
+    /// schema denied. The fields exist to make the 2030 migration enumerable, and
+    /// a reader who trusts the document would have enumerated the wrong set.
+    ///
+    /// This replaces `the_schema_document_lists_exactly_the_event_types_that_exist`,
+    /// which held one of the eight vocabularies. Two checks of one value is the
+    /// thing invariant 16 is about, and the narrower test was written while the
+    /// other seven were already unheld. It was verified against its own case
+    /// before it was removed: with `notification_dispatched` taken out of the
+    /// schema, this fails naming `event_type` and printing both lists.
+    #[test]
+    fn the_schema_document_lists_exactly_the_variants_that_exist() {
+        for (path, actual) in vocabularies() {
+            assert_eq!(
+                schema_enum(path),
+                actual.as_slice(),
+                "the schema document and the enum disagree about what {path} can be"
+            );
+        }
+    }
+
+    /// The check above compares what it is given, so what it is given has to be
+    /// everything. A new `Kind::Enum` field arriving with no entry in
+    /// `vocabularies()` would leave that field unchecked while the suite reported
+    /// a pass, which is invariant 19 in the place it is easiest to miss.
+    #[test]
+    fn every_closed_vocabulary_in_the_schema_is_held_against_an_enum() {
+        let mut checked: Vec<&str> = vocabularies().iter().map(|(path, _)| *path).collect();
+        checked.sort_unstable();
+        let mut published: Vec<&str> = RECORD_V1
+            .fields
+            .iter()
+            .filter(|f| matches!(f.kind, Kind::Enum(_)))
+            .map(|f| f.path)
+            .collect();
+        published.sort_unstable();
+        assert_eq!(
+            published, checked,
+            "a closed vocabulary in the schema has no enum held against it, so nothing \
+             would notice the two drifting apart"
+        );
+    }
 
     #[test]
     fn enum_names_are_stable_and_unique() {
@@ -462,31 +557,6 @@ mod tests {
                 "{s} is not a stable lower_snake token"
             );
         }
-    }
-
-    /// The vocabulary is written down twice: once as an enum the compiler checks,
-    /// and once in the schema document an auditor reads. Two places, one value,
-    /// which is invariant 16, and the schema is the copy nothing compiles.
-    ///
-    /// It is the copy that leaves the repository, too: `to_json()` publishes it,
-    /// so a variant added to the enum and not here is a record type the format's
-    /// own published description says does not exist.
-    #[test]
-    fn the_schema_document_lists_exactly_the_event_types_that_exist() {
-        let declared = crate::schema::RECORD_V1
-            .fields
-            .iter()
-            .find(|f| f.path == "event_type")
-            .map(|f| match f.kind {
-                crate::schema::Kind::Enum(variants) => variants,
-                _ => panic!("event_type is an enumeration or the boundary rule is not enforceable"),
-            })
-            .expect("the schema describes event_type");
-        let actual: Vec<&str> = EventType::ALL.iter().map(|e| e.as_str()).collect();
-        assert_eq!(
-            declared, actual,
-            "the schema document and the enum disagree about what an event type can be"
-        );
     }
 
     #[test]
