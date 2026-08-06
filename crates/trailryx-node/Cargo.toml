@@ -1,0 +1,36 @@
+[package]
+name = "trailryx-node"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+description = "The record plane as one process: ingest, journal, sealing on a schedule, and a reader"
+
+[dependencies]
+# The estate's shared agent-event envelope. Here rather than left as a library
+# nobody calls, which is the shape this whole crate exists to stop repeating.
+trailryx-agentevent = { path = "../trailryx-agentevent" }
+trailryx-assemble = { path = "../trailryx-assemble" }
+trailryx-contracts = { path = "../trailryx-contracts" }
+trailryx-index = { path = "../trailryx-index" }
+trailryx-ingest = { path = "../trailryx-ingest" }
+trailryx-journal = { path = "../trailryx-journal" }
+trailryx-json = { path = "../trailryx-json" }
+trailryx-otlp = { path = "../trailryx-otlp" }
+trailryx-record = { path = "../trailryx-record" }
+trailryx-sim = { path = "../trailryx-sim" }
+trailryx-store = { path = "../trailryx-store" }
+
+[dev-dependencies]
+# The reader's answer is checked by the one implementation that shares no code
+# with the store: an evidence pack the offline verifier reads. A round trip
+# graded by the code that wrote it would grade its own homework.
+trailryx-verify = { path = "../trailryx-verify" }
+
+[[bin]]
+name = "trailryx-node"
+path = "src/main.rs"
+
+[lints]
+workspace = true

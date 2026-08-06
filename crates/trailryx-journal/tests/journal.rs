@@ -877,3 +877,57 @@ fn a_watermark_that_did_not_finish_landing_promises_nothing() {
         None
     );
 }
+
+/// A reader gets the same walk without the write path attached.
+///
+/// `Journal::open` recovers, which writes a header onto a file that has none and
+/// truncates a tail it will not trust. That is right for a writer and wrong for
+/// anything auditing the file, so `walk_bytes` is the same walk over bytes
+/// somebody else read. The point of the test is that it is the SAME walk: a
+/// second decoder would be a second set of rules about what counts as valid, and
+/// `docs/durability.md` §9 says the weaker one becomes the foundation of whatever
+/// is built next.
+#[test]
+fn a_reader_walks_the_bytes_without_repairing_them() {
+    let mut io = SimIo::new(11, IoFaults::NONE);
+    let mut j = open(&mut io);
+    for n in 1..=5u128 {
+        j.append(&minimal(n), &mut io).unwrap();
+    }
+    j.sync(&mut io).unwrap();
+    let file = io.create("s0.journal").unwrap();
+    let bytes = io.read_all(file).unwrap();
+    let appends = io.stats.appends;
+
+    let walked = Journal::walk_bytes(&bytes, ChainStart::First).unwrap();
+    let mine = j.read_all(&mut io).unwrap();
+    assert_eq!(walked.records.len(), 5);
+    assert_eq!(
+        walked.records.len(),
+        mine.records.len(),
+        "the file walked from outside is the file the journal reads"
+    );
+    assert_eq!(walked.chain.head(), mine.chain.head());
+    assert_eq!(walked.stopped_because, StoppedBecause::EndOfFile);
+
+    // A chain start that is not this file's is checked rather than believed: the
+    // very first record fails its step, which is a broken chain at sequence one
+    // and not a file that quietly reads as empty.
+    let wrong = Journal::walk_bytes(&bytes, ChainStart::After(Hash::ZERO)).unwrap();
+    assert!(
+        matches!(
+            wrong.stopped_because,
+            StoppedBecause::ChainBroken { at_seq: 1 }
+        ),
+        "{:?}",
+        wrong.stopped_because
+    );
+    assert!(wrong.records.is_empty());
+
+    // And none of it wrote anything.
+    assert_eq!(io.read_all(file).unwrap(), bytes);
+    assert_eq!(
+        io.stats.appends, appends,
+        "a reader appended to the journal"
+    );
+}

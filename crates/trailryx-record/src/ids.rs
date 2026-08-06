@@ -152,6 +152,35 @@ impl AgentId {
     }
 }
 
+impl PrincipalId {
+    /// `agent://<trust-domain>/<path>` or `user://<trust-domain>/<path>`, with a
+    /// non-empty path.
+    ///
+    /// The strict half of the pair invariant 23 is about, and it exists for the
+    /// same reason [`AgentId::parse_strict`] does: a delegation chain arriving
+    /// from outside is parsed at the strictness of the ingest door, while the
+    /// journal reads its own back with the lax constructor because it wrote them.
+    /// The two schemes are the two the shared envelope permits, and a principal
+    /// with neither is not a principal this store can say anything about.
+    pub fn parse_strict(s: impl Into<String>) -> Result<Self, IdError> {
+        let id = Self::parse(s)?;
+        let rest = ["agent://", "user://"]
+            .iter()
+            .find_map(|scheme| id.0.strip_prefix(scheme))
+            .ok_or(IdError::BadShape("must start with agent:// or user://"))?;
+        let (domain, path) = rest
+            .split_once('/')
+            .ok_or(IdError::BadShape("must have a path after the trust domain"))?;
+        if domain.is_empty() {
+            return Err(IdError::BadShape("empty trust domain"));
+        }
+        if path.is_empty() {
+            return Err(IdError::BadShape("empty path"));
+        }
+        Ok(id)
+    }
+}
+
 /// A record's own identity: a ULID, kept as its 128 bits.
 ///
 /// Monotonic within a shard, so it sorts by time without a separate index and
@@ -196,6 +225,31 @@ mod tests {
         assert!(AgentId::parse_strict("acme-bank.example/support").is_err());
         assert!(AgentId::parse_strict("agent://acme-bank.example").is_err());
         assert!(AgentId::parse_strict("agent:///path").is_err());
+    }
+
+    #[test]
+    fn a_principal_carries_one_of_two_schemes_and_a_path() {
+        // Both schemes the shared envelope permits, and nothing else. The lax
+        // constructor takes all of these, which is the whole point of having two:
+        // the journal reads back what it wrote, the ingest door does not.
+        assert!(PrincipalId::parse_strict("user://acme.example/u-8f21ac").is_ok());
+        assert!(PrincipalId::parse_strict("agent://acme.example/eng/ci-fixer").is_ok());
+        for refused in [
+            "u-8f21ac",
+            "spiffe://acme.example/agent/x",
+            "user://acme.example",
+            "user:///u-1",
+            "://acme.example/u-1",
+        ] {
+            assert!(
+                PrincipalId::parse(refused).is_ok(),
+                "{refused} is what the journal's own constructor takes"
+            );
+            assert!(
+                PrincipalId::parse_strict(refused).is_err(),
+                "{refused} must not pass the ingest door"
+            );
+        }
     }
 
     #[test]
