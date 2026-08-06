@@ -330,6 +330,11 @@ fn a_stream_with_optional_headers_still_decodes() {
     std::fs::write(&path, b"contents").unwrap();
 
     let out = Command::new("gzip").args(["-N", "-c"]).arg(&path).output();
+    // The file was only ever gzip's input, and this wipe is ABOVE the two early
+    // returns so that a machine where gzip cannot store names is not left with a
+    // directory either. Nothing wiped this path while it was a constant, which cost
+    // one stale directory; with a process id in it, it costs one on every run.
+    let _ = std::fs::remove_dir_all(&dir);
     let Ok(out) = out else {
         println!("skipped: gzip cannot store names here");
         return;

@@ -75,6 +75,10 @@ fn somebody_elses_reader_agrees_with_every_cell() {
         "pyarrow disagreed with the writer:\n{stdout}\n{stderr}"
     );
     println!("{stdout}");
+    // The sibling test below always wiped its directory and this one never did, which
+    // cost one stale directory while the path was a constant. With a process id in it,
+    // it costs one on every run, so the two now behave the same way.
+    let _ = std::fs::remove_dir_all(&dir);
 }
 
 /// The encoding hazard that lists exist to get wrong, put to an outside reader.
