@@ -68,11 +68,47 @@ violation, the exact opposite of the 0 standing beside it.
 | Checks in the hook against checks in CI | equal, counted on both sides rather than promised by either header, and the README's figure checked against them. No other tracked file may state it | `./scripts/gate-count.sh` |
 | Temp paths two processes would share | 0. Every path built from `temp_dir()` carries `std::process::id()`, so two runs of one test binary cannot take each other's scratch directory. How many such paths exist moves on its own, so the check prints it | `./scripts/temp-paths.sh` |
 
-The gate takes about two minutes, most of it the SQL facade's dependency tree.
+How long the gate takes is not in this section, and the reason is the rule above: a
+duration is an output. It moves with the machine, with what else that machine is
+doing, and with whether the build cache is warm. It is measured below.
 
 ---
 
 ## Measured on demand
+
+### How long the gate takes
+
+```
+time ./.githooks/pre-push
+```
+
+6 August 2026, on the machine at the bottom, with a warm build cache and nothing else
+running on it. Two consecutive runs, and the second is the honest one to quote for a
+developer pushing twice in an evening:
+
+| | |
+|---|---|
+| First run | 197s |
+| Second run | 193s |
+| `./scripts/readme-numbers.sh` alone | 89s |
+| `cargo test --workspace` alone | 42s |
+
+**Both of the sentences this replaces were wrong, and wrong in the same direction.**
+The README said a minute and a half and this page said two minutes, against a real
+figure above three. Neither had been re-run since checks were added to the gate, and
+five have been added since the smaller of the two was written.
+
+**The explanation they both gave was wrong as well**, which is the more useful half.
+Each said most of the time was the SQL facade's tree being compiled. On a warm cache
+it is not being compiled at all: the largest single step is the README-numbers check,
+at roughly 45% of the run, because it runs the suite once for the workspace and then
+once per crate row to check the table. The old sentence describes a cold cache, which
+is what CI pays and a developer pays once.
+
+What this figure is not: a promise about another machine, a cold cache, or a machine
+doing something else at the time. An earlier attempt at this measurement, taken while
+another process was compiling, produced a run of 6 minutes 19 and would have been
+quoted as fact if the contention had not been visible.
 
 ### The kill run: a real process, a real disk, a real `SIGKILL`
 

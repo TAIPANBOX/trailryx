@@ -1856,8 +1856,8 @@ every configuration struct against the code meant to read it, the determinism
 criterion, the published seed corpus, the two verifiers agreeing on the same packs, a
 reproducible build of the verifier from two different paths, the TLS build of the HTTP
 client, every parser against hostile bytes, every number this README states about the
-repository, a 200-seed durability sweep, and the advisories. About a minute and a
-half, most of it the facade's dependency tree.
+repository, a 200-seed durability sweep, and the advisories. How long that takes,
+measured rather than remembered, is in [`VALIDATION.md`](VALIDATION.md).
 
 The one about configuration fields was added on 5 August 2026, for a bound on the
 SQL port's live connections that was declared, documented with the reason it
