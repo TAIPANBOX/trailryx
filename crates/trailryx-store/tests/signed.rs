@@ -44,10 +44,28 @@ struct Openssl {
     scratch: PathBuf,
 }
 
+/// Nothing cleaned this scratch up while its path was a constant, which was
+/// survivable: one directory, reused. A per-process path is not survivable that way,
+/// because it is a fresh directory on every run and this one holds a private key.
+/// Each `Openssl` owns its own scratch, so a wipe here can take the whole directory
+/// without reaching a fixture another thread is using.
+impl Drop for Openssl {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.scratch);
+    }
+}
+
 impl Openssl {
     /// `None` when there is no usable OpenSSL, so the caller can say so.
     fn new(name: &str) -> Option<Self> {
-        let scratch = std::env::temp_dir().join(format!("trailryx-sign-{name}"));
+        // Per process, because `$TMPDIR` is shared by every process of one user and
+        // this scratch holds a private key. Two runs of this binary put two different
+        // keys at one `key.pem` and two different messages at one `message.bin`, so a
+        // signature came back over somebody else's bytes, made with somebody else's
+        // key. Measured 6 August 2026 at six concurrent runs: 30 of 30 processes
+        // failed, across six of the tests in this file.
+        let scratch =
+            std::env::temp_dir().join(format!("trailryx-sign-{}-{name}", std::process::id()));
         std::fs::create_dir_all(&scratch).ok()?;
         let key = scratch.join("key.pem");
 

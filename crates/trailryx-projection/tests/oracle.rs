@@ -41,7 +41,10 @@ fn somebody_elses_reader_agrees_with_every_cell() {
     let projection = project(&[&s]).unwrap();
     let columns = project_columns(&[&s]);
 
-    let dir = std::env::temp_dir().join("trailryx-oracle");
+    // Per process: `$TMPDIR` is shared, and the two file names below were constants,
+    // so two runs of this binary handed pyarrow a file the other run was still
+    // writing. See the sibling test below, where the same collision was measured.
+    let dir = std::env::temp_dir().join(format!("trailryx-oracle-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     let parquet = dir.join("projection.parquet");
     let expected = dir.join("expected.tsv");
@@ -75,6 +78,10 @@ fn somebody_elses_reader_agrees_with_every_cell() {
         "pyarrow disagreed with the writer:\n{stdout}\n{stderr}"
     );
     println!("{stdout}");
+    // The sibling test below always wiped its directory and this one never did, which
+    // cost one stale directory while the path was a constant. Per process it would
+    // cost one on every run, so the two now behave the same way.
+    let _ = std::fs::remove_dir_all(&dir);
 }
 
 /// The encoding hazard that lists exist to get wrong, put to an outside reader.
@@ -122,7 +129,11 @@ fn pyarrow_agrees_about_lists_with_empties_at_every_position() {
     ];
 
     let bytes = trailryx_projection::parquet::write(&columns).expect("the file writes");
-    let dir = std::env::temp_dir().join("trailryx-oracle-lists");
+    // Per process, and this is the one where it was measured: the wipe at the end of
+    // this test named a constant path, so one run deleted the parquet another run's
+    // pyarrow was about to open. Six concurrent runs on 6 August 2026 failed 9 of 30
+    // processes, in three rounds of five.
+    let dir = std::env::temp_dir().join(format!("trailryx-oracle-lists-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     let parquet = dir.join("lists.parquet");
     let expected = dir.join("expected.tsv");

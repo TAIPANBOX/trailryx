@@ -123,7 +123,22 @@ fn rust(bytes: &[u8]) -> Verdict {
 }
 
 fn python(python: &str, bytes: &[u8], name: &str) -> Verdict {
-    let dir = std::env::temp_dir().join("trailryx-two-verifiers");
+    // Per process. The pack path was `<name>.trxevid` under a constant directory, so
+    // two runs of this binary wrote one path and the `remove_file` below deleted the
+    // pack the other run's interpreter was about to read. Measured 6 August 2026 at
+    // six concurrent runs: 23 of 30 processes failed. This one is worth more than a
+    // flake, because `two verifiers agree` is its own step of `.githooks/pre-push`,
+    // so the collision refused a push rather than failing a test somebody was
+    // watching.
+    //
+    // The name is in the directory as well as in the file so that the wipe at the end
+    // can take the directory rather than leave an empty one behind on every run. Calls
+    // to this function run on parallel test threads and each carries its own `name`,
+    // so no wipe here reaches a directory another thread is using.
+    let dir = std::env::temp_dir().join(format!(
+        "trailryx-two-verifiers-{}-{name}",
+        std::process::id()
+    ));
     std::fs::create_dir_all(&dir).unwrap();
     let path = dir.join(format!("{name}.trxevid"));
     std::fs::write(&path, bytes).unwrap();
@@ -147,7 +162,7 @@ fn python(python: &str, bytes: &[u8], name: &str) -> Verdict {
                 .and_then(|(n, _)| n.parse().ok())
         })
         .unwrap_or(0);
-    let _ = std::fs::remove_file(&path);
+    let _ = std::fs::remove_dir_all(&dir);
     Verdict { verified, records }
 }
 

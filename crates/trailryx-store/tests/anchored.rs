@@ -117,7 +117,20 @@ ess_cert_id_chain = no
 
 impl Tsa {
     fn new(name: &str) -> Option<Self> {
-        let dir = std::env::temp_dir().join(format!("trailryx-pack-tsa-{name}"));
+        // Per process, for the reason set out at length in
+        // `crates/trailryx-anchor/tests/oracle.rs`: `$TMPDIR` is shared, and both the
+        // wipe below and `Drop`'s name this directory by path rather than by
+        // ownership, so two runs of this binary delete each other's authority.
+        //
+        // Said precisely, because it differs from the anchor crate's version: no
+        // failure was demonstrated here. 130 concurrent processes on 6 August 2026
+        // produced no failure and no skip, where the same harness failed the anchor
+        // oracle 11 times in 30. The window is narrower, because `anchor_over` takes
+        // its token and is done, while the anchor oracle holds a directory open
+        // across a bit-flip sweep and re-reads it afterwards. So this is corrected by
+        // inspection of a shape that is unsafe whether or not it has been caught.
+        let dir =
+            std::env::temp_dir().join(format!("trailryx-pack-tsa-{}-{name}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).ok()?;
         std::fs::write(dir.join("tsa.cnf"), TSA_CONF).ok()?;

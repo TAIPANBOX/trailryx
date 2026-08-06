@@ -324,12 +324,23 @@ fn a_stream_with_optional_headers_still_decodes() {
         println!("skipped: no gzip on PATH");
         return;
     };
-    let dir = std::env::temp_dir().join("trailryx-gzip-name");
+    // Per process, and this one is hygiene rather than a repair. `$TMPDIR` is shared,
+    // so two runs of this binary wrote one path; nothing here deletes it and both
+    // runs write the same eight bytes, which is why 130 concurrent processes on
+    // 6 August 2026 produced no failure at all. It is changed because a shared
+    // mutable path is worth removing while the file is open, not because it was
+    // observed to break.
+    let dir = std::env::temp_dir().join(format!("trailryx-gzip-name-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     let path = dir.join("a-name-worth-storing.bin");
     std::fs::write(&path, b"contents").unwrap();
 
     let out = Command::new("gzip").args(["-N", "-c"]).arg(&path).output();
+    // The file was only ever gzip's input, and this is above the two early returns so
+    // that a machine where gzip cannot store names is not left with a directory
+    // either. Nothing wiped this path while it was a constant, which cost one stale
+    // directory; per process it would cost one on every run.
+    let _ = std::fs::remove_dir_all(&dir);
     let Ok(out) = out else {
         println!("skipped: gzip cannot store names here");
         return;

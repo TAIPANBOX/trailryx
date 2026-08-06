@@ -302,7 +302,12 @@ use trailryx_sql::{QueryError, Session};
 /// a `Session` refuses before the engine is asked.
 #[tokio::test]
 async fn a_session_cannot_be_talked_into_reading_a_local_file() {
-    let dir = std::env::temp_dir().join("trailryx-sql-gate");
+    // Per process. The path was a constant and this test wipes it on the way out, so
+    // one run deleted the `secret.csv` another run was in the middle of asking the
+    // session to refuse. Measured 6 August 2026 at six concurrent runs: 3 of 30
+    // processes failed. The refusal being tested is real either way; what the
+    // collision broke was the setup that makes the refusal mean anything.
+    let dir = std::env::temp_dir().join(format!("trailryx-sql-gate-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     let secret = dir.join("secret.csv");
     std::fs::write(&secret, "a,b\n1,hunter2\n").unwrap();
