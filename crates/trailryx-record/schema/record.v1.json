@@ -46,7 +46,7 @@
     {"path": "prev_hash", "type": "string", "contentEncoding": "base16", "maxLength": 96, "x-plane": "metadata", "x-pii": "never", "x-provable": false, "x-why": "The link that makes the chain tamper-evident."},
     {"path": "segment_id", "type": "integer", "x-plane": "metadata", "x-pii": "never", "x-provable": false, "x-why": "Which segment the record landed in."},
     {"path": "algorithms.hash", "type": "string", "enum": ["sha384"], "x-plane": "metadata", "x-pii": "never", "x-provable": false, "x-why": "Recorded per record so the 2030 migration can enumerate what needs re-signing. Agility is schema, not configuration."},
-    {"path": "algorithms.signature", "type": "string", "enum": ["es256", "ml-dsa-65", "slh-dsa"], "x-plane": "metadata", "x-pii": "never", "x-provable": false, "x-why": "Which signature scheme covered the segment this record belongs to."},
+    {"path": "algorithms.signature", "type": "string", "enum": ["es256", "es384", "ml-dsa-65", "slh-dsa"], "x-plane": "metadata", "x-pii": "never", "x-provable": false, "x-why": "Which signature scheme covered the segment this record belongs to."},
     {"path": "algorithms.kem", "type": "string", "enum": ["x25519-ml-kem-768"], "x-plane": "metadata", "x-pii": "never", "x-provable": false, "x-why": "Which key encapsulation wrapped the payload key. Crypto-erasure lasts exactly as long as this does."},
     {"path": "mapper", "type": "integer", "x-plane": "metadata", "x-pii": "never", "x-provable": false, "x-why": "Which mapper version produced this record. When the semantic conventions move, this moves and the store does not."}
   ],
