@@ -47,7 +47,8 @@ struct Openssl {
 impl Openssl {
     /// `None` when there is no usable OpenSSL, so the caller can say so.
     fn new(name: &str) -> Option<Self> {
-        let scratch = std::env::temp_dir().join(format!("trailryx-sign-{name}"));
+        let scratch =
+            std::env::temp_dir().join(format!("trailryx-sign-{}-{name}", std::process::id()));
         std::fs::create_dir_all(&scratch).ok()?;
         let key = scratch.join("key.pem");
 

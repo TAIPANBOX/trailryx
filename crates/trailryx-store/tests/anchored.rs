@@ -117,7 +117,8 @@ ess_cert_id_chain = no
 
 impl Tsa {
     fn new(name: &str) -> Option<Self> {
-        let dir = std::env::temp_dir().join(format!("trailryx-pack-tsa-{name}"));
+        let dir =
+            std::env::temp_dir().join(format!("trailryx-pack-tsa-{}-{name}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).ok()?;
         std::fs::write(dir.join("tsa.cnf"), TSA_CONF).ok()?;

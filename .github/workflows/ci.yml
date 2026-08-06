@@ -1,6 +1,6 @@
 name: ci
 
-# The same seventeen checks `.githooks/pre-push` runs, so a green push is a green pull
+# The same eighteen checks `.githooks/pre-push` runs, so a green push is a green pull
 # request and neither can drift from the other.
 #
 # THE GUARD ON `if:` STAYS, and it is not decoration. Actions minutes are metered on
@@ -133,6 +133,13 @@ jobs:
       # One file, shared with .githooks/pre-push, so the two cannot drift.
       - name: no unsafe
         run: ./scripts/no-unsafe.sh
+
+      # A fixture that names its scratch directory after itself and nothing else is a
+      # directory two runs of the binary share, and the loser sees a file it wrote go
+      # missing. Cheap here and it matters most here: a runner is exactly where two
+      # jobs of one workspace can end up side by side.
+      - name: temp paths are per process
+        run: ./scripts/temp-paths.sh
 
       # A limit nothing reads is worse than no limit, because the paragraph beside it
       # reads as a mitigation already applied. `Config::max_connections` on the SQL

@@ -123,7 +123,7 @@ fn rust(bytes: &[u8]) -> Verdict {
 }
 
 fn python(python: &str, bytes: &[u8], name: &str) -> Verdict {
-    let dir = std::env::temp_dir().join("trailryx-two-verifiers");
+    let dir = std::env::temp_dir().join(format!("trailryx-two-verifiers-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     let path = dir.join(format!("{name}.trxevid"));
     std::fs::write(&path, bytes).unwrap();
