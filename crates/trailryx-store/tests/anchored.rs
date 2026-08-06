@@ -116,9 +116,28 @@ ess_cert_id_chain = no
 ";
 
 impl Tsa {
+    /// `None` when the authority could not be built, which every caller turns into
+    /// a skip, and that is the thing to know about this function.
+    ///
+    /// The process id in the path is invariant 29 and is not the whole story here.
+    /// Before it, two runs of this binary shared these directories and each wiped
+    /// the other's, and the result was not a failing test: `anchor_over` answered
+    /// `None`, every caller took its `else { return skip(...) }` branch, and the
+    /// binary printed `13 passed` having run no anchor test at all. Measured on
+    /// 6 August 2026 at thirty concurrent copies, that was 145 of 150 processes,
+    /// and it is invisible without `--nocapture` because the harness hides
+    /// `println!` from a passing test.
+    ///
+    /// So the pid closes the one cause that was found. It does not close the shape:
+    /// any other reason this returns `None` still reports thirteen passing tests.
+    /// The `have_openssl_ts()` check each caller makes first has already
+    /// established the tool is there, so the second skip cannot honestly say what
+    /// the first one says.
     fn new(name: &str) -> Option<Self> {
         let dir =
             std::env::temp_dir().join(format!("trailryx-pack-tsa-{}-{name}", std::process::id()));
+        // The wipe stays. A run killed before `Drop` leaves its directory behind,
+        // and a later process handed that pid must not inherit what it left.
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).ok()?;
         std::fs::write(dir.join("tsa.cnf"), TSA_CONF).ok()?;

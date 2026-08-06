@@ -627,6 +627,79 @@ when the session is built and the principal arrives at connect time.
 
 ---
 
+### The nine shared scratch directories, measured one at a time on 6 August 2026
+
+Invariant 29 and `scripts/temp-paths.sh` landed with two of the ten sites measured,
+and the sentence beside them, that nine of them "had never been seen to fail", was
+true of the evidence that existed. It is no longer true of six of them. Each site was
+then measured on its own: 30 copies of its own compiled test binary run at once, five
+rounds before the change and ten after, with the pre-fix binaries kept and re-run at
+the end so the harness is shown still able to find the defect rather than assumed to
+be.
+
+| Site | Before | Pre-fix binary re-run | After |
+|---|---|---|---|
+| `store/signed.rs` | 149/150 | 150/150 | **0/300** |
+| `projection/oracle.rs`, the lists test | 95/150 | 93/150 | **0/300** |
+| `store/two_verifiers.rs` | 86/150 | 98/150 | **0/300** |
+| `asn1/oracle.rs` | 29/150 | 38/150 | **0/300** |
+| `sql/sql.rs` | 11/150 | 12/150 | **0/300** |
+| `ingest/inflate.rs` | 3/150 | 6/150 | **0/300** |
+| `store/anchored.rs` | 0/150 failed, **145/150 ran nothing** | 1/150 failed, **150/150 ran nothing** | **0/300**, 0/300 ran nothing |
+| `projection/oracle.rs`, the cells test | 0/300 at 60 at once | 0/150 | 0/300 |
+| `otlp/jsonenc_is_otlp_json.rs` | 0/300 at 60 at once | 0/150 | 0/300 |
+
+```
+for i in $(seq 1 30); do ./target/debug/deps/<binary> & done; wait
+```
+
+`store/two_verifiers.rs` is its own step of `.githooks/pre-push`, so its 86/150 was
+refusing pushes rather than flaking a test. Its failure said "the second verifier
+rejected a pack the first accepted, so the format is ambiguous or one of them is
+wrong", which named the format for a directory another run had emptied.
+
+The last two rows are **fixed but unproven**, and are listed rather than counted.
+`otlp` already carried the pid in every file name and removes no directory, so two
+runs only ever agreed to create the same folder. The projection cells test removes
+nothing and every run writes identical bytes, so only a torn read could break it, and
+none occurred in 300 processes.
+
+**`store/anchored.rs` is the row worth reading twice, because its collision does not
+fail.** `Tsa::new` answers `None`, `anchor_over` answers `None`, and every caller then
+takes its `else { return skip(...) }` branch, so the binary prints `13 passed` while
+none of the anchor tests ran. That happened to 145 of 150 processes, then to 150 of
+150 on the re-run. It is invisible without `--nocapture`, because the harness hides
+`println!` from a passing test, which is how it stayed invisible. A control run pins
+the cause rather than inferring it: the same 30 copies of the same pre-fix binary
+under the same OpenSSL load, one private `TMPDIR` each, 0 of 150 skipped.
+
+Invariant 29 removes one trigger for that silence and not the silence itself. Any
+other reason `Tsa::new` returns `None` still reports thirteen passing tests, and the
+`openssl ts` check that precedes it has already established the tool is present, so
+the second skip cannot be the honest one the first is.
+
+**The projection oracle is measured here as two sites, and they do not agree.**
+`scripts/temp-paths.sh` cites it as the example of a shared path that got away with
+it, and half of it is: the cells test is 0 of 300. Its sibling in the same file, the
+lists test, removes its directory at the end and is 95 of 150. At the parameters the
+script's own comment states, eight copies and five rounds, the two together fail 13 of
+40. What produces a zero over that whole binary is running it with no oracle at all:
+
+```
+TRAILRYX_PARQUET_ORACLE=       # unset
+                               # 0 of 40 failed, and 40 of 40 skipped both tests
+```
+
+Both tests return before they reach a path when that variable is unset, so a zero from
+that binary is invariant 19's case and not evidence about directories. The mechanical
+rule is unaffected and is if anything better founded, since six of the nine did
+collide once each was measured with its oracle present.
+
+Not measured: whether any of these rates reproduce on CI's Linux runners. They are one
+machine's, and a rate is the least portable number in this file.
+
+---
+
 ## Not yet measured
 
 Stated so the absence is visible rather than inferred:

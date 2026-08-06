@@ -18,14 +18,33 @@
 #
 # The first cost two refused pushes and an hour, because the panic named
 # `query.tsq` in a directory that had ceased to exist and said nothing about who had
-# removed it. Ten sites carried the shape; nine of them had never been seen to fail,
-# which is exactly the property that makes this worth a gate rather than a fix.
+# removed it. Ten sites carried the shape, and when this was written nine of them had
+# never been seen to fail, which is the property that makes this worth a gate rather
+# than a fix.
+#
+# Six of those nine have since been seen to fail, each measured on its own at thirty
+# copies rather than eight. The table is in VALIDATION.md. The two that matter to
+# anybody reading this file:
+#
+#   trailryx-store's two_verifiers    86 of 150 before, 0 of 300 after. It is its own
+#                                     step of the hook, so it refused pushes.
+#   trailryx-store's anchored         0 of 150 by exit code, and 145 of 150 processes
+#                                     ran no anchor test at all while printing
+#                                     `13 passed`. A collision there is a silence.
 #
 # The rule is one thing and it is mechanical: a path derived from `temp_dir()` carries
-# `std::process::id()`. Not every such path can collide (two processes writing
-# identical bytes to one file usually get away with it, and the projection oracle was
-# measured getting away with it), but a rule that asks a reader to judge which ones
-# can is a rule nobody applies to their own new fixture at half past midnight.
+# `std::process::id()`. Not every such path can collide, two processes writing
+# identical bytes to one file usually get away with it, and a rule that asks a reader
+# to judge which ones can is a rule nobody applies to their own new fixture at half
+# past midnight.
+#
+# The projection oracle was the example of getting away with it, and it is half an
+# example. That file holds two fixtures: the cells test writes identical bytes and
+# removes nothing, and is 0 of 300; the lists test removes its directory at the end,
+# and is 95 of 150. Run together at eight copies they fail 13 of 40. A zero over that
+# whole binary is what `TRAILRYX_PARQUET_ORACLE` being unset produces, because both
+# tests then return before they reach a path, which is invariant 19 and not evidence
+# about directories.
 #
 # One file, called by both `.githooks/pre-push` and `.github/workflows/ci.yml`.
 
