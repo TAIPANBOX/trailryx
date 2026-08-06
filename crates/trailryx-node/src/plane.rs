@@ -632,10 +632,20 @@ pub fn sealed_manifests(
 /// here rests on, and it is the local spelling of the conditional write the
 /// object-store path uses. Without it a crash mid-write leaves a half manifest,
 /// which reads as a corrupt segment rather than as an unsealed one.
-fn write_committing(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
+///
+/// Public because [`crate::cursor`] commits the same way and a second copy of
+/// this would be a second answer to one question: invariant 16 is about a value,
+/// and the argument holds harder for a durability protocol, where the two copies
+/// would differ in whichever step somebody forgot.
+pub fn write_committing(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
     use std::io::Write;
 
-    let tmp = path.with_extension("mf.part");
+    // The name with `.part` after all of it, rather than a replaced extension:
+    // `s0-000001.mf` still becomes `s0-000001.mf.part`, and a cursor file keeps
+    // its own name too instead of colliding with a manifest's temporary.
+    let mut tmp = path.as_os_str().to_owned();
+    tmp.push(".part");
+    let tmp = PathBuf::from(tmp);
     {
         let mut file = std::fs::File::create(&tmp)?;
         file.write_all(bytes)?;
