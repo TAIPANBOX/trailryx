@@ -787,7 +787,12 @@ const FIELDS: &[Field] = &[
     },
     Field {
         path: "algorithms.signature",
-        kind: Kind::Enum(&["es256", "ml-dsa-65", "slh-dsa"]),
+        // In `SigAlg::ALL` order, which is the order the variants were added:
+        // `es384` came after `es256` and is what the store actually signs with.
+        // It is listed rather than substituted because these fields exist to
+        // make the 2030 migration enumerable, and a record that misdeclares its
+        // own algorithm cannot be found by the query that plans it.
+        kind: Kind::Enum(&["es256", "es384", "ml-dsa-65", "slh-dsa"]),
         optional: false,
         repeated: false,
         plane: Plane::Metadata,
