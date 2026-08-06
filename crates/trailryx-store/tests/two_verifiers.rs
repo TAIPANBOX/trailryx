@@ -134,7 +134,16 @@ fn python(python: &str, bytes: &[u8], name: &str) -> Verdict {
     // the first accepted, so the format is ambiguous or one of them is wrong". This
     // binary is also its own step of `.githooks/pre-push`, so it refused pushes
     // rather than flaking a test, and a `cargo test` in a second worktree was enough.
-    let dir = std::env::temp_dir().join(format!("trailryx-two-verifiers-{}", std::process::id()));
+    //
+    // `name` is in the directory as well as in the file so that the wipe at the end
+    // can take the directory rather than leave an empty one behind on every run. The
+    // three callers run on parallel test threads and each carries its own `name`,
+    // which is what makes that wipe safe: wiping the shared per-process directory
+    // instead would put the same bug back one level down, between threads.
+    let dir = std::env::temp_dir().join(format!(
+        "trailryx-two-verifiers-{}-{name}",
+        std::process::id()
+    ));
     std::fs::create_dir_all(&dir).unwrap();
     let path = dir.join(format!("{name}.trxevid"));
     std::fs::write(&path, bytes).unwrap();
@@ -158,7 +167,7 @@ fn python(python: &str, bytes: &[u8], name: &str) -> Verdict {
                 .and_then(|(n, _)| n.parse().ok())
         })
         .unwrap_or(0);
-    let _ = std::fs::remove_file(&path);
+    let _ = std::fs::remove_dir_all(&dir);
     Verdict { verified, records }
 }
 

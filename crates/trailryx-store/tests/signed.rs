@@ -44,6 +44,21 @@ struct Openssl {
     scratch: PathBuf,
 }
 
+/// Nothing wiped this scratch, which was survivable while its path was a constant:
+/// eleven directories, reused by every run forever. It stopped being survivable when
+/// the path gained a process id, because that makes eleven NEW directories on every
+/// run, and each one holds the EC private key `new` generated. Measured on this
+/// commit's parent: five runs of the affected suites left 71 directories and 55
+/// private keys in `$TMPDIR`.
+///
+/// Each `Openssl` owns its own scratch and every fixture name in this file is
+/// distinct, so this wipe cannot reach a directory another test thread is using.
+impl Drop for Openssl {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.scratch);
+    }
+}
+
 impl Openssl {
     /// `None` when there is no usable OpenSSL, so the caller can say so.
     fn new(name: &str) -> Option<Self> {
