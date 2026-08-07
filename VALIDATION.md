@@ -467,9 +467,18 @@ and RSA. The last three are not a surprise and not a defect:
   read.
 - **RSA** is in the anchor, which verifies an RFC 3161 timestamp authority's
   certificate, and the authority chooses that, not this project.
-- **ECDH** is the X25519 half of `X25519MlKem768`, the hybrid key exchange. qryx has
-  no way to say "hybrid", so it reports the classical half on its own, which is
-  correct as an inventory line and misleading as a risk line.
+- **ECDH** was explained here as "the X25519 half of `X25519MlKem768`, the hybrid key
+  exchange", and **that explanation was wrong when it was written**. Checked 7 August
+  2026, `grep -rni ecdh --include='*.rs' crates` returns **0**, and every one of the
+  seventeen occurrences of `x25519` in the workspace's Rust is a name rather than an
+  operation: an enum variant, a wire discriminant, a protobuf mapping, a schema string
+  or a doc comment. No key exchange of any kind is performed by this repository's
+  code, so the finding cannot be the classical half of a hybrid the code does not run.
+  What it did match is not something this correction can state without re-running the
+  scan, and guessing a second time is how the first sentence got here. The measured
+  numbers above are left exactly as they were measured; only the sentence that
+  explained one of them away is changed, because the number was a measurement and the
+  explanation was an inference wearing its clothes.
 
 `cnsa` passes because the builtin policy forbids MD5, SHA-1, DES, 3DES, RC4, RC2, DSA
 and RSA under 3072 bits, none of which appear, and deliberately does not gate on

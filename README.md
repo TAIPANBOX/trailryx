@@ -380,9 +380,17 @@ The second exception is the cryptographic provider, and it is the reason the pol
 was written down. The AEAD seam used to hold only an unvalidated stand-in, which
 `Vault::new` refuses, so crypto-erasure, the thing this store is bought for, did not
 run in a deployment at all. `trailryx-crypto-aws` closes that with AES-256-GCM from
-AWS-LC, adds the ML-KEM this format has carried an identifier for since day one, and
-carries the TLS answer with it because `rustls` uses the same backend. One dependency,
-three open questions, in an adapter crate that the core builds and tests without.
+AWS-LC, adds the ML-KEM-768 **half** of the exchange this format has carried an
+identifier for since day one, and carries the TLS answer with it because `rustls` uses
+the same backend. One dependency, three open questions, in an adapter crate that the
+core builds and tests without.
+
+Half is the load-bearing word. The identifier `x25519-ml-kem-768` names a hybrid, the
+X25519 side of it is not written, and the ML-KEM side that is written is called by
+nothing outside its own tests: payload key wrapping goes through `KeyProvider::wrap`,
+which has no key exchange in it at all. The crate's own module documentation says so
+in those terms; this page did not until 7 August 2026, which is the gap this paragraph
+closes.
 
 The acceptance demo seals its payloads with that cipher now. Its keys stay
 deliberately predictable, because the run has to be reproducible, and the eighth step
@@ -1880,8 +1888,21 @@ each other, and the plane boundary holds end to end.
 | Truth | the journal; columnar projections are derived and rebuildable |
 | Proofs | Merkle history tree (RFC 6962) plus a sorted Merkle index per segment per dimension |
 | Composition | one recursion for record → segment → shard → store → federation |
-| Crypto | hybrid X25519 + ML-KEM-768 key wrapping from day one, because crypto-erasure lasts only as long as its KEM |
+| Crypto | the record format names hybrid X25519 + ML-KEM-768 for key wrapping, because crypto-erasure lasts only as long as its KEM. Half of it is built; see the note below |
 | Licence | Apache-2.0 |
+
+**The crypto row is a decision, and one half of it is not yet code.** This row read
+"hybrid X25519 + ML-KEM-768 key wrapping from day one" until 7 August 2026, in the
+present tense, and a design table is exactly where somebody decides whether to trust
+an erasure claim, so the difference is written out rather than left to be found. The
+record format has carried the identifier `x25519-ml-kem-768` since it was frozen and
+still does. `trailryx-crypto-aws` has the ML-KEM-768 half of that exchange, from
+AWS-LC. There is **no X25519 anywhere in this workspace's Rust**: every occurrence of
+the name is an enum variant, a wire discriminant, a protobuf value, a schema string or
+a doc comment. And neither half is reached by the path that actually wraps a payload
+key: `KeyProvider::wrap` takes a key id and a data key, performs no key exchange, and
+every implementation of it in the tree is a fake. So the identifier is what the format
+promises, and not yet what the store does.
 
 The two documents worth reading are in English and are referenced from the code
 that implements them: the durability contract is
