@@ -186,6 +186,16 @@ jobs:
       - name: the TLS builds still work
         run: ./scripts/tls-builds.sh
 
+      # The FIPS 140-3 build, which is the only configuration `Vault::new` accepts and
+      # which nothing here compiled until 7 August 2026. `aws-lc-fips-sys` builds
+      # AWS-LC from source and needs CMake, Go and a C compiler, all of which are on
+      # the ubuntu image; TRAILRYX_FIPS_REQUIRED=1 makes the script refuse rather than
+      # skip if any of them is ever absent, because a skip here would be a check
+      # passing by not looking. Minutes on a cold cache, seconds on the warm one the
+      # step above it already populated. Free: this repository is public.
+      - name: the fips build still works
+        run: TRAILRYX_FIPS_REQUIRED=1 ./scripts/fips-build.sh
+
       # Every number the README states about this repository, against the repository.
       # A README number is a claim with no owner, and an audit on 30 July 2026 found
       # six crate counts drifted, a dependency figure no reading of the tree

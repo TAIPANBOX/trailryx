@@ -7,7 +7,7 @@
 ![Stage](https://img.shields.io/badge/stage-13%20of%2013-blue.svg)
 ![Core](https://img.shields.io/badge/core-frozen-success.svg)
 ![Rust](https://img.shields.io/badge/rust-1.85%2B-orange.svg)
-![Tests](https://img.shields.io/badge/tests-1124-success.svg)
+![Tests](https://img.shields.io/badge/tests-1145-success.svg)
 ![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)
 ![Dependencies](https://img.shields.io/badge/deps-0%20in%20the%20verifier-success.svg)
 ![Unsafe](https://img.shields.io/badge/unsafe-forbidden-success.svg)
@@ -299,7 +299,7 @@ migration. What stage 13 still wants is measured absence rather than a guess, an
 | `trailryx-federation-grpc` | that composition over the wire: gRPC with mutual TLS, and a peer named by its certificate rather than by what it sent | 19 |
 | `trailryx-fuzz` | every hand-written parser, fed bytes it did not expect, from a seed | 5 |
 | `trailryx-publish` | atomic publication of a sealed segment, and the fault model for it | 11 |
-| `trailryx-crypto-aws` | the validated cipher and ML-KEM, behind the erasure seam. The one adapter with a dependency | 7 |
+| `trailryx-crypto-aws` | the validated cipher, the hybrid X25519 + ML-KEM-768 exchange, and the custodian that wraps a payload key with it. The one adapter with a dependency | 28 |
 | `trailryx-asn1` | a bounded DER reader, enough for RFC 3161 and nothing more. Depends on nothing | 30 |
 | `trailryx-anchor` | RFC 3161 timestamping: TSP, the CMS subset, and RSA over Montgomery arithmetic | 52 |
 | `trailryx-ingest` | the OTLP/HTTP server: HTTP/1.1, gzip, bearer auth, all hand-written | 119 |
@@ -380,9 +380,48 @@ The second exception is the cryptographic provider, and it is the reason the pol
 was written down. The AEAD seam used to hold only an unvalidated stand-in, which
 `Vault::new` refuses, so crypto-erasure, the thing this store is bought for, did not
 run in a deployment at all. `trailryx-crypto-aws` closes that with AES-256-GCM from
-AWS-LC, adds the ML-KEM this format has carried an identifier for since day one, and
-carries the TLS answer with it because `rustls` uses the same backend. One dependency,
-three open questions, in an adapter crate that the core builds and tests without.
+AWS-LC, performs the hybrid key exchange this format has carried an identifier for
+since day one, and carries the TLS answer with it because `rustls` uses the same
+backend. One dependency, three open questions, in an adapter crate that the core builds
+and tests without.
+
+### The KEM, and what it was until 7 August 2026
+
+The identifier `x25519-ml-kem-768` names a hybrid and, until that date, nothing
+performed one. The ML-KEM-768 half existed and was called by nothing outside its own
+tests; there was no X25519 in the workspace at all; and payload key wrapping went
+through `KeyProvider::wrap`, which had no key exchange in it and whose every
+implementation was a fake. The crate's own module documentation said so, in those
+terms. This page and `CLAUDE.md` said the opposite, in the present tense.
+
+What is there now, and both halves come from AWS-LC so that no second cryptographic
+supplier arrives for the sake of one curve:
+
+- **X25519**, from `aws-lc-rs`'s `agreement` module, ephemeral on the sending side.
+- **ML-KEM-768**, from the same module, which was already here.
+- **A combiner, which is the part that is not a free choice.** Concatenating two shared
+  secrets and using the result as a key hands an attacker who breaks one half a key
+  with a known half, and binds nothing about which ciphertexts produced it. What is
+  used instead is the `UniversalCombiner` of
+  [draft-irtf-cfrg-hybrid-kems-12](https://datatracker.ietf.org/doc/draft-irtf-cfrg-hybrid-kems/),
+  `KDF(ss_PQ || ss_T || ct_PQ || ct_T || ek_PQ || ek_T || label)`, whose own claim is
+  the one the design needs: secure as long as either component is, with no further
+  assumptions on the components. It is the conservative of the two frameworks in that
+  draft; the tailored one, and X-Wing with it, drops the post-quantum ciphertext from
+  the preimage on the strength of proved properties of ML-KEM-768, which makes it a
+  construction to adopt whole or not to cite at all. Instantiated here with
+  HKDF-SHA-384 and the label `trailryx.kem.x25519-ml-kem-768.v1`.
+- **`HybridKeyProvider`**, which puts it on the wrap path: one encapsulation per
+  key-encryption key, the payload key sealed under the secret it produces, and
+  destroying the key pair is what makes erasure real.
+
+**Two limits, stated because they are the sort that get discovered instead.** That
+custodian keeps its key pairs in memory and writes them nowhere, so a restart makes
+every payload the previous process wrapped unreadable: safe in the direction erasure
+cares about, useless in the direction durability cares about, and a deployment that
+needs both wants a custodian backed by a key management service. And the acceptance
+demo does not use it, because the demo has to reproduce byte for byte and a real KEM
+cannot.
 
 The acceptance demo seals its payloads with that cipher now. Its keys stay
 deliberately predictable, because the run has to be reproducible, and the eighth step
@@ -567,7 +606,7 @@ not repeated here: a number written twice is a number that will disagree with it
 ## Try it
 
 ```bash
-cargo test                                    # 1124 tests
+cargo test                                    # 1145 tests
 cargo run --bin trailryx-sim-run -- --help
 ```
 
@@ -1880,8 +1919,21 @@ each other, and the plane boundary holds end to end.
 | Truth | the journal; columnar projections are derived and rebuildable |
 | Proofs | Merkle history tree (RFC 6962) plus a sorted Merkle index per segment per dimension |
 | Composition | one recursion for record → segment → shard → store → federation |
-| Crypto | hybrid X25519 + ML-KEM-768 key wrapping from day one, because crypto-erasure lasts only as long as its KEM |
+| Crypto | hybrid X25519 + ML-KEM-768 key wrapping, because crypto-erasure lasts only as long as its KEM. Combined by the `UniversalCombiner` of draft-irtf-cfrg-hybrid-kems, not by joining two secrets |
 | Licence | Apache-2.0 |
+
+**This row was a decision described as a property for three weeks, and the correction
+is kept here rather than tidied away.** It read "hybrid X25519 + ML-KEM-768 key
+wrapping from day one", in the present tense, until 7 August 2026. What was true then:
+the record format has carried the identifier `x25519-ml-kem-768` since it was frozen,
+and `trailryx-crypto-aws` had the ML-KEM-768 half. What was not: there was no X25519
+anywhere in the workspace's Rust, every occurrence of the name being an enum variant, a
+wire discriminant, a protobuf value, a schema string or a doc comment; and neither half
+was reached by the path that wraps a payload key, because `KeyProvider::wrap` performed
+no key exchange and every implementation of it was a fake. A design table is exactly
+where somebody decides whether to trust an erasure claim, which is why this is written
+out. Both halves are here now, they are joined by a published combiner, and
+`HybridKeyProvider` is the first implementation of that seam that is not a fake.
 
 The two documents worth reading are in English and are referenced from the code
 that implements them: the durability contract is
@@ -1958,7 +2010,7 @@ use `git worktree`, `git config --worktree --get core.hooksPath` should answer w
 nothing, and `git config --worktree --unset core.hooksPath` if it does not. An
 absolute value there runs a different checkout's hook against your tree.
 
-`.githooks/pre-push` runs twenty-two checks and refuses the push if any fails:
+`.githooks/pre-push` runs twenty-three checks and refuses the push if any fails:
 formatting, clippy with warnings as errors, the tests, a standalone build of the
 substrate crate, a zero-dependency check on every crate outside the SQL facade, a
 build and test of the core with the facade absent, an `unsafe` check, every temp path
@@ -1967,9 +2019,19 @@ shortcut that lets a push of nothing but deletions run no check at all, the coun
 every configuration struct against the code meant to read it, the determinism
 criterion, the published seed corpus, the two verifiers agreeing on the same packs, a
 reproducible build of the verifier from two different paths, the TLS build of the HTTP
-client, every parser against hostile bytes, every number this README states about the
+client, the FIPS 140-3 build of the cryptographic provider, every parser against
+hostile bytes, every number this README states about the
 repository, a 200-seed durability sweep, and the advisories. How long that takes,
 measured rather than remembered, is in [`VALIDATION.md`](VALIDATION.md).
+
+The one about the FIPS build was added on 7 August 2026 and closes a gap of the same
+shape as the configuration one below. `Vault::new` refuses any cipher and key source
+that answer `is_validated() == false`, and both answer `cfg!(feature = "fips")`, so
+that feature is not an optional extra: it is the only configuration in which this
+store may be used at all. No script, hook step or CI job had ever compiled it. On a
+machine without CMake and Go the check says out loud that it skipped, the way the
+advisory check does when `cargo audit` is absent; CI has the toolchain and is told it
+may not skip.
 
 The one about configuration fields was added on 5 August 2026, for a bound on the
 SQL port's live connections that was declared, documented with the reason it

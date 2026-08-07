@@ -23,12 +23,18 @@
 //! seam, and a provider that answered `true` because the algorithm name was right
 //! would be worse than the stand-in it replaced.
 //!
-//! # The post-quantum half, and what it is honestly for
+//! # The hybrid KEM, and where it now runs
 //!
 //! The record format has carried `KemAlg::X25519MlKem768` since the format was
-//! frozen, with nothing behind it. [`hybrid`] is what goes behind it: ML-KEM-768
-//! encapsulation from the same validated module, to be combined with an X25519
-//! exchange so the result survives if either half does.
+//! frozen. Until 7 August 2026 it had **nothing behind it**: [`hybrid`] was the
+//! ML-KEM-768 half alone, no X25519 existed anywhere in the workspace, and neither
+//! was called by anything outside this crate's own tests, while the README and
+//! `CLAUDE.md` described hybrid key wrapping in the present tense.
+//!
+//! Both halves are now here and they are joined by a published combiner rather than
+//! by a concatenation: see [`hybrid`] for the construction and what was followed.
+//! [`custody`] is what puts it on the path that actually wraps a payload key, as the
+//! first implementation of `KeyProvider` in this workspace that is not a fake.
 //!
 //! The urgency is one-sided and worth stating. A signature that weakens can be
 //! re-issued. Ciphertext copied today is decrypted whenever the copier acquires the
@@ -39,6 +45,11 @@
 //! an auditor has to trust instead of read.
 
 #![forbid(unsafe_code)]
+
+pub mod custody;
+pub mod hybrid;
+
+pub use custody::HybridKeyProvider;
 
 use aws_lc_rs::aead::{Aad, BoundKey, Nonce, NonceSequence, OpeningKey, SealingKey, UnboundKey};
 use aws_lc_rs::error::Unspecified;
@@ -163,82 +174,6 @@ impl KeySource for AwsKeySource {
     }
 }
 
-/// The post-quantum half of the key exchange the format already names.
-///
-/// ML-KEM-768 alone is not what gets deployed. `KemAlg::X25519MlKem768` is hybrid on
-/// purpose: the shared secret is derived from both halves, so the result survives if
-/// either one does. That is the conservative reading of a young algorithm, and it is
-/// what every serious deployment of ML-KEM has settled on.
-pub mod hybrid {
-    use aws_lc_rs::kem::{Algorithm, Ciphertext, DecapsulationKey, EncapsulationKey, ML_KEM_768};
-
-    /// A recipient's key pair. The decapsulation half never leaves the holder.
-    pub struct Recipient {
-        secret: DecapsulationKey,
-    }
-
-    impl std::fmt::Debug for Recipient {
-        /// The decapsulation key is the secret half. It is never printed.
-        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-            f.write_str("Recipient(<ml-kem-768 secret>)")
-        }
-    }
-
-    /// What a sender transmits, and the secret both sides end up with.
-    pub struct Encapsulated {
-        pub ciphertext: Vec<u8>,
-        pub shared_secret: Vec<u8>,
-    }
-
-    impl std::fmt::Debug for Encapsulated {
-        /// The ciphertext is public and the shared secret is not, so this prints
-        /// the length of one and nothing of the other.
-        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-            write!(
-                f,
-                "Encapsulated {{ ciphertext: {} bytes, shared_secret: <redacted> }}",
-                self.ciphertext.len()
-            )
-        }
-    }
-
-    fn algorithm() -> &'static Algorithm {
-        &ML_KEM_768
-    }
-
-    impl Recipient {
-        pub fn generate() -> Option<Self> {
-            DecapsulationKey::generate(algorithm())
-                .ok()
-                .map(|secret| Self { secret })
-        }
-
-        /// The public half, to be published or sent.
-        pub fn public_key(&self) -> Option<Vec<u8>> {
-            let public = self.secret.encapsulation_key().ok()?;
-            public.key_bytes().ok().map(|b| b.as_ref().to_vec())
-        }
-
-        /// Recover the shared secret from what a sender transmitted.
-        pub fn decapsulate(&self, ciphertext: &[u8]) -> Option<Vec<u8>> {
-            self.secret
-                .decapsulate(Ciphertext::from(ciphertext))
-                .ok()
-                .map(|secret| secret.as_ref().to_vec())
-        }
-    }
-
-    /// Produce a shared secret for a recipient's published key.
-    pub fn encapsulate(public_key: &[u8]) -> Option<Encapsulated> {
-        let public = EncapsulationKey::new(algorithm(), public_key).ok()?;
-        let (ciphertext, shared_secret) = public.encapsulate().ok()?;
-        Some(Encapsulated {
-            ciphertext: ciphertext.as_ref().to_vec(),
-            shared_secret: shared_secret.as_ref().to_vec(),
-        })
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -315,28 +250,5 @@ mod tests {
         let b = source.fresh_dek();
         assert_ne!(a.as_bytes(), b.as_bytes());
         assert_ne!(source.fresh_nonce(), source.fresh_nonce());
-    }
-
-    #[test]
-    fn both_sides_of_the_post_quantum_exchange_reach_the_same_secret() {
-        let recipient = hybrid::Recipient::generate().expect("a key pair");
-        let public = recipient.public_key().expect("a public key");
-        let sent = hybrid::encapsulate(&public).expect("an encapsulation");
-        let received = recipient
-            .decapsulate(&sent.ciphertext)
-            .expect("a decapsulation");
-        assert_eq!(sent.shared_secret, received);
-        assert_eq!(sent.shared_secret.len(), 32);
-    }
-
-    #[test]
-    fn a_ciphertext_meant_for_somebody_else_yields_a_different_secret() {
-        let ours = hybrid::Recipient::generate().expect("a key pair");
-        let theirs = hybrid::Recipient::generate().expect("a key pair");
-        let sent = hybrid::encapsulate(&theirs.public_key().expect("a key")).expect("sent");
-        // ML-KEM is designed so a wrong key yields a wrong secret rather than an
-        // error, which is what stops an attacker learning anything from failure.
-        let ours_secret = ours.decapsulate(&sent.ciphertext).expect("a secret");
-        assert_ne!(ours_secret, sent.shared_secret);
     }
 }

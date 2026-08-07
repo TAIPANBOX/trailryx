@@ -231,6 +231,14 @@ step "verifier build is reproducible" ./scripts/reproduce.sh
 # deployment.
 step "the TLS builds still work" ./scripts/tls-builds.sh
 
+# The same argument with more at stake. `Vault::new` refuses any cipher and key source
+# that answer `is_validated() == false`, and both answer `cfg!(feature = "fips")`, so
+# that feature is not an extra: it is the only configuration in which this store may be
+# used at all. Nothing here compiled it until 7 August 2026, which means the one build
+# a deployment runs had never been built. It announces a skip out loud on a machine
+# without CMake and Go; CI sets TRAILRYX_FIPS_REQUIRED=1 and cannot skip.
+say "the fips build still works" ./scripts/fips-build.sh
+
 # Every hand-written parser, fed bytes it did not expect, from a seed anybody can
 # rerun. Stage 13 asks for this; the usual answer needs a nightly compiler and
 # produces a corpus nobody can replay from a commit message, and this project

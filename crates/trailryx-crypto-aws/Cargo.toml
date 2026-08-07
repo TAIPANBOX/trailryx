@@ -11,8 +11,14 @@ rust-version.workspace = true
 # the standing decision recorded in docs/planning/trailryx-architecture.md §2a. It
 # is an L2 adapter: the core builds and passes its tests without it.
 [dependencies]
+trailryx-contracts = { path = "../trailryx-contracts" }
 trailryx-erasure = { path = "../trailryx-erasure" }
 aws-lc-rs = "1"
+
+# `trailryx-record` only to name a `KeyId`, and only in tests. A hash type is not a
+# reason to widen what this crate links into a build.
+[dev-dependencies]
+trailryx-record = { path = "../trailryx-record" }
 
 [features]
 # The build that links AWS-LC's FIPS 140-3 module. Without it the algorithms are
