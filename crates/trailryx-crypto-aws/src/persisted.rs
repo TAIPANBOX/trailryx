@@ -661,6 +661,15 @@ fn file_aad_from(path: &Path) -> Vec<u8> {
 /// moved, restored from a backup under another name, or mounted somewhere else in a
 /// container, and a check that failed on any of those would teach an operator that
 /// this refusal is noise.
+///
+/// **What that costs, stated rather than left to be found.** Two custodian directories
+/// under one root key are interchangeable to this check, so a key file copied between
+/// them opens. It is not a confidentiality failure, because the recipient it yields
+/// will not match the ciphertexts in the directory it was copied into and the tag
+/// refuses; it is a confusing failure rather than a dangerous one. Binding the
+/// directory's identity instead would refuse that and refuse every relocation with it,
+/// which is the trade this takes deliberately. A deployment that runs two custodians
+/// over one store should give them two root keys, and then this check does refuse.
 fn dir_context() -> &'static [u8] {
     b"trailryx.custody.directory.v1"
 }
