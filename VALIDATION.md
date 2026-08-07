@@ -480,6 +480,11 @@ and RSA. The last three are not a surprise and not a defect:
   explained one of them away is changed, because the number was a measurement and the
   explanation was an inference wearing its clothes.
 
+  **From 7 August 2026 the sentence would be true, and that is the reason to leave the
+  correction standing rather than to replace it.** `trailryx-crypto-aws` now performs
+  an X25519 agreement, so the next scan will find one for a real reason. A finding that
+  arrives after the explanation is not evidence for the explanation.
+
 `cnsa` passes because the builtin policy forbids MD5, SHA-1, DES, 3DES, RC4, RC2, DSA
 and RSA under 3072 bits, none of which appear, and deliberately does not gate on
 quantum-vulnerability, which has a 2030 deadline rather than an immediate one. Asked
