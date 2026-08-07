@@ -7,7 +7,7 @@
 ![Stage](https://img.shields.io/badge/stage-13%20of%2013-blue.svg)
 ![Core](https://img.shields.io/badge/core-frozen-success.svg)
 ![Rust](https://img.shields.io/badge/rust-1.85%2B-orange.svg)
-![Tests](https://img.shields.io/badge/tests-1145-success.svg)
+![Tests](https://img.shields.io/badge/tests-1167-success.svg)
 ![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)
 ![Dependencies](https://img.shields.io/badge/deps-0%20in%20the%20verifier-success.svg)
 ![Unsafe](https://img.shields.io/badge/unsafe-forbidden-success.svg)
@@ -299,7 +299,7 @@ migration. What stage 13 still wants is measured absence rather than a guess, an
 | `trailryx-federation-grpc` | that composition over the wire: gRPC with mutual TLS, and a peer named by its certificate rather than by what it sent | 19 |
 | `trailryx-fuzz` | every hand-written parser, fed bytes it did not expect, from a seed | 5 |
 | `trailryx-publish` | atomic publication of a sealed segment, and the fault model for it | 11 |
-| `trailryx-crypto-aws` | the validated cipher, the hybrid X25519 + ML-KEM-768 exchange, and the custodian that wraps a payload key with it. The one adapter with a dependency | 28 |
+| `trailryx-crypto-aws` | the validated cipher, the hybrid X25519 + ML-KEM-768 exchange, and the two custodians that wrap a payload key with it: one that keeps its keys in memory and one that keeps them on a disk an operator holds the root key for. The one adapter with a dependency | 50 |
 | `trailryx-asn1` | a bounded DER reader, enough for RFC 3161 and nothing more. Depends on nothing | 30 |
 | `trailryx-anchor` | RFC 3161 timestamping: TSP, the CMS subset, and RSA over Montgomery arithmetic | 52 |
 | `trailryx-ingest` | the OTLP/HTTP server: HTTP/1.1, gzip, bearer auth, all hand-written | 119 |
@@ -413,15 +413,62 @@ supplier arrives for the sake of one curve:
   HKDF-SHA-384 and the label `trailryx.kem.x25519-ml-kem-768.v1`.
 - **`HybridKeyProvider`**, which puts it on the wrap path: one encapsulation per
   key-encryption key, the payload key sealed under the secret it produces, and
-  destroying the key pair is what makes erasure real.
+  destroying the key pair is what makes erasure real. It keeps those key pairs in
+  memory and writes them nowhere, so a restart makes every payload the previous
+  process wrapped unreadable. That is safe in the direction erasure cares about and
+  useless in the direction durability cares about, and it is kept, because a
+  custodian that writes nothing down is the only kind whose `destroy` needs no
+  argument at all.
+- **`PersistedKeyProvider`**, which is the same KEM with the keys kept, and is what a
+  deployment runs. One directory, one file per key-encryption key, and a payload
+  sealed by one process opens in the next.
 
-**Two limits, stated because they are the sort that get discovered instead.** That
-custodian keeps its key pairs in memory and writes them nowhere, so a restart makes
-every payload the previous process wrapped unreadable: safe in the direction erasure
-cares about, useless in the direction durability cares about, and a deployment that
-needs both wants a custodian backed by a key management service. And the acceptance
-demo does not use it, because the demo has to reproduce byte for byte and a real KEM
-cannot.
+### What protects the key files, and what it does not
+
+**A custodian's directory is the whole secret.** Private keys sitting in the clear
+beside the sealed segments would mean that anyone who takes the disk takes everything,
+and crypto-erasure would become theatre: destroying a key means nothing if somebody
+copied it yesterday. A backup, a snapshot, a replica and a stolen laptop are all that
+copy.
+
+So `PersistedKeyProvider` **refuses to open without a 32-byte root key it did not
+generate**, supplied by the operator from an environment variable, a file, or a secret
+manager. Each key file is sealed with AES-256-GCM under a key derived from that root
+by HKDF-SHA-384 and bound to the key id. There is deliberately no "make one if it is
+missing", because a custodian that mints its own root key and writes it beside the data
+is plaintext with extra steps.
+
+Four things follow, and an operator needs all four before deploying this:
+
+- **It protects the offline case, which is the one that happens.** A copied disk, a
+  backup, an object-store snapshot, a decommissioned drive: none of them yields a
+  payload without the root key.
+- **It does not protect against an attacker who has the running process.** They have
+  the root key in memory and every key that process can read. Nothing at this layer
+  can change that; a key management service can, because the private key then never
+  enters this address space.
+- **It does not make erasure retroactive.** Destroying a key destroys this custodian's
+  copy. A copy somebody took while the key was live is beyond the reach of anything
+  here, and the honest statement of what crypto-erasure is includes that sentence.
+- **The root key becomes the single point of failure in both directions.** Lose it and
+  every payload is unreadable, which is an accidental erasure of the whole store.
+  Destroy it deliberately and that is the same operation on purpose, which is a
+  capability worth knowing you have.
+
+**Destroying a key is durable before it is reported.** The commit is one atomic rename
+of a tombstone over the key file, so the destruction and the removal of the material
+happen together, and the answer comes back after the directory is flushed. Measured
+with `trailryx-kill custody 25`: 615 destructions reported across 25 `SIGKILL`s, none
+undone, and 937 wraps reported, none lost. What that run does not measure, and
+[`VALIDATION.md`](VALIDATION.md) says so beside the number, is the flushing itself: a
+kill ends a process and not a kernel, so only a power cut would separate a durable
+write from a buffered one. The cost is about 10 ms per key wrapped and per key
+destroyed on APFS.
+
+**One limit remains, stated because it is the sort that gets discovered instead.** The
+acceptance demo uses neither custodian, because the demo has to reproduce byte for byte
+and a real KEM cannot. Persisting the keys does not change that: a fresh key pair per
+key id from system entropy is no more reproducible than one held in memory.
 
 The acceptance demo seals its payloads with that cipher now. Its keys stay
 deliberately predictable, because the run has to be reproducible, and the eighth step
@@ -562,13 +609,17 @@ Stated here because an adopter meets it here, and printed by `run` at startup so
 that nobody has to have read this page.
 
 - **No payload plane.** A payload is sealed under a key a custodian holds, and
-  this tree has no key-custodian adapter: `trailryx-erasure` has the mechanics
-  and every `KeyProvider` in the workspace is a fake. A node that sealed prompts
-  under keys it generated itself and forgot on exit would be offering an erasure
-  it cannot perform, which is worse than not offering one. So payload parts are
-  **declined and counted**, and the count becomes a record in the run it belongs
-  to, where a reconstruction of that run finds it. The metadata plane, which is
-  the provable one, is kept in full, `prompt_hash` included.
+  **this process wires none**. That used to be a stronger sentence, and the
+  correction matters more than the tidiness: until 7 August 2026 every
+  `KeyProvider` in the workspace was a fake, so there was nothing to wire. There
+  are two real ones now, `HybridKeyProvider` and `PersistedKeyProvider`, and this
+  process still takes neither, because a node cannot choose an operator's custody
+  arrangement for them and the wrong choice here is a node that seals prompts
+  under keys it generated itself and forgets on exit, offering an erasure it
+  cannot perform. So payload parts are **declined and counted**, and the count
+  becomes a record in the run it belongs to, where a reconstruction of that run
+  finds it. The metadata plane, which is the provable one, is kept in full,
+  `prompt_hash` included.
 - **No object-store publication.** `trailryx-store`'s tier, the S3, GCS and Azure
   adapters and the publication protocol all exist and are tested; nothing in this
   binary calls them. Sealed segments live in the data directory.
@@ -606,7 +657,7 @@ not repeated here: a number written twice is a number that will disagree with it
 ## Try it
 
 ```bash
-cargo test                                    # 1145 tests
+cargo test                                    # 1167 tests
 cargo run --bin trailryx-sim-run -- --help
 ```
 
