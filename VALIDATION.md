@@ -151,6 +151,64 @@ virtualised storage.
 That needs a real power cut or a block layer that can be told to forget, and it is in
 *not yet measured* below rather than implied by the table above.
 
+### The custodian's own kill run: a destruction reported is a destruction done
+
+Measured on 7 August 2026, release build, on the machine at the bottom.
+
+```
+./target/release/trailryx-kill custody 25
+```
+
+The child wraps a key under a fresh id, destroys two out of every three, and prints
+each answer as it gets it. The parent kills it with `SIGKILL` at a different point
+each round, opens a **new** custodian over the same directory, and asks about every id
+the child had reported on.
+
+| Rounds | Destructions reported | Destroyed keys that came back | Wraps reported | Wrapped keys that vanished |
+|---|---|---|---|---|
+| 25 | 615 | **0** | 937 | **0** |
+
+Both columns, because the ordering has two sides. A destruction a crash undoes is a
+controller who has already told a regulator the data is gone. A wrapped key whose file
+never landed is a payload nobody opens again. Each destroyed id is asked three
+questions rather than one, because `exists` could be wrong on its own: it must answer
+`false`, `wrap` must refuse, and `unwrap` must refuse.
+
+**Can it see a violation?** Invariant 19, and it was run rather than assumed. Against
+a build whose `destroy` reports `Destroyed::Now` and writes no tombstone:
+
+```
+  round   1: wrapped    46, destroyed    31, resurrected  31, lost   0  VIOLATION
+  round   5: wrapped    76, destroyed    50, resurrected  50, lost   0  VIOLATION
+207 destroyed key(s) came back and 0 wrapped key(s) vanished across 5 kills
+```
+
+**What this run does NOT prove, and the measurement that says so.** It proves the
+*ordering*: nothing is reported before the rename that commits it. It proves nothing
+about the `fsync`s, and here is the number rather than the argument. Against a build
+with both `fsync`s removed and everything else identical, 10 kills reported 494
+destructions, none undone, and 747 wraps, none lost. That is not the `fsync` being
+pointless; it is this harness being unable to see it, for the same reason the journal
+kill run states above: **this kills a process, not a machine.** The kernel survives and
+so does its page cache, so a `SIGKILL` cannot distinguish "on the platter" from "in a
+buffer the kernel still holds". Only a power cut or a block layer that can be told to
+forget would, and that is in *not yet measured* below, where it already was.
+
+The `fsync`s are kept on the argument rather than on this evidence, and they are not
+free. Measured directly, one child process against an empty directory for ten seconds:
+
+```
+599 wraps, 400 destroys, 999 durable commits in 10 s
+10.01 ms per durable commit, apfs on /dev/disk3s5
+```
+
+Each commit is a write, a file `fsync`, a rename and a directory `fsync`, and on APFS
+`File::sync_all` is `F_FULLFSYNC`, which is the expensive one and the honest one. The
+same run with both removed reaches roughly twice the rate, which is the price of the
+claim stated as a number: **a custodian that keeps keys costs about 10 ms per key
+wrapped and per key destroyed on this filesystem.** A store that wraps one key per
+record should read that as the reason a KMS adapter batches.
+
 ### The long simulation run, and the run that proves it can see
 
 Stage 13 asks for a long deterministic run. The gate does 200 seeds on every push,

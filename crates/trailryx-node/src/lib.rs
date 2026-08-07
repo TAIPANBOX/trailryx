@@ -26,12 +26,15 @@
 //!
 //! # What it deliberately does not do, stated here and in the README
 //!
-//! **There is no payload plane in this process.** A payload is sealed under a key
-//! a custodian holds, and this tree has no key-custodian adapter: `trailryx-erasure`
-//! has the mechanics and every implementation of [`trailryx_contracts::contracts::KeyProvider`]
-//! in the workspace is a fake. A node that sealed prompts under keys it generated
-//! itself and forgot on exit would be offering an erasure it cannot perform, which
-//! is worse than not offering one. So payload parts a source hands over are
+//! **There is no payload plane in this process.** A payload is sealed under a key a
+//! custodian holds, and this process wires none. That sentence used to say more, and
+//! the correction is kept rather than tidied away: until 7 August 2026 every
+//! implementation of [`trailryx_contracts::contracts::KeyProvider`] in the workspace
+//! was a fake, so there was nothing to wire. `trailryx_crypto_aws::HybridKeyProvider`
+//! and `trailryx_crypto_aws::PersistedKeyProvider` are both real, and this process
+//! still takes neither: custody is an operator's arrangement and the wrong default is
+//! a node that seals prompts under keys it generated itself and forgets on exit,
+//! offering an erasure it cannot perform, which is worse than not offering one. So payload parts a source hands over are
 //! **declined and counted**, the record carries no payload reference, and the count
 //! becomes a record of its own: see [`plane::Plane::accept`]. The metadata plane,
 //! which is the provable one, is kept in full, `prompt_hash` included.

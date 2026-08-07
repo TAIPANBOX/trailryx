@@ -64,16 +64,21 @@ use crate::hybrid::{self, CIPHERTEXT_BYTES, Recipient};
 
 /// The shape of the blob below. A byte, so a later shape is refused rather than
 /// read as this one.
-const WRAP_VERSION: u8 = 1;
+///
+/// Shared with [`crate::persisted`] rather than copied: the two custodians differ in
+/// where the recipient key pair lives and in nothing a stored envelope can see, so a
+/// second spelling of this layout would be two answers to one question, which is what
+/// invariant 16 is about.
+pub(crate) const WRAP_VERSION: u8 = 1;
 
 /// Everything before the sealed key: version, both ciphertexts, nonce.
-const HEADER_BYTES: usize = 1 + CIPHERTEXT_BYTES + NONCE_BYTES;
+pub(crate) const HEADER_BYTES: usize = 1 + CIPHERTEXT_BYTES + NONCE_BYTES;
 
 /// What a wrapped key is bound to.
 ///
 /// Without this a wrapped key would be interchangeable between key-encryption keys,
 /// and moving one is how a payload outlives the destruction of its own key.
-fn wrap_aad(kek: KeyId) -> Vec<u8> {
+pub(crate) fn wrap_aad(kek: KeyId) -> Vec<u8> {
     let mut aad = Vec::with_capacity(20 + 48);
     aad.extend_from_slice(b"trailryx.kek.wrap.v1");
     aad.extend_from_slice(kek.0.as_bytes());

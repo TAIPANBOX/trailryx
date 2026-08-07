@@ -29,11 +29,31 @@
 //! acked is fine and expected: a write can land without its acknowledgement being
 //! seen. Recovering **less** is the product being false about the one thing it
 //! sells, and it fails the run.
+//!
+//! # The second subject: the key custodian
+//!
+//! `custody` runs the same shape against `trailryx_crypto_aws::PersistedKeyProvider`,
+//! and the sentence it checks is the one crypto-erasure rests on:
+//!
+//! > Every key reported destroyed stays destroyed, and every key reported wrapped is
+//! > still there.
+//!
+//! Both halves, because the ordering has two sides and only one of them is the
+//! frightening one. A destruction that a crash rolls back is a controller who has
+//! already told a regulator the data is gone; a wrapped key whose file never landed
+//! is a payload nobody can open again. The child prints each answer as it gets it,
+//! the parent kills it without warning, reopens the directory and asks.
+//!
+//! It is here rather than in a test because a test cannot be killed. `#[test]`
+//! processes unwind, run destructors and flush, and every one of those is a thing a
+//! `SIGKILL` does not do.
 
 use std::io::Write;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
+use trailryx_contracts::contracts::{KeyId, KeyProvider};
+use trailryx_crypto_aws::{CustodyKey, PersistedKeyProvider};
 use trailryx_journal::journal::{Appended, ChainStart, Journal};
 use trailryx_record::{
     AgentId, Algorithms, Basis, EventType, Hash, MapperVersion, Outcome, Record, RecordId, RunId,
@@ -43,17 +63,184 @@ use trailryx_sim::{StdIo, SystemClock};
 
 const JOURNAL: &str = "journal";
 
+/// The root key the custody run uses.
+///
+/// A constant, and it is one of the few places in this repository where that is the
+/// right answer: the directory it protects is created and destroyed by this binary
+/// and holds nothing. A deployment's key comes from an operator, which is the whole
+/// argument in `trailryx_crypto_aws::persisted`.
+const CUSTODY_ROOT: [u8; 32] = [0x5a; 32];
+
 fn main() {
     let args: Vec<String> = std::env::args().collect();
     let mode = args.get(1).map(String::as_str).unwrap_or("run");
     match mode {
         // The child: append until somebody kills it, printing each ack.
         "write" => write(PathBuf::from(&args[2])),
+        // The custody child: wrap and destroy until somebody kills it.
+        "custody-keys" => custody_keys(
+            Path::new(&args[2]),
+            args.get(3).and_then(|v| v.parse().ok()).unwrap_or(0),
+        ),
+        "custody" => {
+            let rounds: usize = args.get(2).and_then(|v| v.parse().ok()).unwrap_or(10);
+            custody(rounds);
+        }
         // The parent: spawn, kill, verify, repeat.
         _ => {
             let rounds: usize = args.get(2).and_then(|v| v.parse().ok()).unwrap_or(10);
             run(rounds);
         }
+    }
+}
+
+/// A key id from a counter. The custodian only needs them to be distinct.
+fn kek(n: u64) -> KeyId {
+    let mut bytes = [0u8; 48];
+    bytes[..8].copy_from_slice(&n.to_be_bytes());
+    KeyId(Hash(bytes))
+}
+
+/// The child: wrap keys, destroy two out of every three, and print each answer.
+///
+/// `base` keeps each round on key ids of its own. Without it every round re-treads
+/// the ids the last one left behind, and the run measures reopening a directory
+/// rather than committing to it: the first version did exactly that and produced one
+/// destruction across twenty kills, which is invariant 19's failure wearing a
+/// harness's clothes.
+///
+/// Two in three are destroyed rather than one in three, because the destruction is
+/// the ordering under test and the survivors are the control.
+///
+/// Flushed per line, for the same reason the journal writer flushes: an answer still
+/// in this process's buffer when it dies was never reported, and counting it would
+/// make the test easier than the promise.
+fn custody_keys(dir: &Path, base: u64) {
+    let mut provider = match PersistedKeyProvider::open(dir, CustodyKey::from_bytes(CUSTODY_ROOT)) {
+        Ok(provider) => provider,
+        Err(e) => {
+            eprintln!("the custodian would not open: {e}");
+            return;
+        }
+    };
+    let stdout = std::io::stdout();
+    for n in base + 1.. {
+        if provider.wrap(kek(n), &[7u8; 32]).is_err() {
+            return;
+        }
+        {
+            let mut out = stdout.lock();
+            let _ = writeln!(out, "wrapped {n}");
+            let _ = out.flush();
+        }
+        if n % 3 != 0 {
+            if provider.destroy(kek(n)).is_err() {
+                return;
+            }
+            let mut out = stdout.lock();
+            let _ = writeln!(out, "destroyed {n}");
+            let _ = out.flush();
+        }
+    }
+}
+
+/// The parent: spawn, kill, reopen the directory, and ask it what it kept.
+fn custody(rounds: usize) {
+    let dir = std::env::temp_dir().join(format!("trailryx-kill-custody-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    println!("custody kill run: {rounds} rounds in {}", dir.display());
+    println!("filesystem: {}", filesystem(&dir));
+
+    let exe = std::env::current_exe().expect("this binary");
+    let mut resurrected = 0;
+    let mut lost = 0;
+    let mut destroyed_total = 0u64;
+    let mut wrapped_total = 0u64;
+
+    for round in 1..=rounds {
+        let base = (round as u64) * 10_000;
+        let mut child = Command::new(&exe)
+            .arg("custody-keys")
+            .arg(&dir)
+            .arg(base.to_string())
+            .stdout(Stdio::piped())
+            .spawn()
+            .expect("the writer starts");
+
+        // A different length each round, so the kill lands in a different place:
+        // mid-generation, mid-commit, between the rename and the report. Longer than
+        // the journal run's window because a commit here is two `fsync`s and a
+        // `F_FULLFSYNC` on APFS is tens of milliseconds, so a short round measures
+        // process start-up instead of the protocol.
+        let micros = 400_000 + (round as u64 * 79_193) % 600_000;
+        std::thread::sleep(std::time::Duration::from_micros(micros));
+        let _ = child.kill();
+        let output = child.wait_with_output().expect("the writer stops");
+
+        let text = String::from_utf8_lossy(&output.stdout);
+        let reported = |prefix: &str| -> Vec<u64> {
+            text.lines()
+                .filter_map(|l| l.strip_prefix(prefix).and_then(|n| n.parse::<u64>().ok()))
+                .collect()
+        };
+        let destroyed = reported("destroyed ");
+        let wrapped = reported("wrapped ");
+        destroyed_total += destroyed.len() as u64;
+        wrapped_total += wrapped.len() as u64;
+
+        // A new process over the same directory, which is what a restart is.
+        let mut provider = PersistedKeyProvider::open(&dir, CustodyKey::from_bytes(CUSTODY_ROOT))
+            .expect("the custodian reopens");
+
+        let mut back = 0;
+        for n in &destroyed {
+            // Three questions and not one: `exists` could be wrong on its own, and a
+            // key that refuses `exists` while still unwrapping is the failure that
+            // matters.
+            if provider.exists(kek(*n))
+                || provider.wrap(kek(*n), &[7u8; 32]).is_ok()
+                || provider.unwrap(kek(*n), &[0u8; 1133]).is_ok()
+            {
+                back += 1;
+            }
+        }
+        let mut gone = 0;
+        for n in &wrapped {
+            if n % 3 == 0 && !provider.exists(kek(*n)) {
+                gone += 1;
+            }
+        }
+        resurrected += back;
+        lost += gone;
+
+        println!(
+            "  round {round:>3}: wrapped {:>5}, destroyed {:>5}, resurrected {back:>3}, lost {gone:>3}  {}",
+            wrapped.len(),
+            destroyed.len(),
+            if back == 0 && gone == 0 {
+                "ok"
+            } else {
+                "VIOLATION"
+            }
+        );
+    }
+
+    println!();
+    if resurrected == 0 && lost == 0 {
+        println!(
+            "{rounds} kills, {destroyed_total} destructions reported and none undone, \
+             {wrapped_total} wraps reported and none lost, on {}",
+            filesystem(&dir)
+        );
+    } else {
+        println!(
+            "{resurrected} destroyed key(s) came back and {lost} wrapped key(s) vanished \
+             across {rounds} kills"
+        );
+    }
+    let _ = std::fs::remove_dir_all(&dir);
+    if resurrected > 0 || lost > 0 {
+        std::process::exit(1);
     }
 }
 

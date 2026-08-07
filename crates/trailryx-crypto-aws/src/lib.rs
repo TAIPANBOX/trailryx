@@ -48,8 +48,10 @@
 
 pub mod custody;
 pub mod hybrid;
+pub mod persisted;
 
 pub use custody::HybridKeyProvider;
+pub use persisted::{CustodyError, CustodyKey, PersistedKeyProvider};
 
 use aws_lc_rs::aead::{Aad, BoundKey, Nonce, NonceSequence, OpeningKey, SealingKey, UnboundKey};
 use aws_lc_rs::error::Unspecified;

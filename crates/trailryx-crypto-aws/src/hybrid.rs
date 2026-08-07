@@ -66,24 +66,63 @@
 //!
 //! [draft-irtf-cfrg-hybrid-kems-12]: https://datatracker.ietf.org/doc/draft-irtf-cfrg-hybrid-kems/
 //!
+//! # What a recipient has to be written down as
+//!
+//! A [`Recipient`] can be exported to a [`RecipientSecret`] and rebuilt from one,
+//! which is what makes a custodian that outlives its process possible at all. Three
+//! values go in and the third is the one nobody expects:
+//!
+//! - the ML-KEM-768 **decapsulation** key, 2400 bytes;
+//! - the X25519 **private** scalar, 32 bytes;
+//! - the ML-KEM-768 **encapsulation** key, 1184 bytes, which is public and is stored
+//!   anyway **because it cannot be derived from the private half**.
+//!
+//! That last one is a property of the library rather than of ML-KEM, and it is
+//! measured rather than assumed: a `DecapsulationKey` rebuilt through
+//! `DecapsulationKey::new` decapsulates correctly and answers `Err(Unspecified)` to
+//! `encapsulation_key()`, because the raw private encoding does not carry the public
+//! component. aws-lc-rs 1.17.3 documents this on `new` itself and
+//! [`the_encapsulation_key_cannot_be_derived_from_the_private_half`] pins it, so that
+//! a version which fixes it turns a test red rather than leaving 1184 bytes being
+//! stored for a reason nobody can find.
+//!
+//! The classical half needs no such treatment: `PrivateKey::from_private_key`
+//! reproduces a working key from 32 bytes and `compute_public_key` still answers, so
+//! the X25519 public key is derived and not stored. Three values, not four, and the
+//! difference is the whole of why the stored form is the size it is.
+//!
 //! # What this module is not
 //!
 //! It is not a key custodian. It has no notion of a key id, no store, and no
-//! erasure. [`crate::custody`] is where those live.
+//! erasure. [`crate::custody`] and [`crate::persisted`] are where those live.
 
 use aws_lc_rs::agreement::{self, PrivateKey, UnparsedPublicKey, X25519};
 use aws_lc_rs::error::Unspecified;
 use aws_lc_rs::hkdf::{HKDF_SHA384, KeyType, Salt};
 use aws_lc_rs::kem::{Ciphertext, DecapsulationKey, EncapsulationKey, ML_KEM_768};
+use aws_lc_rs::rand::{SecureRandom, SystemRandom};
 
 /// ML-KEM-768's encapsulation key, FIPS 203 table 3.
 pub const ML_KEM_768_ENCAPSULATION_KEY_BYTES: usize = 1184;
+/// ML-KEM-768's decapsulation key, FIPS 203 table 3, in the encoding aws-lc-rs
+/// marshals to and parses from.
+pub const ML_KEM_768_DECAPSULATION_KEY_BYTES: usize = 2400;
 /// ML-KEM-768's ciphertext, FIPS 203 table 3.
 pub const ML_KEM_768_CIPHERTEXT_BYTES: usize = 1088;
 /// An X25519 public key, RFC 7748. Also the size of an ephemeral one on the wire.
 pub const X25519_PUBLIC_KEY_BYTES: usize = 32;
+/// An X25519 private scalar, RFC 7748 §6.1.
+pub const X25519_PRIVATE_KEY_BYTES: usize = 32;
 /// What both halves produce and what the combiner produces.
 pub const SHARED_SECRET_BYTES: usize = 32;
+
+/// Everything a custodian must write down for one recipient.
+///
+/// Two private values and one public one. The public one is here because it cannot
+/// be recomputed; see this module's header.
+pub const RECIPIENT_SECRET_BYTES: usize = ML_KEM_768_DECAPSULATION_KEY_BYTES
+    + X25519_PRIVATE_KEY_BYTES
+    + ML_KEM_768_ENCAPSULATION_KEY_BYTES;
 
 /// A recipient's published key: the ML-KEM encapsulation key, then the X25519 one.
 pub const PUBLIC_KEY_BYTES: usize = ML_KEM_768_ENCAPSULATION_KEY_BYTES + X25519_PUBLIC_KEY_BYTES;
@@ -179,20 +218,77 @@ fn combine(
     Some(SharedSecret(out))
 }
 
-/// A recipient's two private halves. Neither ever leaves the holder.
+/// A recipient's two private halves, and the public half that cannot be derived.
 ///
-/// Both are needed to recover a shared secret, which is the whole point: destroying
-/// this value destroys the ability to unwrap anything encapsulated to it, and one
-/// surviving half is worth nothing.
+/// Both private halves are needed to recover a shared secret, which is the whole
+/// point: destroying this value destroys the ability to unwrap anything encapsulated
+/// to it, and one surviving half is worth nothing.
+///
+/// `pq_public` is held rather than asked for, and it has to be: a recipient rebuilt
+/// from stored bytes cannot produce its own encapsulation key, and the combiner names
+/// `ek_PQ` in the preimage of **both** directions. Keeping it here rather than at the
+/// call site is what makes a restored recipient indistinguishable from a generated
+/// one, so that nothing above this type has to know which it is holding.
 pub struct Recipient {
     pq: DecapsulationKey,
+    pq_public: Vec<u8>,
     classical: PrivateKey,
+    classical_private: [u8; X25519_PRIVATE_KEY_BYTES],
 }
 
 impl std::fmt::Debug for Recipient {
-    /// Both halves are secret. Neither is printed.
+    /// Both private halves are secret. Neither is printed.
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str("Recipient(<ml-kem-768 + x25519 secrets>)")
+    }
+}
+
+impl Drop for Recipient {
+    /// Best effort, and with the same limit as [`SharedSecret`]: this workspace
+    /// forbids `unsafe`, so a volatile write is not available and the zeroing is a
+    /// plain loop the optimiser is asked not to remove. The two library-held halves
+    /// clear themselves.
+    fn drop(&mut self) {
+        self.classical_private.fill(0);
+        std::hint::black_box(&self.classical_private);
+    }
+}
+
+/// The bytes a custodian writes down for one recipient.
+///
+/// `dk_PQ || sk_T || ek_PQ`, fixed length, in that order. Two secrets and one public
+/// value, and the public one is stored because it cannot be recomputed: see this
+/// module's header for the measurement.
+pub struct RecipientSecret([u8; RECIPIENT_SECRET_BYTES]);
+
+impl RecipientSecret {
+    pub fn as_bytes(&self) -> &[u8; RECIPIENT_SECRET_BYTES] {
+        &self.0
+    }
+
+    /// Refuses anything but the exact length, so a truncated file is a refusal here
+    /// rather than a key that behaves oddly later.
+    pub fn from_bytes(bytes: &[u8]) -> Option<Self> {
+        let mut out = [0u8; RECIPIENT_SECRET_BYTES];
+        if bytes.len() != RECIPIENT_SECRET_BYTES {
+            return None;
+        }
+        out.copy_from_slice(bytes);
+        Some(Self(out))
+    }
+}
+
+impl Drop for RecipientSecret {
+    fn drop(&mut self) {
+        self.0.fill(0);
+        std::hint::black_box(&self.0);
+    }
+}
+
+/// Says nothing, for the reason [`SharedSecret`]'s does.
+impl std::fmt::Debug for RecipientSecret {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("RecipientSecret(<redacted>)")
     }
 }
 
@@ -245,10 +341,79 @@ fn agree(private: &PrivateKey, peer: &[u8]) -> Option<SharedSecret> {
 
 impl Recipient {
     /// A fresh key pair, both halves at once.
+    ///
+    /// The classical scalar is drawn here rather than by `PrivateKey::generate`, and
+    /// the reason is custody rather than cryptography: aws-lc-rs will build an
+    /// X25519 key from bytes and will not hand its bytes back, so a key this crate
+    /// did not draw itself is a key no custodian can ever write down. Thirty-two
+    /// bytes from the system source is what `PrivateKey::generate` does with them
+    /// (RFC 7748 §6.1: every 32-byte string is a valid scalar, clamped at use), so
+    /// this is the same key from the same entropy, kept.
     pub fn generate() -> Option<Self> {
+        let mut classical_private = [0u8; X25519_PRIVATE_KEY_BYTES];
+        SystemRandom::new().fill(&mut classical_private).ok()?;
+        let pq = DecapsulationKey::generate(&ML_KEM_768).ok()?;
+        // Taken here, once, while the key still has it. After a round trip through
+        // `DecapsulationKey::new` this call answers `Err(Unspecified)`.
+        let pq_public = pq
+            .encapsulation_key()
+            .ok()?
+            .key_bytes()
+            .ok()?
+            .as_ref()
+            .to_vec();
         Some(Self {
-            pq: DecapsulationKey::generate(&ML_KEM_768).ok()?,
-            classical: PrivateKey::generate(&X25519).ok()?,
+            pq,
+            pq_public,
+            classical: PrivateKey::from_private_key(&X25519, &classical_private).ok()?,
+            classical_private,
+        })
+    }
+
+    /// Everything this recipient must be written down as, to be rebuilt later.
+    ///
+    /// The whole of it is secret in the sense that matters: two thirds of it is
+    /// private key material, and the remaining third identifies the recipient. A
+    /// caller that writes this anywhere is holding the thing crypto-erasure destroys,
+    /// which is why [`crate::persisted`] and not this module decides how it is kept.
+    /// `None` rather than a short write if any part is not the length it must be.
+    /// A secret assembled from a part that was missing would be the same length,
+    /// because the buffer is fixed, and would differ from this recipient in a way
+    /// nothing downstream could see until an unwrap failed.
+    pub fn secret(&self) -> Option<RecipientSecret> {
+        let pq = self.pq.key_bytes().ok()?;
+        let pq = pq.as_ref();
+        if pq.len() != ML_KEM_768_DECAPSULATION_KEY_BYTES
+            || self.pq_public.len() != ML_KEM_768_ENCAPSULATION_KEY_BYTES
+        {
+            return None;
+        }
+        let mut out = [0u8; RECIPIENT_SECRET_BYTES];
+        let (dk, rest) = out.split_at_mut(ML_KEM_768_DECAPSULATION_KEY_BYTES);
+        let (sk, ek) = rest.split_at_mut(X25519_PRIVATE_KEY_BYTES);
+        dk.copy_from_slice(pq);
+        sk.copy_from_slice(&self.classical_private);
+        ek.copy_from_slice(&self.pq_public);
+        Some(RecipientSecret(out))
+    }
+
+    /// Rebuild a recipient from what was written down.
+    ///
+    /// `None` if the bytes are not a key pair this build can use. Nothing here
+    /// proves the three parts belong together: a decapsulation key beside somebody
+    /// else's encapsulation key parses perfectly and derives the wrong secret, so
+    /// what refuses that is the tag on whatever the derived key opens, one layer up.
+    pub fn from_secret(secret: &RecipientSecret) -> Option<Self> {
+        let bytes = secret.as_bytes();
+        let (pq_bytes, rest) = bytes.split_at(ML_KEM_768_DECAPSULATION_KEY_BYTES);
+        let (classical_bytes, pq_public) = rest.split_at(X25519_PRIVATE_KEY_BYTES);
+        let mut classical_private = [0u8; X25519_PRIVATE_KEY_BYTES];
+        classical_private.copy_from_slice(classical_bytes);
+        Some(Self {
+            pq: DecapsulationKey::new(&ML_KEM_768, pq_bytes).ok()?,
+            pq_public: pq_public.to_vec(),
+            classical: PrivateKey::from_private_key(&X25519, &classical_private).ok()?,
+            classical_private,
         })
     }
 
@@ -261,17 +426,18 @@ impl Recipient {
         Some(out)
     }
 
+    /// Both public halves, one held and one derived.
+    ///
+    /// `ek_PQ` is read out of the field rather than asked of the key, which is what
+    /// makes this answer the same for a generated recipient and a restored one. It
+    /// used to call `encapsulation_key()`, and a restored recipient would have
+    /// returned `None` here and taken the whole unwrap path down with it.
     fn public_halves(&self) -> Option<(Vec<u8>, Vec<u8>)> {
-        let pq = self
-            .pq
-            .encapsulation_key()
-            .ok()?
-            .key_bytes()
-            .ok()?
-            .as_ref()
-            .to_vec();
+        if self.pq_public.len() != ML_KEM_768_ENCAPSULATION_KEY_BYTES {
+            return None;
+        }
         let classical = self.classical.compute_public_key().ok()?.as_ref().to_vec();
-        Some((pq, classical))
+        Some((self.pq_public.clone(), classical))
     }
 
     /// Recover the shared secret from what a sender transmitted.
@@ -356,6 +522,151 @@ mod tests {
         assert_eq!(classical.len(), X25519_PUBLIC_KEY_BYTES);
     }
 
+    /// **The measurement the persisted custodian's shape rests on.**
+    ///
+    /// A `DecapsulationKey` rebuilt from its own bytes decapsulates correctly and
+    /// cannot produce its encapsulation key. That is why 1184 public bytes are stored
+    /// beside 2400 private ones instead of being derived, and it is pinned here so
+    /// that a library version which fixes it turns this red rather than leaving the
+    /// storage cost as folklore.
+    ///
+    /// Measured on 7 August 2026 against aws-lc-rs 1.17.3: `key_bytes()` gives 2400,
+    /// `encapsulation_key()` on the rebuilt key gives `Err(Unspecified)`, and the
+    /// rebuilt key still agrees with the original on a shared secret.
+    #[test]
+    fn the_encapsulation_key_cannot_be_derived_from_the_private_half() {
+        let original = DecapsulationKey::generate(&ML_KEM_768).expect("a key");
+        let private = original.key_bytes().expect("its private bytes");
+        assert_eq!(private.as_ref().len(), ML_KEM_768_DECAPSULATION_KEY_BYTES);
+
+        let public = original
+            .encapsulation_key()
+            .expect("a generated key still has its public half")
+            .key_bytes()
+            .expect("its bytes")
+            .as_ref()
+            .to_vec();
+        assert_eq!(public.len(), ML_KEM_768_ENCAPSULATION_KEY_BYTES);
+
+        let rebuilt = DecapsulationKey::new(&ML_KEM_768, private.as_ref()).expect("a rebuilt key");
+        assert!(
+            rebuilt.encapsulation_key().is_err(),
+            "a rebuilt decapsulation key now yields its encapsulation key, so the \
+             1184 bytes this crate stores beside every private key are no longer \
+             needed and RecipientSecret can shrink"
+        );
+
+        // And the private half really did survive: this is a limitation of the
+        // serialised form, not a key that came back wrong.
+        let sent = EncapsulationKey::new(&ML_KEM_768, &public)
+            .expect("the public half")
+            .encapsulate()
+            .expect("an encapsulation");
+        assert_eq!(
+            rebuilt
+                .decapsulate(Ciphertext::from(sent.0.as_ref()))
+                .expect("the rebuilt key decapsulates")
+                .as_ref(),
+            sent.1.as_ref()
+        );
+    }
+
+    /// A recipient written down and read back is the same recipient.
+    ///
+    /// Both directions, because only one of them is obvious: it must reach the same
+    /// shared secret (or a restart loses every payload) **and** publish the same
+    /// public key (or the next `wrap` under that id encapsulates to a key nothing
+    /// holds, which fails at the next restart rather than at the write).
+    #[test]
+    fn a_recipient_written_down_and_read_back_is_the_same_recipient() {
+        let original = Recipient::generate().expect("a key pair");
+        let public = original.public_key().expect("a public key");
+        let sent = encapsulate(&public).expect("an encapsulation");
+
+        let secret = original.secret().expect("a storable secret");
+        assert_eq!(secret.as_bytes().len(), RECIPIENT_SECRET_BYTES);
+        let restored = Recipient::from_secret(&secret).expect("a restored recipient");
+
+        assert_eq!(
+            restored.public_key().expect("a public key"),
+            public,
+            "the restored recipient publishes a different key"
+        );
+        assert_eq!(
+            restored
+                .decapsulate(&sent.ciphertext)
+                .expect("the restored recipient decapsulates")
+                .as_bytes(),
+            sent.shared_secret.as_bytes()
+        );
+        // And it can be written down again, so a custodian that rewrites a file it
+        // read does not degrade the key.
+        assert_eq!(
+            restored.secret().expect("a second secret").as_bytes(),
+            secret.as_bytes()
+        );
+    }
+
+    /// A stored secret of the wrong length is refused rather than padded into shape.
+    #[test]
+    fn a_stored_secret_of_the_wrong_length_is_refused() {
+        let secret = Recipient::generate()
+            .expect("a key pair")
+            .secret()
+            .expect("a secret");
+        for n in [
+            0,
+            1,
+            ML_KEM_768_DECAPSULATION_KEY_BYTES,
+            RECIPIENT_SECRET_BYTES - 1,
+        ] {
+            assert!(
+                RecipientSecret::from_bytes(&secret.as_bytes()[..n]).is_none(),
+                "{n}"
+            );
+        }
+        let mut too_long = secret.as_bytes().to_vec();
+        too_long.push(0);
+        assert!(RecipientSecret::from_bytes(&too_long).is_none());
+    }
+
+    /// The stored public half is load-bearing, not decoration.
+    ///
+    /// A recipient rebuilt with somebody else's encapsulation key parses perfectly,
+    /// decapsulates to a secret, and reaches a **different** one, because `ek_PQ` is
+    /// in the combiner's preimage. Nothing in `from_secret` can catch that, which is
+    /// why this is written down rather than assumed.
+    #[test]
+    fn a_recipient_rebuilt_with_the_wrong_public_half_reaches_a_different_secret() {
+        let a = Recipient::generate().expect("a key pair");
+        let b = Recipient::generate().expect("a second key pair");
+        let sent = encapsulate(&a.public_key().expect("a key")).expect("sent");
+
+        let mut bytes = *a.secret().expect("a secret").as_bytes();
+        let at = ML_KEM_768_DECAPSULATION_KEY_BYTES + X25519_PRIVATE_KEY_BYTES;
+        bytes[at..].copy_from_slice(&b.secret().expect("a secret").as_bytes()[at..]);
+        let wrong = Recipient::from_secret(&RecipientSecret::from_bytes(&bytes).expect("a secret"))
+            .expect("it parses");
+
+        assert_ne!(
+            wrong
+                .decapsulate(&sent.ciphertext)
+                .expect("some secret")
+                .as_bytes(),
+            sent.shared_secret.as_bytes(),
+            "the stored encapsulation key is not reaching the combiner"
+        );
+    }
+
+    #[test]
+    fn a_stored_secret_does_not_print_itself() {
+        let secret = Recipient::generate()
+            .expect("a key pair")
+            .secret()
+            .expect("a secret");
+        assert_eq!(format!("{secret:?}"), "RecipientSecret(<redacted>)");
+    }
+
     #[test]
     fn both_sides_of_the_exchange_reach_the_same_secret() {
         let recipient = Recipient::generate().expect("a key pair");
@@ -382,6 +693,25 @@ mod tests {
         assert_ne!(ours_secret.as_bytes(), sent.shared_secret.as_bytes());
     }
 
+    /// One recipient's ML-KEM pair beside another's X25519 scalar.
+    ///
+    /// Through [`RecipientSecret`] rather than through the struct's fields, which is
+    /// what a custodian does when it reads a key off a disk. `Recipient` has a `Drop`
+    /// that clears the scalar, so its halves cannot be moved out of it anyway.
+    fn splice(pq_from: &Recipient, classical_from: &Recipient) -> Recipient {
+        let pq = pq_from.secret().expect("a storable key pair");
+        let classical = classical_from.secret().expect("a storable key pair");
+        let mut bytes = *pq.as_bytes();
+        bytes[ML_KEM_768_DECAPSULATION_KEY_BYTES
+            ..ML_KEM_768_DECAPSULATION_KEY_BYTES + X25519_PRIVATE_KEY_BYTES]
+            .copy_from_slice(
+                &classical.as_bytes()[ML_KEM_768_DECAPSULATION_KEY_BYTES
+                    ..ML_KEM_768_DECAPSULATION_KEY_BYTES + X25519_PRIVATE_KEY_BYTES],
+            );
+        Recipient::from_secret(&RecipientSecret::from_bytes(&bytes).expect("a secret"))
+            .expect("a spliced recipient")
+    }
+
     /// **The test that goes red if the classical half is dropped.**
     ///
     /// Two recipients that share an ML-KEM key pair and differ only in their X25519
@@ -393,15 +723,21 @@ mod tests {
     /// recipients then still differ by their encapsulation keys. That mutation is
     /// caught by [`every_input_the_combiner_names_changes_the_secret`], which is why
     /// the two exist beside each other rather than one standing in for the other.
-    /// The mixed recipient is built by MOVING one half out of each of two recipients,
-    /// which is worth a sentence because the obvious way does not work.
+    ///
+    /// **How the mixed recipient is built changed on 7 August 2026, and the reason is
+    /// the subject of this branch.** It used to be assembled by MOVING one half out
+    /// of each of two recipients, because the obvious way did not work:
     /// `DecapsulationKey::key_bytes()` round-trips through `DecapsulationKey::new()`
-    /// and the key that comes back cannot produce its own `encapsulation_key()`:
-    /// measured against aws-lc-rs 1.17.3, `Err(Unspecified)`. So a test built that way
-    /// decapsulates to `None`, and the first version of this test had an arm that
-    /// accepted `None`, which made it pass against every mutation including a
-    /// combiner with the classical half deleted. Neither the arm nor the round trip
-    /// is here now.
+    /// and the key that comes back cannot produce its own `encapsulation_key()`
+    /// (aws-lc-rs 1.17.3, `Err(Unspecified)`), so a recipient rebuilt from bytes had
+    /// no `ek_PQ` to put in the combiner's preimage and decapsulated to `None`. The
+    /// first version of this test had an arm that accepted `None`, which made it pass
+    /// against every mutation including a combiner with the classical half deleted.
+    /// A persisted recipient now carries `ek_PQ` because it must, so splicing two
+    /// [`RecipientSecret`]s is both possible and the honest way to write this: it is
+    /// the same path a custodian takes off a disk. The arm that accepted `None` is
+    /// still gone, and [`the_encapsulation_key_cannot_be_derived_from_the_private_half`]
+    /// is what keeps the measurement above from becoming folklore.
     #[test]
     fn the_x25519_half_is_in_the_secret_and_not_only_in_the_name() {
         let a = Recipient::generate().expect("a key pair");
@@ -412,10 +748,7 @@ mod tests {
         assert_eq!(by_a.as_bytes(), sent.shared_secret.as_bytes());
 
         // A's ML-KEM key beside B's X25519 key.
-        let mixed = Recipient {
-            pq: a.pq,
-            classical: b.classical,
-        };
+        let mixed = splice(&a, &b);
         let by_mixed = mixed
             .decapsulate(&sent.ciphertext)
             .expect("the mixed recipient reaches some secret");
@@ -433,21 +766,12 @@ mod tests {
     /// recipients sharing an X25519 key pair and differing only in ML-KEM.
     #[test]
     fn the_ml_kem_half_is_in_the_secret_and_not_only_in_the_name() {
-        // Both recipients hold the same X25519 private key, so it is built from
-        // bytes rather than generated twice. RFC 7748's own test scalar.
-        const SCALAR: [u8; 32] = [
-            0x77, 0x07, 0x6d, 0x0a, 0x73, 0x18, 0xa5, 0x7d, 0x3c, 0x16, 0xc1, 0x72, 0x51, 0xb2,
-            0x66, 0x45, 0xdf, 0x4c, 0x2f, 0x87, 0xeb, 0xc0, 0x99, 0x2a, 0xb1, 0x77, 0xfb, 0xa5,
-            0x1d, 0xb9, 0x2c, 0x2a,
-        ];
-        let a = Recipient {
-            pq: DecapsulationKey::generate(&ML_KEM_768).expect("an ml-kem key"),
-            classical: PrivateKey::from_private_key(&X25519, &SCALAR).expect("an x25519 key"),
-        };
-        let mixed = Recipient {
-            pq: DecapsulationKey::generate(&ML_KEM_768).expect("a second ml-kem key"),
-            classical: PrivateKey::from_private_key(&X25519, &SCALAR).expect("the same x25519 key"),
-        };
+        // Both recipients hold the same X25519 scalar, taken from one of them rather
+        // than written out: a shared constant would have to be a valid scalar and a
+        // spliced secret is what a custodian actually reconstructs.
+        let a = Recipient::generate().expect("a key pair");
+        let b = Recipient::generate().expect("a second key pair");
+        let mixed = splice(&b, &a);
 
         let sent = encapsulate(&a.public_key().expect("a key")).expect("sent");
         assert_eq!(

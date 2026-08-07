@@ -17,7 +17,7 @@ use trailryx_contracts::contracts::{KeyProvider, ObjectStore};
 use trailryx_contracts::fakes::MemoryObjectStore;
 use trailryx_contracts::ingest::PayloadPart;
 use trailryx_crypto_aws::hybrid::CIPHERTEXT_BYTES;
-use trailryx_crypto_aws::{AwsAead, HybridKeyProvider};
+use trailryx_crypto_aws::{AwsAead, CustodyKey, HybridKeyProvider, PersistedKeyProvider};
 use trailryx_erasure::aead::KeySource;
 use trailryx_erasure::vault::Vault;
 use trailryx_erasure::{Envelope, PredictableKeys, SubjectHandle, kek_for_record};
@@ -149,11 +149,64 @@ fn one_erasure_does_not_reach_another_records_payload() {
     assert_eq!(vault.open(RecordId(2), &b).expect("an open"), parts());
 }
 
+/// **The same path, with a custodian that keeps its keys, across a restart.**
+///
+/// This is the claim the whole store rests on and the one the in-memory custodian
+/// cannot make: a payload sealed by one process is opened by the next. Both planes
+/// are rebuilt, because both have to be. The object store is a fake that lives in
+/// memory, so its bytes are carried over by hand exactly as a real object store would
+/// carry them; the custodian is not, and that is the half under test.
+#[test]
+fn a_payload_sealed_before_a_restart_opens_after_one() {
+    let dir = std::env::temp_dir().join(format!("trailryx-wrap-restart-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    let key = format!("payload/{}/{:032x}", tenant().as_str(), 1u128);
+
+    let root = CustodyKey::from_bytes([5u8; 32]);
+    let mut first = Vault::unvalidated(
+        tenant(),
+        "acme.example",
+        MemoryObjectStore::default(),
+        PersistedKeyProvider::open(&dir, root).expect("a custodian"),
+        AwsAead,
+        PredictableKeys::new(),
+    );
+    let reference = first.seal(RecordId(1), &parts(), None).expect("a seal");
+    let envelope = first
+        .store_mut()
+        .get(&key)
+        .expect("the store answered")
+        .expect("an envelope");
+    drop(first);
+
+    // A second process: a new custodian over the same directory, a new store holding
+    // what the first one published.
+    let mut store = MemoryObjectStore::default();
+    store.put_if_absent(&key, &envelope).expect("the envelope");
+    let root = CustodyKey::from_bytes([5u8; 32]);
+    let mut second = Vault::unvalidated(
+        tenant(),
+        "acme.example",
+        store,
+        PersistedKeyProvider::open(&dir, root).expect("a custodian"),
+        AwsAead,
+        PredictableKeys::new(),
+    );
+    let opened = second.open(RecordId(1), &reference);
+    let _ = std::fs::remove_dir_all(&dir);
+    assert_eq!(
+        opened.expect("an open after a restart"),
+        parts(),
+        "a payload sealed by the previous process did not open"
+    );
+}
+
 /// A wrapped key from one custodian is not readable by another.
 ///
 /// The recipient key pairs live in the process, so this is what a restart looks like
 /// from the outside, and it is stated as a test rather than left to be discovered:
-/// `HybridKeyProvider` persists nothing and its module documentation says so.
+/// `HybridKeyProvider` persists nothing and its module documentation says so. The
+/// test above is the same shape with the custodian that does.
 #[test]
 fn a_second_custodian_cannot_open_the_first_ones_wrapped_key() {
     let mut first = HybridKeyProvider::new();

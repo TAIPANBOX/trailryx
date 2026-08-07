@@ -45,6 +45,23 @@ The guarantees are stated out loud, so a report can name the one it breaks:
   erased**. A `forget` that reported a scheduled destruction as a finished one would
   be a report; so would a path that reads a payload whose key the custodian has
   already shredded.
+- **The key custodian's own files**: `trailryx_crypto_aws::PersistedKeyProvider` keeps
+  one file per key-encryption key in a directory, and that directory is the whole
+  secret. Each file is sealed with AES-256-GCM under a key derived from an
+  operator-supplied 32-byte root by HKDF-SHA-384 and bound to the key id. A way to
+  recover a payload key from those files **without the root key** is a report, and so
+  is a way to make a destroyed key open again: a destroyed id must never be reissued,
+  and a file that will not read back must never be read as an absent one, because
+  absent is the only state that mints a fresh key pair.
+
+  Two things about this are deliberate and are not findings. **The root key is in the
+  process's memory while it runs**, so an attacker who has the process has every key
+  that process can read; moving custody into an HSM or a key management service is
+  what changes that, and this repository has no such adapter. And **a rename unlinks
+  an inode rather than overwriting blocks**, so destroying a key does not sanitise the
+  medium; what makes that survivable is that the blocks hold ciphertext under a key
+  that was never written down. Set the directory to `0700` and the files to `0600`;
+  the custodian asks for that and cannot enforce it.
 - **The anchor**: a timestamp token in a pack must be about that pack's root. A
   token whose imprint is a different root and which the verifier does not report as
   BROKEN is a report, because the pack would then be describing its own evidence.
