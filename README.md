@@ -7,7 +7,7 @@
 ![Stage](https://img.shields.io/badge/stage-13%20of%2013-blue.svg)
 ![Core](https://img.shields.io/badge/core-frozen-success.svg)
 ![Rust](https://img.shields.io/badge/rust-1.85%2B-orange.svg)
-![Tests](https://img.shields.io/badge/tests-1117-success.svg)
+![Tests](https://img.shields.io/badge/tests-1124-success.svg)
 ![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)
 ![Dependencies](https://img.shields.io/badge/deps-0%20in%20the%20verifier-success.svg)
 ![Unsafe](https://img.shields.io/badge/unsafe-forbidden-success.svg)
@@ -285,7 +285,7 @@ migration. What stage 13 still wants is measured absence rather than a guess, an
 | `trailryx-journal` | wire format, append-only write path, recovery | 30 |
 | `trailryx-index` | Merkle history tree, completeness proofs, segment composition | 58 |
 | `trailryx-store` | sealing, the read surface, causal reconstruction, hot and cold tiering | 88 |
-| `trailryx-json` | a strict bounded RFC 8259 reader and a JSON Lines framer. Depends on nothing | 116 |
+| `trailryx-json` | a strict bounded RFC 8259 reader and a JSON Lines framer. Depends on nothing | 117 |
 | `trailryx-otlp` | two OTLP transports, one mapper: protobuf and JSON, the GenAI semconv, the file source | 140 |
 | `trailryx-assemble` | what a source handed over, made into records | 29 |
 | `trailryx-erasure` | payload envelopes, the key hierarchy, erasure | 44 |
@@ -306,7 +306,7 @@ migration. What stage 13 still wants is measured absence rather than a guess, an
 | `trailryx-compliance` | a versioned map from what is proved to what a framework asks, and what it does not | 12 |
 | `trailryx-sql` | the SQL facade: DataFusion and the Postgres wire protocol, predicates pushed into the index, statements gated, reads authorised, connections bounded, four dialect extensions | 64 |
 | `trailryx-agentevent` | the estate's shared agent-event envelope, mapped into records: the same `agent://` grammar, the same run and delegation chain | 17 |
-| `trailryx-node` | the record plane as one process: ingest, journal, sealing on a schedule, a reader that rebuilds a segment from the journal, and a cursor that makes an import safe to repeat | 25 |
+| `trailryx-node` | the record plane as one process: ingest, journal, sealing on a schedule, a reader that rebuilds a segment from the journal, and a cursor that moves with every seal so an import is safe to repeat | 31 |
 | `trailryx-demo` | the eight acceptance steps, and a reader for a collector's file | - |
 
 **The verifier and the core have no third-party dependencies.** `unsafe` forbidden
@@ -504,11 +504,18 @@ a collector that flushes on a timer has not finished writing it.
 The position is written **after** the segment holding its records is sealed. That
 ordering is the guarantee: a crash can leave the position behind the evidence,
 which reads lines twice and reports doing so, and can never leave it ahead, which
-would skip lines nobody stored and say nothing. A run that is killed before its
-seal therefore costs a re-import of everything it was reading, not of the part it
-had reached, because the position moves once per run. Measured in
-[`VALIDATION.md`](VALIDATION.md): no line is ever missing, and a killed run's
-lines are stored twice.
+would skip lines nobody stored and say nothing.
+
+How far behind is the sealing schedule's answer, and it is the same
+`--seal-records` the store above uses. The position is committed **once per sealed
+segment**, so a run killed between two seals costs a re-import of the records it
+had written and not sealed, and of nothing before them. Measured in
+[`VALIDATION.md`](VALIDATION.md), twenty kills over a two-thousand-line journal:
+no line is ever missing in either reading, and sealing every hundred records took
+the store from 13,971 records for those two thousand lines, one line of them held
+sixteen times, to 2,600 with no line held more than twice. What the smaller number
+costs is seals, and a seal is an `fsync`: the same import took 90 ms at one segment
+and 870 ms at twenty-three.
 
 ### What this process does not do, and why each one is absent rather than stubbed
 
@@ -560,7 +567,7 @@ not repeated here: a number written twice is a number that will disagree with it
 ## Try it
 
 ```bash
-cargo test                                    # 1117 tests
+cargo test                                    # 1124 tests
 cargo run --bin trailryx-sim-run -- --help
 ```
 

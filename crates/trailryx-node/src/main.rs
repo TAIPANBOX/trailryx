@@ -54,6 +54,10 @@ events reads a file of the estate's shared agent-event NDJSON envelope
       beside the data, and takes only what has arrived since. A file that was
       truncated or replaced under the same name is read from the beginning and
       the run says which of those happened.
+      It seals every --seal-records records and writes its position down after
+      each seal, so a run that is killed costs a re-import of the records it
+      had written and not sealed, and of nothing before them. A smaller number
+      is a smaller window and one more fsync per segment.
 
 This process keeps the metadata plane only. It has no key custodian, so payload
 parts a source hands over are declined and counted, and the count is written
@@ -431,22 +435,27 @@ fn events(args: Vec<String>) -> ExitCode {
         r.no_run_id,
         r.bad_time
     );
-    match &shipped.sealed {
-        Some(sealed) => println!(
+    // One line per sealed segment, which is one line per commit point. The
+    // position moved after each of them, so this is also the list of places a
+    // crash could have left the next run resuming from.
+    for sealed in &shipped.sealed {
+        println!(
             "sealed {} with {} record(s); manifest {}",
             sealed.segment,
             sealed.records,
             sealed.manifest_path.display()
-        ),
-        None if shipped.nothing_new() => {}
-        None => println!("nothing durable to seal"),
+        );
+    }
+    if shipped.sealed.is_empty() && !shipped.nothing_new() {
+        println!("nothing durable to seal");
     }
     if shipped.cursor_written {
         println!(
-            "cursor: byte {}, {} line(s), {} record(s), in {}",
+            "cursor: byte {}, {} line(s), {} record(s), committed {} time(s), in {}",
             shipped.cursor.bytes,
             shipped.cursor.lines,
             shipped.cursor.records,
+            shipped.cursor_commits,
             shipped.cursor_path.display()
         );
     }

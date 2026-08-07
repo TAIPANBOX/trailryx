@@ -916,14 +916,14 @@ one kill over a 800-line journal; a full import takes 0.17s
 ```
 
 **No line is ever missing, and a killed run's whole region is stored twice.** Not
-the part it had written: the whole region, because the cursor moves once per run
-and a run that did not reach its seal moves it not at all, while the records it
+the part it had written: the whole region, because the cursor moved once per run
+and a run that did not reach its seal moved it not at all, while the records it
 had already put on the file are recovered by the next run and kept. That is the
 cursor being behind the evidence, which is the direction the write order chooses,
 and the run that does the re-importing says `800 record(s) written` rather than
 doing it quietly. Bounding it further means committing the cursor per sealed
-batch instead of per run, which is a change to how often this command seals and
-is not made here.
+segment instead of per run, which is a change to how often this command seals; it
+was made the next day and the section after this one measures it.
 
 **Twenty kills in a row**, the pathological case, over a 2,000-line journal in one
 directory, none of the twenty runs allowed to finish before the next starts. The
@@ -968,6 +968,87 @@ by hand and watching four dispatches never reach the store with nothing saying s
 And a `SIGKILL` is not a power cut: the kernel and its page cache survive it,
 which the *Not yet measured* section below already says about every kill run
 here.
+
+---
+
+### The same twenty kills, with the position committed per sealed segment
+
+7 August 2026, on the machine at the bottom, **release** builds, APFS. Release
+rather than debug because the delays have to sweep a real import and a debug
+import of two thousand lines takes long enough that every kill lands in the
+parser. Two binaries: `004aa87`, which is the run above, and this branch.
+
+The harness is the shape of the one above and differs in one thing, which is what
+lets it count: every line names an agent of its own, so a record says which line
+it came from and copies are counted without knowing anything about how a record's
+identity is minted. Twenty rounds against one data directory, none allowed to
+finish before the next starts, delays sweeping from a twentieth of a full import
+to a whole one, then runs nobody kills, then `read --all` over what is there.
+
+| | seal | records stored for 2,000 lines | most copies of one line | lines missing | segments |
+|---|---|---|---|---|---|
+| `004aa87` | at the end of the run | **13,971** | 16 | 0 | 1 |
+| this branch | at the end of the run (`--seal-records 4096`, so the same) | 15,849 | 17 | 0 | 2 |
+| this branch | `--seal-records 100` | **2,600** | 2 | 0 | 23 |
+
+The middle row is the honest control and it is why the third row is not a claim
+about the code alone: a file of two thousand records against a segment of four
+thousand and ninety-six is **one segment**, so the window is the whole file and
+the position still moves once. What the branch changes is that the window is now
+the sealing schedule's to set, and `--seal-records`, which this command has
+advertised since the day it was written, is read rather than ignored.
+
+The third row is the property, and the duplicates land where the property says
+they must:
+
+```
+6 of the 20 rounds were killed with work outstanding; the other 14 found the
+import already finished, because a killed run now keeps what it sealed
+
+lines stored twice, by line number:
+  0..99   200..299   400..499   800..899   1200..1299   1800..1899
+```
+
+Six blocks of exactly one hundred, one per kill, each of them the records that
+were written into a segment that never sealed. **One unsealed segment's worth per
+kill, and nothing missing.** The first block is the narrow window itself: round 1
+died with one manifest on disk and no cursor beside it, which is the kill landing
+between the seal and the commit that follows it, and its cost is the same hundred
+lines re-imported. It was reachable this time because there are twenty-three
+commit points in an import instead of one.
+
+**What it costs.** A seal is an `fsync` and a rolled journal. The same import of
+two thousand lines took **90 ms** at one segment and **870 ms** at twenty-three,
+measured as the median of three runs each. That is the trade an operator makes
+with `--seal-records`, and it is now a trade rather than a fixed cost.
+
+### Reading a big segment back, which is quadratic and is not a debug artefact
+
+7 August 2026, release builds, one shard, `trailryx-node read --data DIR --all`.
+Noticed while measuring the section above, kept here because it is a number rather
+than an impression, and **not fixed on that branch**: it is the read path and the
+work above is the write path.
+
+| Records in one segment | `read --all` |
+|---|---|
+| 500 | 0.12 s |
+| 1,000 | 0.47 s |
+| 2,000 | 1.84 s |
+| 4,000 | 7.30 s |
+| 42,001 | **839 s** |
+
+Four times the time for twice the records, all the way up: the cost is quadratic
+in the records in **one segment**, and it is not the rebuild. The same directory
+without `--all`, which walks the journal, re-seals it and compares the manifest,
+takes **0.50 s** at 42,001 records. It is the completeness proof:
+`CompletenessProof::range` builds one inclusion proof per matched entry, and
+`MerkleTree::path` recomputes a subtree head for each step of each path, so a
+query covering a whole segment is *n* paths of *n* work.
+
+The same measurement from the other side, and it is why this is a note rather than
+an alarm: 2,626 records spread across **23** segments read back in **0.19 s**,
+while 13,972 records in **one** segment took **98 s**. Segment size is the whole
+of it.
 
 ---
 
