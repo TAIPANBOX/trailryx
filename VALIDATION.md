@@ -1122,6 +1122,61 @@ an alarm: 2,626 records spread across **23** segments read back in **0.19 s**,
 while 13,972 records in **one** segment took **98 s**. Segment size is the whole
 of it.
 
+### Append rate on one shard, and the only field that moves it
+
+8 August 2026. Until this run the README and two sections above said the same true
+and unhelpful thing: nothing here had been measured for throughput. The absence
+mattered more than most, because `sync_every` is a single field between "durable
+before the next record is written" and "durable in batches", and nothing said how
+far apart those are. They are two thousand times apart.
+
+```bash
+./scripts/append-rate.sh          # run it twice, quote the second
+```
+
+| `sync_every` | records/s | bytes/record | records unpromised at a crash |
+|---:|---:|---:|---:|
+| 1 | **69** | 197 | 0 |
+| 16 | 995 | 199 | up to 15 |
+| 128 | **7,439** | 201 | up to 127 |
+| 1,024 | 50,214 | 203 | up to 1,023 |
+| 8,192 | 143,811 | 204 | up to 8,191 |
+
+Five seconds per policy, release build, the machine at the bottom. Two consecutive
+runs disagree by up to 5% and the second is quoted, for the same reason the gate
+timing above quotes its second.
+
+**Why 69 is 69**, because a reader should be able to check it against the other
+number in this file rather than take it: each `sync` is two `fsync`s, the journal
+and then the watermark, and on APFS that is `F_FULLFSYNC`. 14.5 ms per record over
+two of them is about 7 ms each, and the custodian section above measured 10.01 ms
+per durable commit at one `fsync` plus a rename and a directory `fsync`. The two
+sit where each other predicts.
+
+**The curve is not linear and the useful part is its knee.** From 1 to 16 is 14x,
+from 16 to 128 another 7.5x, from 1,024 to 8,192 only 2.9x. Past the low hundreds
+the `fsync` is already amortised and what is left is the encoder and the page
+cache, so a caller buying a larger batch after that point is paying an unacked
+window for very little rate.
+
+**The last column is the whole trade, and what it costs is a promise rather than a
+record.** A batch is not silent loss: `acked` does not move until the `fsync`
+returns, so records in flight are never reported durable in the first place;
+anything the store did not keep is counted as a gap rather than passed over; and
+recovery finding more than was promised is not a violation, because under-promising
+is the safe direction. What a crash takes is therefore the most recent window's
+*acknowledgement*, and in wall-clock time that window is `sync_every` divided by
+whatever rate records are arriving at, which is the caller's number and not one
+this file can hold.
+
+**What this is not**, and it is most of what a deployment pays for. One shard in
+one process, which is the design rather than a limit of the harness. `payload:
+None`, so no encryption, no key wrap and no custodian, whose own 10 ms is above.
+No sealing, no Merkle tree, no signature, no anchor, no receiver in front and no
+network. A journal that starts empty and never rolls to a second segment, on APFS
+on a laptop, where the roadmap asks for ext4 and xfs. This is the ceiling for the
+metadata write path alone, and every stage downstream can only take from it.
+
 ---
 
 ## Not yet measured

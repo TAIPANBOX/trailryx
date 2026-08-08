@@ -43,6 +43,13 @@ path = "src/jsonl_main.rs"
 name = "trailryx-kill"
 path = "src/kill_main.rs"
 
+# Append rate on one shard at several sync policies. A binary rather than a test
+# because it measures instead of asserting: as a `#[test]` it could never fail, and
+# `scripts/readme-numbers.sh` would then count it as coverage it is not.
+[[bin]]
+name = "trailryx-rate"
+path = "src/rate_main.rs"
+
 [features]
 # Reaching a real cloud endpoint from the acceptance run, which every one of them
 # is `https`. Off by default: the run against an emulator needs nothing.

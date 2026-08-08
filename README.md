@@ -629,10 +629,18 @@ that nobody has to have read this page.
 - **One shard per process.** The plane is single-writer by construction, which is
   what the journal's sequence requires; more shards means more processes.
 
-Two more absences worth naming, because they are the ones somebody would assume
-away: nothing here has been measured for throughput, and a segment that has been
-sealed is never re-read into memory by `run`, so the process holds one open
-journal and nothing else.
+One more absence worth naming, because it is the one somebody would assume away: a
+segment that has been sealed is never re-read into memory by `run`, so the process
+holds one open journal and nothing else.
+
+Throughput was the other absence on this list until 8 August 2026, when
+`./scripts/append-rate.sh` measured it across five `sync_every` policies. The
+figures live in `VALIDATION.md` and only there, with the machine they were taken
+on and what they exclude, for the same reason the gate's own timing does: the
+answer is a property of the disk underneath, so a copy here would be a second
+owner of a number nothing re-derives. What is worth knowing before you go looking
+is the shape: the two ends of that field are three orders of magnitude apart, and
+what a batch buys is paid for in time rather than in records.
 
 ## Build it instead
 
