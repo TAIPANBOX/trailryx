@@ -267,6 +267,11 @@ say "durability sweep (200 seeds)" ./scripts/durability-sweep.sh
 # round trip. The half that re-derives each ignore's reason is `cargo tree`
 # against the manifest on disk, and that half always runs.
 say "advisories, and the silenced ones" ./scripts/audit.sh
+# Every check above is proven able to fail, by breaking it on purpose. It
+# mutates tracked files, so it asks to be skipped when the tree is dirty rather
+# than refusing a push with work in progress; CI's checkout is always clean and
+# runs it every time.
+say "the checks above can still fail" ./scripts/gates-have-teeth.sh --skip-if-dirty
 
 echo
 if [ "$fail" -gt 0 ]; then
