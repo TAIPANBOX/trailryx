@@ -54,6 +54,20 @@ note() {
 # `say` exists for the ones that print what they measured.
 hook_count=$(grep -cE '^(step|say) ' "$hook")
 
+# CI runs exactly one check the hook cannot, and it is named here rather than
+# left as slack in the comparison, because slack is how the two drift.
+#
+# `scripts/gates-have-teeth.sh` breaks each check on purpose and requires the
+# failure. One of its cases rewrites `.githooks/pre-push`, to check that this
+# script notices a hook with no countable checks left. Bash reads a script as it
+# executes it, so running that from the hook makes the shell resume inside
+# different bytes; measured 2026-08-09 as "unexpected EOF while looking for
+# matching quote" at the last line, after every check had already passed.
+#
+# So the hook is allowed to be exactly one short, of exactly this check. Any
+# other difference is still a laptop that says yes and a runner that says no.
+ci_only=$(grep -cE '^\s+run: \./scripts/gates-have-teeth\.sh' "$ci")
+
 # CI's checks, which are the steps whose first line of `run:` invokes cargo or a
 # script. That is what separates them from the setup steps (checkout, toolchain,
 # cache, protoc), and it has to look at the FIRST line: the advisories step installs
@@ -79,8 +93,10 @@ ci_count=$(awk '
 [ "$hook_count" -gt 0 ] ||
   note "counted no checks in $hook at all, which means this check measured nothing"
 
-[ "$hook_count" = "$ci_count" ] ||
-  note "$hook runs $hook_count checks and $ci runs $ci_count, so a green push is not a green pull request"
+# The comparison subtracts the one CI-only check rather than inflating the hook,
+# so the README stays true about what the hook actually runs.
+[ "$hook_count" = "$((ci_count - ci_only))" ] ||
+  note "$hook runs $hook_count checks and $ci runs $ci_count with $ci_only of them CI-only, so a green push is not a green pull request"
 
 # The README's figure, written the way this repository writes numbers in prose.
 words="zero one two three four five six seven eight nine ten eleven twelve thirteen fourteen fifteen sixteen seventeen eighteen nineteen twenty twenty-one twenty-two twenty-three twenty-four twenty-five"
@@ -138,5 +154,5 @@ if [ "$problems" -gt 0 ]; then
   printf 'the count belongs in one file, and the others say "the same checks"\n'
   exit 1
 fi
-printf '%d checks in the hook, %d in CI, README says %s\n' "$hook_count" "$ci_count" "$stated"
+printf '%d checks in the hook, %d in CI (%d CI-only), README says %s\n' "$hook_count" "$ci_count" "$ci_only" "$stated"
 exit 0

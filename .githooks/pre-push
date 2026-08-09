@@ -267,6 +267,13 @@ say "durability sweep (200 seeds)" ./scripts/durability-sweep.sh
 # round trip. The half that re-derives each ignore's reason is `cargo tree`
 # against the manifest on disk, and that half always runs.
 say "advisories, and the silenced ones" ./scripts/audit.sh
+# `scripts/gates-have-teeth.sh` is NOT run here, and the reason is not taste.
+# One of its cases mutates this file, to check that gate-count.sh notices a hook
+# with no countable checks left. Bash reads a script as it executes it, so
+# rewriting this file mid-run makes the shell resume inside different bytes: the
+# first attempt got "unexpected EOF while looking for matching quote" at the
+# last line, AFTER every check had passed. It runs in CI, where nothing is
+# executing this file.
 
 echo
 if [ "$fail" -gt 0 ]; then

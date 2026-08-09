@@ -263,3 +263,10 @@ jobs:
       # Enough to catch a write-path regression. The long sweep belongs in a nightly.
       - name: durability sweep, 200 seeds
         run: ./scripts/durability-sweep.sh
+
+      # Every check above, broken on purpose and required to fail. It mutates
+      # tracked files and restores them, so it goes last, and it needs a clean
+      # tree and says so plainly, which also reports any earlier step that
+      # starts writing into the checkout.
+      - name: the checks above can still fail
+        run: ./scripts/gates-have-teeth.sh
