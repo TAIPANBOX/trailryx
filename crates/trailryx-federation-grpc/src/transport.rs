@@ -238,10 +238,30 @@ struct PeerService {
 impl pb::federation_server::Federation for PeerService {
     type QueryStream = tokio_stream::Iter<std::vec::IntoIter<Result<pb::QueryChunk, Status>>>;
 
+    /// **This peer does not apply the predicate, and that is a property of the
+    /// harness rather than of the protocol.**
+    ///
+    /// `serve` is handed the records and the proof status it is to answer with,
+    /// so the answer is decided before a query arrives and the predicate has
+    /// nothing to narrow. The proto says the far side "decides what it can
+    /// prove and says so in the trailer", and a peer whose answer is scripted
+    /// decides by having been told.
+    ///
+    /// Written down because this type's own name says it is the answering half
+    /// of a federation peer, and it is the only implementation of that half in
+    /// the workspace. Somebody writing a real one against this as a reference
+    /// would inherit "ignore the predicate" without ever choosing it. There is
+    /// no production federation server, `bin/fed-probe` says of itself that it
+    /// is deliberately not a service, and `VALIDATION.md` records that
+    /// predicate filtering has no implementation on this side at all.
+    ///
+    /// The request is bound rather than discarded so the name states the
+    /// decision: it is unused on purpose, not unnoticed.
     async fn query(
         &self,
-        _request: Request<pb::QueryRequest>,
+        request: Request<pb::QueryRequest>,
     ) -> Result<Response<Self::QueryStream>, Status> {
+        let _predicate_is_not_applied_here = request;
         let chunks: Vec<Result<pb::QueryChunk, Status>> =
             self.chunks.iter().cloned().map(Ok).collect();
         Ok(Response::new(tokio_stream::iter(chunks)))

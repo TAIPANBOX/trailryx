@@ -7,7 +7,7 @@
 ![Stage](https://img.shields.io/badge/stage-13%20of%2013-blue.svg)
 ![Core](https://img.shields.io/badge/core-frozen-success.svg)
 ![Rust](https://img.shields.io/badge/rust-1.85%2B-orange.svg)
-![Tests](https://img.shields.io/badge/tests-1167-success.svg)
+![Tests](https://img.shields.io/badge/tests-1168-success.svg)
 ![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)
 ![Dependencies](https://img.shields.io/badge/deps-0%20in%20the%20verifier-success.svg)
 ![Unsafe](https://img.shields.io/badge/unsafe-forbidden-success.svg)
@@ -296,7 +296,7 @@ migration. What stage 13 still wants is measured absence rather than a guess, an
 | `trailryx-s3` | SigV4, S3 and Google Cloud Storage over that client. No cloud SDK | 35 |
 | `trailryx-azure` | Azure Blob Storage: Shared Key signing, and the four operations | 18 |
 | `trailryx-federation` | composing an answer across environments, refusing to call it complete when it is not, and verifying a peer's chain before adopting its records | 18 |
-| `trailryx-federation-grpc` | that composition over the wire: gRPC with mutual TLS, and a peer named by its certificate rather than by what it sent | 19 |
+| `trailryx-federation-grpc` | that composition over the wire: gRPC with mutual TLS, and a peer named by its certificate rather than by what it sent | 20 |
 | `trailryx-fuzz` | every hand-written parser, fed bytes it did not expect, from a seed | 5 |
 | `trailryx-publish` | atomic publication of a sealed segment, and the fault model for it | 11 |
 | `trailryx-crypto-aws` | the validated cipher, the hybrid X25519 + ML-KEM-768 exchange, and the two custodians that wrap a payload key with it: one that keeps its keys in memory and one that keeps them on a disk an operator holds the root key for. The one adapter with a dependency | 50 |
@@ -657,7 +657,7 @@ not repeated here: a number written twice is a number that will disagree with it
 ## Try it
 
 ```bash
-cargo test                                    # 1167 tests
+cargo test                                    # 1168 tests
 cargo run --bin trailryx-sim-run -- --help
 ```
 

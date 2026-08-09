@@ -620,7 +620,7 @@ opposite.
 cargo test -p trailryx-federation-grpc
 ```
 
-18 tests, 5 August 2026: six over the codec, nine that bind a loopback listener and
+20 tests, 9 August 2026: six over the codec, ten that bind a loopback listener and
 complete a real TLS 1.3 handshake against a certificate authority the test creates,
 and three that carry a chain across that wire and re-verify it on the far side.
 Nothing is mocked, because a mocked transport agrees with whatever the transport
@@ -1127,6 +1127,24 @@ of it.
 ## Not yet measured
 
 Stated so the absence is visible rather than inferred:
+
+- **Predicate filtering on the answering side. There is no implementation of it
+  at all.** `QueryRequest.predicate` is sent as written and the proto says the
+  far side decides what it can prove, but the only answering half in this
+  workspace is `transport::serve`, which is handed its records and its proof
+  status and therefore has nothing to narrow. `bin/fed-probe` says of itself
+  that it is deliberately not a service, so nothing here is a store answering a
+  query: no test asserts that a predicate ever made an answer smaller, and none
+  can, because the code that would do it does not exist.
+
+  What that leaves is not a leak, and the distinction matters. A peer serves
+  what its operator handed it, over mutual TLS, to a client whose certificate
+  carries a name the registry knows. What it leaves is a reference
+  implementation that ignores the predicate, one function call away from where
+  a real store would go. `a_predicate_does_not_narrow_what_this_harness_answers`
+  pins the current behaviour so it cannot be inherited by accident: it goes red
+  the day filtering arrives, which is the day somebody should be reading the
+  doc comment beside it.
 
 - **The federation transport across an actual network.** Everything above is
   loopback. A handshake to `127.0.0.1` is a real handshake and is not a real network:
