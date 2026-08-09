@@ -140,6 +140,46 @@ if ! command -v cargo-audit >/dev/null 2>&1; then
   exit 0
 fi
 
+# THE ADVISORY DATABASE MUST BE CLEAN, AND THIS IS NOT PEDANTRY.
+#
+# `cargo audit` fetches by pulling into ~/.cargo/advisory-db, and `git pull`
+# never removes an UNTRACKED file. It then reads the DIRECTORY rather than git
+# HEAD, so any stale file that ever landed there is loaded as an advisory
+# forever while every subsequent fetch reports success.
+#
+# On 2026-08-09 that cost hours across this estate. Upstream renamed an advisory
+# between two crate directories; the old path survived locally as untracked,
+# cargo-audit saw the id twice, and refused to load the ENTIRE database with
+#
+#   error loading advisory database: parse error: duplicate advisory ID
+#
+# `--ignore` does not help: the failure is at database LOAD, before any ignore
+# is evaluated. The condition is permanent until somebody runs `git clean`, and
+# it looks exactly like an upstream outage. It was not one: `git grep -l <id>
+# HEAD -- crates/` returned a single path throughout.
+#
+# The diagnosis is one line and nobody runs it, so it runs here. Naming the
+# files is the whole value, because cargo-audit's own error names an advisory
+# id and sends a reader to the wrong repository.
+db="${CARGO_HOME:-$HOME/.cargo}/advisory-db"
+if [ -d "$db/.git" ]; then
+  dirty="$(git -C "$db" status --porcelain 2>/dev/null || true)"
+  if [ -n "$dirty" ]; then
+    echo "FAIL: the advisory database at $db has files git does not track."
+    echo
+    printf '%s\n' "$dirty" | sed 's/^/      /'
+    echo
+    echo "      cargo-audit reads that DIRECTORY, not git HEAD, so these are"
+    echo "      loaded as advisories on every run and no upstream fix will ever"
+    echo "      clear them. A duplicate id among them makes cargo-audit refuse"
+    echo "      the whole database, which looks like an upstream outage and is"
+    echo "      not one."
+    echo
+    echo "      Fix it with:  git -C $db clean -fd"
+    exit 1
+  fi
+fi
+
 args=()
 for id in $ids; do
   args+=(--ignore "$id")
