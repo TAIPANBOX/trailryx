@@ -560,3 +560,54 @@ fn a_peers_own_partial_answer_stays_partial_after_crossing_the_wire() {
     );
     assert_eq!(federated.records.len(), 2);
 }
+
+/// The answering half ignores the predicate, and this pins it so that a real
+/// server cannot inherit the behaviour without somebody deciding to.
+///
+/// `serve` is handed its records and its proof status, so a query has nothing
+/// to narrow: the answer was decided before it arrived. That is right for a
+/// harness and wrong for a store, and the two are one function call apart in
+/// this workspace, because `PeerService` is the only implementation of the
+/// answering half that exists.
+///
+/// The assertion is deliberately the CURRENT behaviour rather than the desired
+/// one. A test asserting that a predicate narrows an answer would fail today
+/// and would be deleted or ignored; a test asserting that it does NOT goes red
+/// on the day somebody implements filtering, which is exactly when a person
+/// should be reading this comment.
+#[test]
+fn a_predicate_does_not_narrow_what_this_harness_answers() {
+    let fed = Federation::new();
+
+    let peer = serve(
+        loopback(),
+        records(3),
+        ServedProof::Full,
+        fed.server_identity("eu-aws"),
+    )
+    .expect("the peer starts");
+
+    let mut client = connect(&fed, "eu-aws", peer.addr()).expect("the peer accepts us");
+
+    // A predicate that matches everything, and one that can match nothing at
+    // all. A store would answer the second with an empty set.
+    let everything = client
+        .query_records("recorded_at >= 0")
+        .expect("a query answers");
+    let nothing = client
+        .query_records("recorded_at >= 99999999999999")
+        .expect("a query answers");
+
+    assert_eq!(
+        everything.records.len(),
+        3,
+        "the harness answers with what it was given"
+    );
+    assert_eq!(
+        nothing.records.len(),
+        3,
+        "and answers the same to a predicate that could match nothing, because it \
+         never applied one: if this line fails, filtering has been implemented and \
+         PeerService::query's doc comment and VALIDATION.md both need revisiting"
+    );
+}
