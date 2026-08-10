@@ -121,6 +121,7 @@ fn event_type_to_wire(v: EventType) -> pb::EventType {
         EventType::Erasure => pb::EventType::Erasure,
         EventType::StoreEvent => pb::EventType::StoreEvent,
         EventType::NotificationDispatched => pb::EventType::NotificationDispatched,
+        EventType::IdentityFinding => pb::EventType::IdentityFinding,
     }
 }
 
@@ -138,6 +139,7 @@ fn event_type_from_wire(raw: i32) -> Result<EventType, WireError> {
         Ok(pb::EventType::Erasure) => Ok(EventType::Erasure),
         Ok(pb::EventType::StoreEvent) => Ok(EventType::StoreEvent),
         Ok(pb::EventType::NotificationDispatched) => Ok(EventType::NotificationDispatched),
+        Ok(pb::EventType::IdentityFinding) => Ok(EventType::IdentityFinding),
         Ok(pb::EventType::Unspecified) | Err(_) => Err(WireError::UnknownEnum { field: FIELD }),
     }
 }

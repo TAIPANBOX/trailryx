@@ -986,6 +986,7 @@ fn every_event_code_ever_written_still_decodes_and_the_next_unused_one_is_refuse
         (9, "erasure"),
         (10, "store_event"),
         (11, "notification_dispatched"),
+        (12, "identity_finding"),
     ];
     for (code, name) in ever {
         let mut patched = bytes.clone();
@@ -1004,11 +1005,11 @@ fn every_event_code_ever_written_still_decodes_and_the_next_unused_one_is_refuse
     // of: it says which field it could not read and stops, rather than reading the
     // rest of the record against a field it guessed at.
     let mut past = bytes.clone();
-    past[at] = 12;
+    past[at] = 13;
     match decode_record(&past) {
         Err(WireError::BadDiscriminant { field, got }) => {
             assert_eq!(field, "event_type");
-            assert_eq!(got, 12);
+            assert_eq!(got, 13);
         }
         other => panic!("an undefined event code must be refused by name: {other:?}"),
     }

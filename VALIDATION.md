@@ -852,6 +852,48 @@ measures nothing about throughput, nothing about many shards, and the kill is a
 process dying rather than a machine: the page cache survives it, exactly as the
 kill runs above.
 
+### The twelfth event type, and the subject this store will not take
+
+10 August 2026, debug builds, on the machine at the bottom. The journal was
+produced by **idryx itself**, not written by hand: `idryx detect --load
+scopyx:testdata/scopyx.ndjson --load egress:testdata/ebpf_claimed.json` with
+`IDRYX_EVENTS` set, which wrote seven events, four of them `identity_finding`
+under a v0.2 established subject and three under a v0.3 CLAIMED one
+(`claimed:agent://...`, a subject a process asserted about itself).
+
+**Before**, `trailryx-node events --file` on the commit before this change:
+
+```
+bytes 0..1729, 0 mapped, 0 record(s) written, 0 payload part(s) declined
+  refused: not_an_envelope 0 unknown_schema 3 no_agent 0 foreign_trust_domain 0 unknown_type 4 no_run_id 0 bad_time 0
+nothing durable to seal
+```
+
+Nothing recorded, and the two counts blame the wrong things: the claims are
+`unknown_schema`, which reads as producer drift, and the established findings
+are `unknown_type`, which is true but is the whole identity plane.
+
+**After**, the same file and the same flags, this branch:
+
+```
+bytes 0..1729, 4 mapped, 4 record(s) written, 4 payload part(s) declined
+  refused: not_an_envelope 0 unknown_schema 0 no_agent 0 foreign_trust_domain 0 claimed_subject 3 unknown_type 0 no_run_id 0 bad_time 0
+sealed seg-0000000000000001 with 5 record(s)
+```
+
+Both halves of the decision, in one line. The established findings became
+records. The claims were refused **by their own name**, with a count that says
+what was turned away and why, rather than blending into a counter shared with
+typos and future versions.
+
+**And an older build still refuses the new byte rather than misreading it.**
+Measured on the pre-change tree: `every_event_code_ever_written_still_decodes_and_the_next_unused_one_is_refused`
+passes there, and its own assertion is that code 12 comes back as
+`BadDiscriminant { field: "event_type", got: 12 }`. So a binary built before
+this change, meeting a record this branch wrote, names the field it could not
+read and stops. That is invariant 36's forward direction, measured against the
+real code rather than reasoned about.
+
 ### The eleventh event type, from heraldyx's own binary to an old verifier
 
 6 August 2026, on the machine at the bottom, debug builds throughout. Four

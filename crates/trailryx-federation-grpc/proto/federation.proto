@@ -159,6 +159,7 @@ enum EventType {
   // the only acceptable one: a record that changed meaning in transit is worse
   // than a record that did not arrive.
   EVENT_TYPE_NOTIFICATION_DISPATCHED = 11;
+  EVENT_TYPE_IDENTITY_FINDING = 12;
 }
 
 enum Severity {

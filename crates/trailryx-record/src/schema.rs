@@ -475,6 +475,7 @@ const FIELDS: &[Field] = &[
             "erasure",
             "store_event",
             "notification_dispatched",
+            "identity_finding",
         ]),
         optional: false,
         repeated: false,

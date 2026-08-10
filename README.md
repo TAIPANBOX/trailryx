@@ -7,7 +7,7 @@
 ![Stage](https://img.shields.io/badge/stage-13%20of%2013-blue.svg)
 ![Core](https://img.shields.io/badge/core-frozen-success.svg)
 ![Rust](https://img.shields.io/badge/rust-1.85%2B-orange.svg)
-![Tests](https://img.shields.io/badge/tests-1172-success.svg)
+![Tests](https://img.shields.io/badge/tests-1178-success.svg)
 ![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)
 ![Dependencies](https://img.shields.io/badge/deps-0%20in%20the%20verifier-success.svg)
 ![Unsafe](https://img.shields.io/badge/unsafe-forbidden-success.svg)
@@ -305,7 +305,7 @@ migration. What stage 13 still wants is measured absence rather than a guess, an
 | `trailryx-ingest` | the OTLP/HTTP server: HTTP/1.1, gzip, bearer auth, all hand-written | 119 |
 | `trailryx-compliance` | a versioned map from what is proved to what a framework asks, and what it does not | 12 |
 | `trailryx-sql` | the SQL facade: DataFusion and the Postgres wire protocol, predicates pushed into the index, statements gated, reads authorised, connections bounded, four dialect extensions | 64 |
-| `trailryx-agentevent` | the estate's shared agent-event envelope, mapped into records: the same `agent://` grammar, the same run and delegation chain | 21 |
+| `trailryx-agentevent` | the estate's shared agent-event envelope, mapped into records: the same `agent://` grammar, the same run and delegation chain | 27 |
 | `trailryx-node` | the record plane as one process: ingest, journal, sealing on a schedule, a reader that rebuilds a segment from the journal, and a cursor that moves with every seal so an import is safe to repeat | 31 |
 | `trailryx-demo` | the eight acceptance steps, and a reader for a collector's file | - |
 
@@ -657,7 +657,7 @@ not repeated here: a number written twice is a number that will disagree with it
 ## Try it
 
 ```bash
-cargo test                                    # 1172 tests
+cargo test                                    # 1178 tests
 cargo run --bin trailryx-sim-run -- --help
 ```
 
