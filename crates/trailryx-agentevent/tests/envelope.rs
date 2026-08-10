@@ -486,3 +486,112 @@ const SPEC_EXAMPLES: &str = concat!(
     "\n",
     r#"{"schema": "taipanbox.dev/agent-event/v0.2", "ts": "2026-07-09T03:31:52.700Z", "source": "mockryx", "type": "blast_radius_measured", "severity": "medium", "agent_id": "agent://acme-bank.example/eng/ci-fixer/instance-7", "on_behalf_of": ["agent://acme-bank.example/eng/ci-orchestrator"], "data": {"scenario": "prod-deploy-rehearsal", "blast_radius_score": 0.62, "affected_resources": 14}}"#,
 );
+
+// ---------------------------------------------------------------------------
+// Web egress (scopyx), SPEC 6.2
+// ---------------------------------------------------------------------------
+
+/// A governed fetch is a tool call, and its severity comes from the registry
+/// band rather than from anything this store invents.
+#[test]
+fn a_governed_fetch_becomes_a_tool_call_at_the_registry_band() {
+    let event = line(
+        "web_fetch",
+        r#","data":{"origin":"https://vendor.example"}"#,
+    )
+    .replace(r#""source":"tokenfuse""#, r#""source":"scopyx""#)
+    .replace(r#""severity":"critical""#, r#""severity":"low""#);
+    let unit = map(OURS, &event).expect("a web_fetch maps");
+    assert_eq!(unit.meta.event_type, EventType::ToolCall);
+    assert_eq!(
+        unit.meta.verdict, None,
+        "it happened; there is nothing to decide"
+    );
+    assert_eq!(unit.meta.error, None);
+    assert_eq!(
+        unit.meta.severity,
+        Severity::Notice,
+        "`low` is Notice, per severity_for"
+    );
+}
+
+/// A refused fetch is a denial, and it carries NO error code on purpose.
+///
+/// `web_blocked` covers a policy that said no, an address inside the
+/// deployment, an unsupported scheme, a spent per-hour cap, and a policy plane
+/// that could not be asked. `PolicyDenied` is false for the address case, where
+/// the refusal happens before any policy runs, so the typed field stays empty
+/// and the producer's own `verdict` member reaches the payload plane instead.
+#[test]
+fn a_refused_fetch_is_denied_without_this_store_naming_the_rule() {
+    let event = line(
+        "web_blocked",
+        r#","data":{"origin":"http://169.254.169.254","verdict":"deny_address"}"#,
+    )
+    .replace(r#""source":"tokenfuse""#, r#""source":"scopyx""#)
+    .replace(r#""severity":"critical""#, r#""severity":"high""#);
+    let unit = map(OURS, &event).expect("a web_blocked maps");
+    assert_eq!(unit.meta.event_type, EventType::PolicyDecision);
+    assert_eq!(unit.meta.verdict, Some(Verdict::Denied));
+    assert_eq!(
+        unit.meta.error, None,
+        "an address refusal is not a policy denial, and this store must not say it was"
+    );
+    assert_eq!(unit.meta.severity, Severity::Error, "`high` is Error");
+
+    // The distinction is not lost, it is somewhere this store makes no claim
+    // about it.
+    assert!(
+        payload_text(&unit).contains("deny_address"),
+        "the producer's own verdict must reach the payload plane"
+    );
+}
+
+/// Invariant 35, for the new source. A producer this store accepts by name is
+/// still refused when it writes about an agent in somebody else's trust domain:
+/// without the comparison, one valid producer could record every agent in the
+/// estate under one receiver's tenant.
+#[test]
+fn a_scopyx_event_about_another_trust_domain_is_refused_rather_than_recorded() {
+    let foreign = line("web_fetch", "")
+        .replace(r#""source":"tokenfuse""#, r#""source":"scopyx""#)
+        .replace(
+            r#""agent_id":"agent://acme.example/support/tier1-bot""#,
+            r#""agent_id":"agent://other.example/support/tier1-bot""#,
+        );
+    assert_eq!(map(OURS, &foreign), Err(Rejection::ForeignTrustDomain));
+
+    // And a domain that merely starts the same way is another domain.
+    let lookalike = line("web_blocked", "")
+        .replace(r#""source":"tokenfuse""#, r#""source":"scopyx""#)
+        .replace(
+            r#""agent_id":"agent://acme.example/support/tier1-bot""#,
+            r#""agent_id":"agent://acme.example.attacker.test/support""#,
+        );
+    assert_eq!(map(OURS, &lookalike), Err(Rejection::ForeignTrustDomain));
+}
+
+/// A URL never reaches a typed metadata field, because this mapper does not
+/// read `data` and scopyx never wrote one there in the first place.
+///
+/// Both halves matter. The producer keeps the path and query out of the event,
+/// and this store keeps `data` out of metadata; either alone would leave a URL
+/// somewhere erasure cannot reach the day the other changed.
+#[test]
+fn a_fetched_url_stays_out_of_the_metadata_plane() {
+    let event = line(
+        "web_fetch",
+        r#","data":{"origin":"https://crm.example","url_sha384":"sha384:abc"}"#,
+    )
+    .replace(r#""source":"tokenfuse""#, r#""source":"scopyx""#)
+    .replace(r#""severity":"critical""#, r#""severity":"low""#);
+    let unit = map(OURS, &event).expect("maps");
+
+    let meta = format!("{:?}", unit.meta);
+    for leaked in ["crm.example", "sha384:abc", "origin"] {
+        assert!(
+            !meta.contains(leaked),
+            "the metadata plane carries {leaked:?}: {meta}"
+        );
+    }
+}
