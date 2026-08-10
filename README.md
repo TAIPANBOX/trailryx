@@ -245,7 +245,7 @@ world. If any of these is wrong, the correction is welcome and the claim comes o
 - **The erasure is itself a record.** A manifest an auditor can check, verifiable by
   whoever holds the subject handle and meaningless to everybody else.
 - **A verifier with no dependencies.** Its own SHA-384, its own ECDSA P-384, its own
-  reader, about 1,500 lines including tests, so an auditor can read all of it before
+  reader, about 3,600 lines including tests, so an auditor can read all of it before
   trusting any of it.
 
 Trailryx is **complementary** to observability rather than a replacement: keep the
@@ -1719,7 +1719,7 @@ the FIPS 140-3 module, so the seam still refuses to be told what it wants to hea
 ## Handing an auditor something they can check without us
 
 `trailryx-verify` is a separate crate with **no dependencies at all**, not even
-on the rest of Trailryx, about 1,500 lines including its tests. It reads an
+on the rest of Trailryx, about 3,600 lines including its tests. It reads an
 evidence pack and says whether it holds. It exists because the question an
 auditor actually asks is not "is your code good" but "who checked it", and the
 answer has to be something they can run.

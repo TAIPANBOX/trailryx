@@ -11,13 +11,14 @@
 # with no owner, and the only way one stays true is if something refuses the push
 # when it stops being true.
 #
-# It checks five things, and each one is a claim a reader would take at face value:
+# It checks six things, and each one is a claim a reader would take at face value:
 #
 #   1. the tests badge equals what `cargo test` actually runs;
 #   2. every crate row's count equals that crate's own suite;
 #   3. the rows sum to the total, so the table is checkable at a glance;
 #   4. the stage badge is not behind the roadmap;
-#   5. no other file in the tree states a dependency count of its own.
+#   5. no other file in the tree states a dependency count of its own;
+#   6. the verifier's size, which is what "an auditor can read all of it" rests on.
 #
 # The fifth arrived on 6 August 2026 and is the one that reaches outside this page.
 # The doc comment on `trailryx-sql` had said "two hundred and forty-three" since the
@@ -212,6 +213,70 @@ else
     done <<EOF
 $found
 EOF
+  done < <(git ls-files)
+fi
+
+# The verifier's size, which is the number the zero-dependency argument is spent
+# against. "An auditor can read all of it before trusting any of it" is a claim about
+# how much there is to read, and it was true when it was written and stopped being
+# true without saying so. Measured 2026-08-10: the figure had said about 1,500 lines
+# since 29 July, when the crate was 1,528; it is 3,575 now, because its own ECDSA
+# P-384 and its RFC 3161 timestamp verification both arrived after the sentence did.
+# The README's own prose already listed P-384 beside the stale count, which is the
+# whole failure in one line: the words were updated and the number beside them was
+# not, and nothing looked.
+#
+# Unlike the dependency count this is compared with a tolerance rather than exactly,
+# and the reason is churn rather than laziness. A line count moves on every edit to
+# the crate, a comment included, so an exact gate would refuse a push over a figure
+# nobody would call wrong, and a gate that fires on non-faults is one somebody widens
+# until it stops firing at all. The README states a figure rounded to the nearest
+# hundred and the true count must sit within 5% of it: wide enough to survive
+# ordinary work, and far too narrow to survive what actually happened here, which was
+# a claim drifting to less than half of the truth.
+verify_lines=$(git ls-files 'crates/trailryx-verify/*.rs' |
+  while IFS= read -r f; do wc -l < "$f"; done |
+  awk '{s += $1} END {print s + 0}')
+
+if [ "$verify_lines" -eq 0 ]; then
+  # Invariant 19 in miniature: a crate that moved or was renamed would otherwise
+  # make this print a clean pass having measured nothing at all.
+  note "trailryx-verify has no tracked Rust files, so its size was not measured"
+else
+  stated_lines=$(grep -oE 'about [0-9,]+ lines including' "$readme" |
+    grep -oE '[0-9,]+' | tr -d ',' | sort -u)
+  stated_count=$(printf '%s\n' "$stated_lines" | grep -c '[0-9]')
+  if [ -z "$stated_lines" ]; then
+    note "the README no longer states the verifier's size, and this check exists because that figure spent twelve days with no owner"
+  elif [ "$stated_count" -ne 1 ]; then
+    note "the README states $stated_count different sizes for the verifier ($(printf '%s' "$stated_lines" | tr '\n' ' ')), and invariant 16 allows one"
+  else
+    drift=$(awk -v a="$stated_lines" -v b="$verify_lines" \
+      'BEGIN { d = a - b; if (d < 0) d = -d; printf "%d", (d * 100) / b }')
+    [ "$drift" -le 5 ] ||
+      note "the README says the verifier is about $stated_lines lines and it is $verify_lines, which is $drift% out"
+  fi
+
+  # The same figure, anywhere else this repository writes it down. Invariant 16 gives
+  # a number in prose one owner, and this one has exactly the shape that rotted the
+  # dependency count: a sentence somebody copies into a second file to make a point.
+  #
+  # It caught its own author on its first real run, refusing the push that added it
+  # because `CLAUDE.md` had restated the superseded figure while explaining why this
+  # check exists. That is the best evidence it works that there is, better than the
+  # planted cases, and the fix was to take the number out of the prose rather than to
+  # widen the check.
+  #
+  # Deliberately simpler than the dependency count's version of the same idea: there
+  # is no `history` exception table here. Invariant 16 would allow a dated superseded
+  # figure, and nothing in this tree needs one yet, so the machinery is not written
+  # until something does. Adding it means copying the exceptions block above,
+  # re-derived reason and all, rather than inventing a second convention.
+  while IFS= read -r f; do
+    [ "$f" = "$readme" ] && continue
+    [ -f "$f" ] || continue
+    grep -qE '[0-9] lines including' "$f" 2>/dev/null &&
+      note "$f states a size for the verifier, and invariant 16 gives that figure one owner, which is $readme"
   done < <(git ls-files)
 fi
 
