@@ -371,6 +371,35 @@ fn mapping_for(kind: &str) -> Option<Mapping> {
         // happened, not a signal about anything; the severity of what it was
         // about belongs to the event it was about, which is already in the store
         // under its own type.
+        // Web egress. A governed fetch IS a tool call: `fetch_url` and `browse`
+        // are tools an agent invoked, and the record vocabulary already has the
+        // word for that. No verdict, because it happened.
+        "web_fetch" => m(EventType::ToolCall, None, None, Severity::Notice),
+        // A fetch this plane refused. `Denied` is true of every one of them,
+        // and the ERROR CODE is deliberately absent, which is the same
+        // reasoning `alert_sent` uses just below.
+        //
+        // `web_blocked` covers refusals of several different kinds: a policy
+        // that said no, an address inside the deployment, a scheme that is not
+        // http, a per-hour cap that was spent, and a policy plane that could
+        // not be asked at all. `ErrorCode::PolicyDenied` would assert that a
+        // policy denied it, which is false for the address case, where the
+        // refusal happens before any policy runs and no policy language
+        // contemplates the address anyway.
+        //
+        // The producer's `data.verdict` member tells the two apart. Reading it
+        // into a typed field here would be this store asserting a producer's
+        // free-form member as a decision it stands behind, which is exactly
+        // what the rule at the top of this file forbids. The member is not
+        // lost: it reaches the payload plane like every other unconsumed
+        // member, where a reader can see it and this store claims nothing
+        // about it.
+        "web_blocked" => m(
+            EventType::PolicyDecision,
+            Some(Verdict::Denied),
+            None,
+            Severity::Error,
+        ),
         "alert_sent" => m(
             EventType::NotificationDispatched,
             None,
