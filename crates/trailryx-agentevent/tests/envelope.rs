@@ -194,7 +194,7 @@ fn an_event_with_no_run_is_refused_rather_than_given_one() {
 #[test]
 fn a_schema_this_reader_does_not_accept_is_refused() {
     for schema in [
-        "taipanbox.dev/agent-event/v0.3",
+        "taipanbox.dev/agent-event/v0.4",
         "taipanbox.dev/agent-passport/v0.1",
         "",
     ] {
@@ -205,6 +205,11 @@ fn a_schema_this_reader_does_not_accept_is_refused() {
     for schema in [
         "taipanbox.dev/agent-event/v0.1",
         "taipanbox.dev/agent-event/v0.2",
+        // v0.3 moved from the refused list to this one when this reader learned
+        // what a claimed subject is. Accepting a version is not a promise to
+        // record its traffic: a claim under it is refused one layer down, by
+        // name. See `a_claimed_subject_is_refused_by_name_rather_than_by_encoding`.
+        "taipanbox.dev/agent-event/v0.3",
     ] {
         let event = line("budget_exhausted", "").replace("taipanbox.dev/agent-event/v0.2", schema);
         assert!(map(OURS, &event).is_ok(), "{schema}");
@@ -594,4 +599,127 @@ fn a_fetched_url_stays_out_of_the_metadata_plane() {
             "the metadata plane carries {leaked:?}: {meta}"
         );
     }
+}
+
+// The identity plane: a finding becomes a record, a claim does not.
+// ---------------------------------------------------------------------------
+
+/// A finding from the identity plane maps, and it decides nothing.
+///
+/// No verdict and no error code, because a finding is a detector speaking and
+/// not the estate concluding. The record fixes that at this time this producer
+/// said this about this subject, which is the same standing
+/// `notification_dispatched` takes about delivery.
+#[test]
+fn an_identity_finding_maps_and_asserts_no_verdict() {
+    let event = line(
+        "identity_finding",
+        r#","data":{"detector":"unrouted_egress"}"#,
+    )
+    .replace("\"source\":\"tokenfuse\"", "\"source\":\"idryx\"");
+    let unit = map(OURS, &event).expect("an identity finding must map");
+    assert_eq!(unit.meta.event_type, EventType::IdentityFinding);
+    assert_eq!(unit.meta.verdict, None, "a finding decides nothing");
+    assert_eq!(unit.meta.error, None, "a finding names no error code");
+    assert_eq!(unit.meta.mapper, MAPPER_VERSION);
+}
+
+/// Which detector fired never reaches the metadata plane.
+///
+/// The producer's detector names are its own vocabulary and change without
+/// anybody else editing anything. Compiling them into a frozen format is what
+/// this store refuses, so `data` travels to the payload plane whole and the
+/// typed side carries the subject, the type and the time.
+#[test]
+fn the_detector_name_stays_in_the_payload_plane() {
+    let event = line(
+        "identity_finding",
+        r#","data":{"detector":"claimed_agent_drift"}"#,
+    )
+    .replace("\"source\":\"tokenfuse\"", "\"source\":\"idryx\"");
+    let unit = map(OURS, &event).expect("an identity finding must map");
+    assert!(
+        payload_text(&unit).contains("claimed_agent_drift"),
+        "the detector must reach the payload plane, which is where an operator finds it"
+    );
+    let metadata = format!("{:?}", unit.meta);
+    assert!(
+        !metadata.contains("claimed_agent_drift"),
+        "a producer's own vocabulary reached the metadata plane:\n{metadata}"
+    );
+}
+
+/// A subject a process asserted about itself is refused BY NAME, and never
+/// recorded.
+///
+/// `agent_id` is mandatory, provable, committed into the immutable index roots
+/// and one of the nine unerasable fields, and its promise to hold no personal
+/// data is contractual: an operator asserts the value space holds machine names.
+/// Every party that authors an established identifier is under that contract,
+/// and the party that authors a claimed one is not. A process writes its own
+/// environment, so within the permitted characters it can write a person's name
+/// into a field erasure can never reach.
+#[test]
+fn a_claimed_subject_is_refused_by_name_rather_than_by_encoding() {
+    let claimed = line("identity_finding", "")
+        .replace("\"source\":\"tokenfuse\"", "\"source\":\"idryx\"")
+        .replace("agent-event/v0.2", "agent-event/v0.3")
+        .replace(
+            "\"agent_id\":\"agent://acme.example/support/tier1-bot\"",
+            "\"agent_id\":\"claimed:agent://acme.example/support/tier1-bot\"",
+        );
+    assert_eq!(
+        map(OURS, &claimed),
+        Err(Rejection::ClaimedSubject),
+        "a claim must be refused under its own name, not blended into another count"
+    );
+}
+
+/// And the refusal is about the CLAIM, not about the domain.
+///
+/// A claimed subject naming another organisation's agent is still
+/// `ClaimedSubject`. Counting it as a foreign trust domain would say a producer
+/// of ours is misconfigured and send somebody to check configuration, when the
+/// domain is whatever the process typed. The tenant comparison deliberately
+/// never runs on one.
+#[test]
+fn a_claimed_subject_from_another_domain_is_still_a_claim_and_not_a_tenant_finding() {
+    let claimed = line("identity_finding", "")
+        .replace("\"source\":\"tokenfuse\"", "\"source\":\"idryx\"")
+        .replace("agent-event/v0.2", "agent-event/v0.3")
+        .replace(
+            "\"agent_id\":\"agent://acme.example/support/tier1-bot\"",
+            "\"agent_id\":\"claimed:agent://other-bank.example/support/tier1-bot\"",
+        );
+    assert_eq!(map(OURS, &claimed), Err(Rejection::ClaimedSubject));
+}
+
+/// A `claimed:` wrapper around something that is not an identifier is not a
+/// claim this door has to reason about. It is garbage, and `NoAgent` is true of
+/// it.
+#[test]
+fn a_claimed_wrapper_around_garbage_is_no_agent_rather_than_a_claim() {
+    let junk = line("identity_finding", "")
+        .replace("\"source\":\"tokenfuse\"", "\"source\":\"idryx\"")
+        .replace("agent-event/v0.2", "agent-event/v0.3")
+        .replace(
+            "\"agent_id\":\"agent://acme.example/support/tier1-bot\"",
+            "\"agent_id\":\"claimed:not-a-uri\"",
+        );
+    assert_eq!(map(OURS, &junk), Err(Rejection::NoAgent));
+}
+
+/// An ESTABLISHED subject under v0.3 still maps.
+///
+/// The producer is not supposed to stamp v0.3 on an established subject, and
+/// that MUST NOT is the producer's rule. A consumer that refused the line would
+/// be punishing a reader for a writer's mistake, and the event is safe and
+/// honest to record either way.
+#[test]
+fn an_established_subject_under_v0_3_still_maps() {
+    let event = line("identity_finding", "")
+        .replace("\"source\":\"tokenfuse\"", "\"source\":\"idryx\"")
+        .replace("agent-event/v0.2", "agent-event/v0.3");
+    let unit = map(OURS, &event).expect("an established subject maps under any accepted version");
+    assert_eq!(unit.meta.event_type, EventType::IdentityFinding);
 }

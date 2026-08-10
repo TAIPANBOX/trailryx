@@ -105,17 +105,38 @@ use trailryx_record::{
 /// refusal rather than becoming a record, and this field is how somebody reading
 /// the store years from now can tell that apart from a run in which nothing was
 /// dispatched.
-pub const MAPPER_VERSION: MapperVersion = MapperVersion(102);
+///
+/// 103 is the reading that maps `identity_finding` and refuses a claimed subject
+/// by name. The same reasoning applies twice over here, because the cursor
+/// commits past refused lines: every identity finding written before this
+/// reading deployed stayed a counted refusal and will not be re-read. The trail
+/// of identity findings starts at 103, and this field is what says so rather
+/// than leaving a reader to conclude the identity plane was quiet.
+pub const MAPPER_VERSION: MapperVersion = MapperVersion(103);
 
 /// The schema values this reader accepts.
 ///
-/// Both, because the specification says a consumer MUST accept either and an
-/// emitter on v0.1 is under no obligation to move. They differ only in whether
-/// `source` is a closed enum, and `source` is not a field this mapper decides
-/// anything from.
+/// v0.1 and v0.2 because the specification says a consumer MUST accept either
+/// and an emitter on v0.1 is under no obligation to move. They differ only in
+/// whether `source` is a closed enum, and `source` is not a field this mapper
+/// decides anything from.
+///
+/// **v0.3 is here so a claim can be REFUSED BY NAME rather than by encoding.**
+/// It is the version an observer stamps when `agent_id` carries a subject a
+/// process asserted about itself (SPEC 3.3, 6.4), and accepting it is not a
+/// MUST. Refusing it at [`Rejection::UnknownSchema`] would have been defensible
+/// and was rejected: that counter is shared with typos, a future v0.4 and
+/// foreign formats, so an operator reading it diagnoses producer drift, and the
+/// one fact worth surfacing, that N processes claimed identities, would be
+/// invisible.
+///
+/// Accepting a version is not a promise to record its traffic. It is the
+/// statement that this reader knows what the version means, and this one now
+/// does: see [`Rejection::ClaimedSubject`].
 pub const SCHEMAS: &[&str] = &[
     "taipanbox.dev/agent-event/v0.1",
     "taipanbox.dev/agent-event/v0.2",
+    "taipanbox.dev/agent-event/v0.3",
 ];
 
 /// What the operator asserts, because the wire cannot.
@@ -175,6 +196,38 @@ pub enum Rejection {
     NoAgent,
     /// An `agent://` in a trust domain this receiver does not serve.
     ForeignTrustDomain,
+    /// An `agent_id` a PROCESS asserted about itself: `claimed:agent://...`,
+    /// read out of AGENT_PASSPORT_ID by an observer (SPEC 3.3).
+    ///
+    /// **Refused because `agent_id` is the one field this store cannot take
+    /// back.** It is mandatory, provable, committed into the immutable index
+    /// roots and one of the nine unerasable fields, and its promise to hold no
+    /// personal data is, in the schema's own words, contractual rather than
+    /// technical: an operator asserts that the value space holds machine names,
+    /// "not a natural person". Every party that authors an established
+    /// identifier is under that contract. A claimed one is authored by the only
+    /// party that is not: a process writes its own environment, and inside the
+    /// permitted characters it can write a person's name, another
+    /// organisation's agent, or an unbounded stream of fresh identifiers, every
+    /// byte of which would land where erasure can never reach.
+    ///
+    /// There is no other home for it either. Fabricating a stand-in `agent_id`
+    /// is what SPEC 6.1 forbids in as many words, and the payload plane cannot
+    /// carry the subject because `agent_id` is not optional. `AgentId` is capped
+    /// at 255 bytes while v0.3 allows 263, so a maximal claim cannot even be
+    /// constructed as one: the type was never shaped for this.
+    ///
+    /// **The tenant comparison deliberately never runs on one.** Folding a
+    /// foreign-domain claim into [`Rejection::ForeignTrustDomain`] would say a
+    /// producer of ours is misconfigured and send somebody to check
+    /// configuration, when the domain is whatever the process typed. And
+    /// comparing the inner identifier would bound nothing: an attacker claims
+    /// to be YOUR agent precisely when impersonating you.
+    ///
+    /// Nothing is lost silently. The finding stays in the producer's own
+    /// journal, in Slack and in OTLP, and this counter says how many were turned
+    /// away and why.
+    ClaimedSubject,
     /// A `type` this reading of the registry does not map. Deliberately not
     /// mapped to something adjacent.
     UnknownType,
@@ -192,6 +245,9 @@ impl fmt::Display for Rejection {
             Self::UnknownSchema => f.write_str("a schema this reader does not accept"),
             Self::NoAgent => f.write_str("no usable agent identifier"),
             Self::ForeignTrustDomain => f.write_str("an agent in another trust domain"),
+            Self::ClaimedSubject => f.write_str(
+                "a subject the process asserted about itself, not one the estate issued",
+            ),
             Self::UnknownType => f.write_str("an event type this reading does not map"),
             Self::NoRunId => f.write_str("no run identifier"),
             Self::BadTime => f.write_str("no usable timestamp"),
@@ -207,6 +263,7 @@ pub struct Report {
     pub unknown_schema: u32,
     pub no_agent: u32,
     pub foreign_trust_domain: u32,
+    pub claimed_subject: u32,
     pub unknown_type: u32,
     pub no_run_id: u32,
     pub bad_time: u32,
@@ -219,6 +276,7 @@ impl Report {
             Rejection::UnknownSchema => &mut self.unknown_schema,
             Rejection::NoAgent => &mut self.no_agent,
             Rejection::ForeignTrustDomain => &mut self.foreign_trust_domain,
+            Rejection::ClaimedSubject => &mut self.claimed_subject,
             Rejection::UnknownType => &mut self.unknown_type,
             Rejection::NoRunId => &mut self.no_run_id,
             Rejection::BadTime => &mut self.bad_time,
@@ -358,6 +416,18 @@ fn mapping_for(kind: &str) -> Option<Mapping> {
         "memory_written" | "memory_forgotten" | "reflection_run" | "contradiction_found" => {
             m(EventType::MemoryAccess, None, None, Severity::Info)
         }
+        // An identity plane reporting a finding about an agent. No verdict and no
+        // error: a finding decides nothing, and asserting a verdict would make
+        // the record say the estate concluded something when what happened is
+        // that a detector spoke.
+        //
+        // `Warning` is the fallback band only. The producer sends a severity on
+        // every line and `severity_for` prefers it; this is what a later producer
+        // of this type would get, and it agrees with the producer's own unknown
+        // band, which is medium. A finding is by nature a signal, which is why it
+        // is not `Info` the way a dispatched notification is: that one is a thing
+        // that happened, this one is somebody saying look.
+        "identity_finding" => m(EventType::IdentityFinding, None, None, Severity::Warning),
         // A notification left for a person. No verdict and no error, and both are
         // deliberate rather than unfinished: heraldyx's `data` carries an
         // `outcome` member reading "accepted" or "refused", and reading either
@@ -449,6 +519,26 @@ pub fn map_line(cfg: &EnvelopeConfig, line: &[u8], cursor: Cursor) -> Result<Ing
         .is_some_and(|s| SCHEMAS.contains(&s))
     {
         return Err(Rejection::UnknownSchema);
+    }
+
+    // The claim is tested on the RAW string, before anything tries to build an
+    // AgentId out of it, and the order is the whole of it: `parse_strict`
+    // refuses the claimed form as a bad shape, so without this branch a claim
+    // would be counted as `NoAgent`, which is not true of it and would send an
+    // operator looking for a producer that forgot a field.
+    //
+    // The wire form is pinned here verbatim rather than through a shared
+    // validator, because the producer's is Go and this is Rust and nothing
+    // crosses that boundary. The tests carry the same literal for that reason.
+    if let Some(raw) = parsed.agent_id.as_deref() {
+        if let Some(inner) = raw.strip_prefix("claimed:") {
+            if AgentId::parse_strict(inner).is_ok() {
+                return Err(Rejection::ClaimedSubject);
+            }
+            // A `claimed:` wrapper around something that is not an identifier at
+            // all is not a claim this door has to reason about; it is garbage,
+            // and `NoAgent` is true of it.
+        }
     }
 
     // Strict, because this is the ingest door and not the journal reading back

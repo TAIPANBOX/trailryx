@@ -344,6 +344,7 @@ disc!(event_type, EventType, "event_type",
     EventType::PolicyDecision => 4, EventType::BudgetCheck => 5, EventType::MemoryAccess => 6,
     EventType::Delegation => 7, EventType::RunCompleted => 8, EventType::Erasure => 9,
     EventType::StoreEvent => 10, EventType::NotificationDispatched => 11,
+    EventType::IdentityFinding => 12,
 );
 
 disc!(severity, Severity, "severity",

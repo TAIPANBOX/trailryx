@@ -426,11 +426,12 @@ fn events(args: Vec<String>) -> ExitCode {
     let r = shipped.ingested.report;
     println!(
         "  refused: not_an_envelope {} unknown_schema {} no_agent {} foreign_trust_domain {} \
-         unknown_type {} no_run_id {} bad_time {}",
+         claimed_subject {} unknown_type {} no_run_id {} bad_time {}",
         r.not_an_envelope,
         r.unknown_schema,
         r.no_agent,
         r.foreign_trust_domain,
+        r.claimed_subject,
         r.unknown_type,
         r.no_run_id,
         r.bad_time

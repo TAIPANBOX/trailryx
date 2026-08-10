@@ -190,6 +190,7 @@ fn event_code(e: EventType) -> u8 {
         EventType::Erasure => 9,
         EventType::StoreEvent => 10,
         EventType::NotificationDispatched => 11,
+        EventType::IdentityFinding => 12,
     }
 }
 

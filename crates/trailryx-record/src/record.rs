@@ -60,6 +60,44 @@ pub enum EventType {
     /// plane like every other free-form member; this type says only that a
     /// notification left.
     NotificationDispatched,
+    /// An identity plane reported a finding about an agent.
+    ///
+    /// The twelfth, and it is here for the same reason the eleventh was: none of
+    /// the others is true of it. Nothing was decided, no policy was consulted,
+    /// no budget moved, nobody was told, the store is not speaking about itself,
+    /// and the subject agent did not act at all. Something LOOKED at the estate
+    /// and said the identity may not be what it seems.
+    ///
+    /// **Why that earns a type here when other products' findings do not.** This
+    /// store's subject axis is `agent_id`: every trail hangs off it, and a
+    /// finding that the identity behind a trail was ever in doubt conditions how
+    /// an auditor reads every other record about that subject. "Was this
+    /// identity questioned, and when" is a question no other type can answer
+    /// without saying something untrue. A crypto finding, a simulation finding
+    /// or a quality drift do not clear that bar: their subjects are a
+    /// certificate, a scenario and a score, none of which this store is built
+    /// around.
+    ///
+    /// **It asserts that a finding was REPORTED, never that it is true.** The
+    /// same standing `NotificationDispatched` takes about delivery. An identity
+    /// plane's detectors are heuristics over a graph and some of them are wrong;
+    /// what the record fixes is that at this time, this producer said this about
+    /// this subject.
+    ///
+    /// **`run_id` names the reporting SCAN, not an execution of the subject.**
+    /// The subject agent never ran that run. This is the one type for which
+    /// [`crate::ids::RunId`]'s "one execution of an agent" is not the reading:
+    /// here a query by run reconstructs one scan's findings, and a query by
+    /// agent reconstructs one subject's identity history. Both are questions an
+    /// auditor asks; leaving this unsaid would let the record lie by
+    /// implication.
+    ///
+    /// **Which detector fired is not here**, and that is the plane boundary
+    /// rather than an omission. The producer's detector names are its own
+    /// vocabulary and change without anybody else editing anything; compiling
+    /// them into a frozen format is what this store refuses for exactly that
+    /// reason. They arrive in the payload plane with the rest of `data`.
+    IdentityFinding,
 }
 
 impl EventType {
@@ -75,6 +113,7 @@ impl EventType {
         Self::Erasure,
         Self::StoreEvent,
         Self::NotificationDispatched,
+        Self::IdentityFinding,
     ];
 
     pub fn as_str(self) -> &'static str {
@@ -90,6 +129,7 @@ impl EventType {
             Self::Erasure => "erasure",
             Self::StoreEvent => "store_event",
             Self::NotificationDispatched => "notification_dispatched",
+            Self::IdentityFinding => "identity_finding",
         }
     }
 }
