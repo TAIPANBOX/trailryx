@@ -169,94 +169,50 @@ the previous chain head and the segment are left at values nobody could mistake 
 real, because the journal stamps them on append and a plausible number there would
 be a lie that survives into a record.
 
-## The question nobody else answers
+## What an auditor asks, and what answers it
 
-Agent telemetry usually lands in a span store. That works until an auditor asks
-something an auditor asks.
-
-| Question | Span store | Trailryx |
-|---|---|---|
-| Was this record altered? | no answer | hash chain, Merkle segments |
-| Is this **all** the matching records? | no answer | **proof of completeness** |
-| What did the system *know* when it decided? | not captured | `basis`: policy version, budget state, memory reference, tool manifest |
-| What led to this decision? | one parent | causal DAG, provable hop by hop |
-| What did we know in March, before we knew better? | no answer | `as_of` on the time dimension |
-| Delete this person, keep the audit valid | mutually exclusive | crypto-erasure; the erasure is itself a record |
+| Question | What answers it |
+|---|---|
+| Was this record altered? | hash chain, Merkle segments |
+| Is this **all** the matching records? | **proof of completeness** |
+| What did the system *know* when it decided? | `basis`: policy version, budget state, memory reference, tool manifest |
+| What led to this decision? | causal DAG, provable hop by hop |
+| What did we know in March, before we knew better? | `as_of` on the time dimension |
+| Delete this person, keep the audit valid | crypto-erasure; the erasure is itself a record |
 
 Obligations under EU AI Act Article 12 were due on 2 August 2026, and the Digital
 Omnibus on AI moved them to 2 December 2027 for stand-alone Annex III systems. The
 harmonised standards that would say *how* are still not cited in the Official Journal.
 
-## How this compares
+## What it does, and where each part is proved
 
-<div align="center">
-
-<img src="docs/assets/where-it-sits.svg" alt="A positioning map with two axes: whether one person can be erased on request, and what can be proved about an answer. Tamper-evident ledgers sit high on proof and cannot remove history; observability and SIEM tools delete freely and prove nothing; Trailryx sits in the corner that does both" width="1022">
-
-<sub>Two properties that usually cost each other. The interesting question is not who is better, it is which corner a tool had to give up.</sub>
-
-</div>
-
-The tools on that map are good at what they do, and two of them do something this
-one does not attempt: run a general-purpose database under a real workload for
-years. What none of them does is sit in the top right corner, and the reason is
-structural rather than a gap somebody forgot to fill.
-
-| Category | What they do | The corner they gave up |
+| Capability | What it means in this store | Where it is checked |
 |---|---|---|
-| **Tamper-evident ledgers** (immudb, Azure SQL ledger, the withdrawn QLDB) | Prove the history was not rewritten, with cryptographic digests an auditor can check | Removing history. Microsoft's own documentation puts it plainly: real deletion is *"fundamentally incompatible with the ledger functionality"*, so a dropped table is renamed and *"physically remain[s] in the database"*, and *"deleting older data ... isn't supported"* |
-| **Transparency logs** (Trillian, Certificate Transparency) | Append-only Merkle logs, inclusion and consistency proofs, run by people who mean it | Erasure entirely, and any notion of an agent, a run or a causal edge. They prove a log is a log |
-| **Agent observability** (tracing and eval platforms) | Record every run, cost it, evaluate it, show it back to you beautifully | Proof of any kind. A row can be edited or dropped and nothing about the remaining rows changes |
-| **SIEM and audit-log products** | Retention, search, alerting, compliance reporting at scale | Proof that an answer is complete. Retention is a policy, not a commitment somebody else can check |
+| **Proof of completeness** | An answer carries the entry immediately either side of it, whose keys fall outside the range, so a record that was left out has nowhere to hide. Not inclusion, not consistency: a proof that these are *all* of them | `read --run`, `--agent`, `--all`, each reporting `proof Full` or naming what it could not prove |
+| **Tamper evidence** | Every record is hash-chained and sealed into Merkle segments with a signed root | `trailryx-verify` on an evidence pack, and the rebuild in `read` that refuses a segment that does not reproduce its own manifest |
+| **Crypto-erasure** | A record commits to four fields about a payload it does not hold, so destroying the key removes the person while every chain, root and proof stays exactly as it was. The object interface has no delete method at all | The acceptance demo's steps 6 and 7: the same pack verifies byte for byte after the erasure, and the erasure is sealed as its own record |
+| **Decision context** | `basis` carries the policy version, the budget state at each step, the model and its parameters, the prompt hash and the tools in scope: what the system knew, not only what it did | Records written by the mapper from the estate's own envelope, and by the OTLP receiver |
+| **Bitemporal reading** | `as_of` answers what was believed at a time, not only what a row was | The SQL facade and `read`, both marking an answer full, partial with a reason, or none |
+| **A verifier anybody can read** | Its own SHA-384, its own ECDSA P-384, its own reader, about 3,600 lines including tests and zero third-party dependencies | `trailryx-verify`, a static binary that needs no config, no network and no state |
 
-### The capability that decides it
+### It is the estate's record, not only its own
 
-| | Trailryx | Ledgers | Transparency logs | Observability |
-|---|:---:|:---:|:---:|:---:|
-| Show what an agent did | yes | yes | no | yes |
-| Prove a record was not altered | yes | yes | yes | no |
-| Prove the history was not rewritten | yes | yes | yes | no |
-| **Prove an answer is all of it** | **yes** | no | partial | no |
-| **Erase one person and keep the proofs** | **yes** | no | no | not applicable |
-| Agent semantics: runs, causal edges, `basis` | yes | no | no | partial |
-| Bitemporal `as_of`: what we knew in March | yes | partial | no | no |
-| An auditor checks it without the vendor | yes | partial | yes | no |
-| Zero third-party dependencies in the verifier | yes | no | no | no |
+Every governance plane in this stack writes the same agent-event envelope: the money
+plane when a budget is checked or a breaker trips, the policy plane when it allows,
+denies or holds, the egress plane when a fetch is decided, the memory plane when
+something is written or forgotten, the identity plane when a detector speaks, the
+notifier when a person is told. They share one `agent://` identifier, one run, one
+delegation chain.
 
-"Partial" is doing real work in that table and is not a hedge. A transparency log
-proves consistency between two versions of a log, which is a completeness property
-about the *log* and not about an answer to a question. A ledger with temporal
-tables can query a past state, which is a version history rather than a bitemporal
-one: it answers what a row *was*, not what the system *believed* at the time.
+This store reads that stream and turns it into a record with the properties above.
+So a question like *what did this agent do, what was refused, who was told, and is
+that all of it* is answered once, over every plane at the same time, from bytes that
+were sealed as they happened. That is the part the planes cannot each do alone, and
+it is why the record plane is a plane rather than a feature inside one of them.
 
-### What we are not aware of an equivalent for
-
-Stated the way it should be stated, as our knowledge and not as a fact about the
-world. If any of these is wrong, the correction is welcome and the claim comes out.
-
-- **Proof of completeness on a query answer.** Not inclusion, not consistency: a
-  proof that the four records handed over are *every* record in the range. It works
-  by carrying the entry immediately either side of the answer, whose keys must fall
-  outside it, so an omitted record has nowhere left to hide.
-- **Crypto-erasure that leaves every published root intact.** A record commits to
-  four fields about a payload it does not contain, so the key can be destroyed and
-  no chain, root or proof moves. Erasure without deletion, in a store whose object
-  interface has no delete method at all.
-- **The erasure is itself a record.** A manifest an auditor can check, verifiable by
-  whoever holds the subject handle and meaningless to everybody else.
-- **A verifier with no dependencies.** Its own SHA-384, its own ECDSA P-384, its own
-  reader, about 3,600 lines including tests, so an auditor can read all of it before
-  trusting any of it.
-
-Trailryx is **complementary** to observability rather than a replacement: keep the
-tracing you have, and point this at the same OTLP stream when somebody will one day
-ask you to prove what happened.
-
-<sub>Competitor facts checked on 30 July 2026 against primary sources:
-<a href="https://learn.microsoft.com/en-us/sql/relational-databases/security/ledger/ledger-limits">Azure SQL ledger considerations and limitations</a>,
-<a href="https://immudb.io/blog/immudb-release-1-2">immudb 1.2 release notes</a> (logical deletion and expiration of entries),
-and <a href="https://aws.amazon.com/jp/blogs/news/migration-from-amazon-qldb/">AWS's own QLDB migration guidance</a> after support ended in July 2025.
-A tool that has moved since should be re-checked rather than argued with.</sub>
+A mapping is deliberately narrow: an event becomes a typed record only where the
+record vocabulary has a true home for it, and everything else is refused by name and
+counted. A wrong event type is worse than a missing record, because it is believed.
 
 
 ## What exists
@@ -630,9 +586,12 @@ that nobody has to have read this page.
   what the journal's sequence requires; more shards means more processes.
 
 Two more absences worth naming, because they are the ones somebody would assume
-away: nothing here has been measured for throughput, and a segment that has been
-sealed is never re-read into memory by `run`, so the process holds one open
-journal and nothing else.
+away. The receiver and `run` have still not been measured for throughput; the
+agent-event importer now has been, on 2026-08-25, at 50,000 records in 1.63 s
+with the commands and the limits in [`VALIDATION.md`](VALIDATION.md), and the
+limits are the half worth reading. And a segment that has been sealed is never
+re-read into memory by `run`, so the process holds one open journal and nothing
+else.
 
 ## Build it instead
 
