@@ -50,16 +50,16 @@
 //! Refused today, each because the record vocabulary has no honest home for it
 //! rather than because nobody got to it: `mcp_drift`, `sustained_loop`,
 //! `fanout_explosion`, `crypto_finding`, `crypto_drift`, `policy_violation`,
-//! `evidence_signed`, `eval_run`, `quality_score`, `quality_drift`, `sim_run`,
-//! `sim_finding`, `blast_radius_measured` and `console_command`. Each is a
-//! finding or an observation about infrastructure rather than a decision an agent
-//! took, and ten of the eleven event types are decisions.
+//! `evidence_signed`, `eval_run`, `quality_score`, `quality_drift`, `slo_burn`,
+//! `sim_run`, `sim_finding`, `blast_radius_measured` and `console_command`. Each
+//! is a finding or an observation about infrastructure rather than a decision an
+//! agent took, and ten of the twelve event types are decisions.
 //!
-//! # The one that got a type of its own, and what that cost
+//! # The two that got types of their own, and what that cost
 //!
 //! `alert_sent` is heraldyx saying it mailed a person about a run. It is not a
 //! decision either, and it was refused here until 6 August 2026 for exactly that
-//! reason. What made it different from the fourteen above is that it is not a
+//! reason. What made it different from the fifteen above is that it is not a
 //! finding about infrastructure: it is an event in the run's own history, with a
 //! subject, a time and an auditor's question attached to it ("when was this
 //! escalated, and to whom"), and no other event type can answer that question
@@ -76,9 +76,61 @@
 //! name instead of reading it as something else. The reasoning and the runs are in
 //! the pull request that added it.
 //!
+//! `identity_finding` earned the twelfth type on 10 August 2026 on the same
+//! argument, sharpened. None of the eleven was true of it either, and what
+//! separated it from `crypto_finding` and `sim_finding`, which are still refused,
+//! is that this store's subject axis is `agent_id`: a doubt about the identity
+//! behind a trail conditions how an auditor reads every other record about that
+//! subject, and no other type answers "was this identity questioned, and when"
+//! without saying something untrue. The reasoning is on
+//! [`trailryx_record::EventType::IdentityFinding`] itself.
+//!
 //! Extending the table further still means one of the same two things, and the
 //! second is still refused here: a new event type, which is the owner's decision,
 //! or mapping a finding onto a decision, which is not.
+//!
+//! # A measurement over a population is not an event in a run
+//!
+//! `slo_burn` is verdryx computing an error budget over one of four service level
+//! indicators: a target, the observed ratio of good runs over eligible ones in a
+//! window, a Wilson interval around it, how much budget is left and how fast it is
+//! going. It is refused, and it is the entry on that list whose refusal has to be
+//! argued rather than asserted, because the two types this vocabulary has grown
+//! were both grown for a plane in this estate reporting about an agent, which is
+//! what verdryx is doing here. "It came from another product's plane" stopped
+//! being an answer on 6 August 2026.
+//!
+//! Neither was grown because a finding deserved a record. Each is an event in ONE
+//! RUN'S OWN HISTORY, carrying a subject this store is built around, a time, and
+//! an auditor's question no other type answers without saying something untrue. A
+//! burn has neither half. It is computed after the fact, by a third party, over a
+//! POPULATION of runs across a window, and the answer belongs to the population
+//! rather than to any run in it. A record has to name one run and one subject, so
+//! recording a burn would fasten a ratio measured over a fleet to whichever
+//! `agent_id` and `run_id` the line happened to carry, and assert about that agent
+//! something the measurement does not support. The producer says as much itself:
+//! the event carries the identifier the ratio was grouped on, `agent_id` or
+//! `key_id`, which is a grouping choice rather than a property of any one run.
+//!
+//! There is no adjacent type to fall back on, and each candidate says more than
+//! happened. `BudgetCheck` is money and would assert that spend was metered, when
+//! what was measured is a rate of good outcomes. `StoreEvent` is this store
+//! speaking about itself, and a burn is arithmetic somebody else did.
+//! `PolicyDecision` is the worst of the three, because it would read as an
+//! enforcement and **nothing is enforced**: verdryx computes the budget and says
+//! so, it writes no policy, demotes nobody, and what to do about a spent budget is
+//! a person's decision taken somewhere this record plane does not reach. A record
+//! implying otherwise would be this store asserting a consequence that does not
+//! exist.
+//!
+//! One thing about the counter, since the refusals here are meant to be read.
+//! Only two triggers reach the bus at all, `exhausted` and `fast_burn`. Severity
+//! is fixed per type across this estate, so one type is one paging band, and a
+//! slow burn (the budget will be gone by Friday) is deliberately not an alert: it
+//! stays in verdryx's own report and its JSON, where a dashboard reads it. So a
+//! run of this stream that turns away N lines of this type turned away N budgets
+//! already gone or going fast rather than N windows computed, and a quiet
+//! `unknown_type` counter is not the same fact as a healthy fleet.
 
 pub mod time;
 
