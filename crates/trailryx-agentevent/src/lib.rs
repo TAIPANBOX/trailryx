@@ -112,7 +112,18 @@ use trailryx_record::{
 /// reading deployed stayed a counted refusal and will not be re-read. The trail
 /// of identity findings starts at 103, and this field is what says so rather
 /// than leaving a reader to conclude the identity plane was quiet.
-pub const MAPPER_VERSION: MapperVersion = MapperVersion(103);
+///
+/// 104 is the reading that maps `dependency_failed`, and it is the first entry in
+/// the table that is about the box rather than about the agent. The 103 argument
+/// applies again and it bites harder here, because of what the type is: a
+/// dependency failure written before this reading deployed stayed a counted
+/// refusal, the cursor committed past the line, and it will not be re-read. So the
+/// trail of the estate's own outages starts at 104, and a reader who finds nothing
+/// before it is looking at a reader that could not map them rather than at a period
+/// in which nothing broke. That distinction is the whole reason this field exists,
+/// and it matters more for an outage than for anything else in the table: silence
+/// is what an outage looks like from the outside anyway.
+pub const MAPPER_VERSION: MapperVersion = MapperVersion(104);
 
 /// The schema values this reader accepts.
 ///
@@ -475,6 +486,69 @@ fn mapping_for(kind: &str) -> Option<Mapping> {
             None,
             None,
             Severity::Info,
+        ),
+        // The box's own dependency died. Every other entry in this table is an
+        // agent misbehaving or a plane refusing it; this one is tokenfuse saying
+        // that its provider, or the policy plane it asks before every call, could
+        // not be reached. Until 25 August 2026 that left a `502` on the wire and
+        // nothing in any store, which is the gap the type was cut for.
+        //
+        // It needs no new record type, and that is the difference from
+        // `alert_sent`. `EventType::ModelCall` is true of it and asserts nothing
+        // beyond what happened: a call was made and it did not complete.
+        // `Verdict::Failed` says the second half of that, and
+        // `ErrorCode::UpstreamError` says what failed was somebody else's service
+        // rather than ours. `trailryx_otlp::semconv` already falls back to exactly
+        // that trio for the same real-world fact when a span reports an error it
+        // cannot name more precisely, so the estate's two ingest doors agree about
+        // an upstream failure rather than each inventing a reading of it. Adding a
+        // twelfth event type for a fact the vocabulary already holds would make the
+        // same failure look like two different things depending on which door it
+        // came through, and invariant 36 would then have to carry a discriminant
+        // that bought nothing.
+        //
+        // The three tempting alternatives are each worse, and each in the same way:
+        // they say more than happened, which is the one thing this mapper may never
+        // do. `PolicyDecision` would assert that a policy decided something, and the
+        // entire content of the event is that nothing did. `BudgetCheck` would
+        // assert that spend was metered or a budget consulted, and a call that never
+        // reached a provider moved no money. `StoreEvent` is the store speaking
+        // about itself, reserved for a gap, a re-sign or a recovery, and this is not
+        // the store: it is a component upstream of the store reporting its own
+        // weather, and borrowing that type would put somebody else's outage in the
+        // one place a reader trusts to be ours.
+        //
+        // One arm covers both dependencies, and the policy plane is the case that
+        // tempts a second one. When the dependency that failed is the policy plane
+        // rather than the provider, a model call still happened, ungoverned, under
+        // the default `failmode=open`, or was still stopped under `failmode=closed`;
+        // either way the agent's call is what the event is about, and `ModelCall`
+        // stays true of it. Splitting the arm would also require reading
+        // `data.dependency`, which the rule at the top of this file forbids: a
+        // producer's free-form member must not become a typed field this store
+        // stands behind. So which dependency died, how far the call had got, what
+        // the failure did to the call and the transport-error text all travel in the
+        // payload plane, where a reader can see them and this store claims nothing
+        // about them. Nothing is lost, and nothing is asserted.
+        //
+        // `Severity::Error` is the fallback band and not an override, the same way
+        // every other band in this table is: `severity_for` prefers the producer's
+        // value on every line that carries one, and tokenfuse fixes this type at
+        // `high` inside its own code rather than letting a call site choose. `high`
+        // is `Severity::Error`, so the two agree, and a line that arrived without the
+        // optional member produces the same record shape as one that carried it. It
+        // is set to the value they agree on deliberately rather than left at
+        // whatever looked reasonable, because a fallback that disagreed with the one
+        // producer of the type would mean two records of one outage reading at two
+        // volumes, for a reason no reader of the store could recover. It is not the
+        // `Critical` band `budget_exhausted` takes: a dependency that failed is
+        // recoverable and usually already recovering, while a budget that is gone
+        // stays gone until somebody acts.
+        "dependency_failed" => m(
+            EventType::ModelCall,
+            Some(Verdict::Failed),
+            Some(ErrorCode::UpstreamError),
+            Severity::Error,
         ),
         _ => None,
     }
