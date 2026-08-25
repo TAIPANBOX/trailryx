@@ -279,15 +279,39 @@ memory.
 | memory | eight steps, twice |
 | **MinIO** over a real socket | eight steps, **twice** |
 | **Azurite**, Microsoft's own emulator | eight steps, **twice** |
+| **Google Cloud Storage**, a real bucket | eight steps, **twice**, 2026-08-25 |
 
 The second run is the one that matters and it was checked rather than assumed: the
 bucket holds ten objects after two runs, with the two runs' payload keys distinct, so
 the second genuinely published rather than meeting the first run's objects and
 passing on them.
 
-**What this still is not.** Both are emulators on this machine. The adapters
-themselves have been run against real AWS and real Google Cloud Storage, above, but
-the eight steps have not.
+**The real-cloud row, and what it took.** Run 2026-08-25 against a bucket in
+`europe-west1` with uniform bucket-level access, reached over the XML API with an
+interoperability HMAC key on a service account created for the run and destroyed with
+it. Ten objects, 2,206 bytes, and the same ten-objects-after-two-runs criterion the
+emulator rows use. Signing, sealing, the evidence pack, the erasure and the second
+verification of the same pack all happened against Google rather than against
+something on this machine: step 7 reports the four payloads unreachable while the
+ciphertext is untouched in storage, which is the erasure claim made where the bytes
+are somebody else's.
+
+One thing cost a run and is worth writing down: the default build **refuses** an
+`https://` endpoint, with `only http:// is supported: this build has no TLS`. TLS is
+a feature (`--features tls`, which is what `scripts/tls-builds.sh` exercises), so a
+real-cloud run of this demo needs it and an emulator run over loopback does not. The
+refusal is the correct behaviour and it is also the thing that makes a first attempt
+fail; naming it here is cheaper than rediscovering it.
+
+Torn down the same day and checked rather than assumed: bucket removed, HMAC key
+deactivated and deleted, service account deleted, and `gcloud storage buckets list`,
+`hmac list` and `service-accounts list` re-read afterwards, leaving only the project's
+pre-existing default compute account.
+
+**What this still is not.** AWS. The adapters themselves have been run against real
+S3, above, but the eight steps against real S3 have not, and the two clouds differ in
+exactly the four places `Flavour` names. Azure has emulator coverage only, for the
+reason given under its own section.
 
 ### The S3 adapter against somebody else's server
 
@@ -1263,10 +1287,13 @@ Stated so the absence is visible rather than inferred:
   standard library's blocking file API, behind the same trait the simulator fills.
   `io_uring` and `epoll` are a decision the architecture records and nobody has
   implemented, so there is nothing to run side by side yet.
-- **The eight-step demo against a real cloud.** It now runs twice against MinIO and
-  twice against Azurite, above, which is two real servers and no real cloud. Pointing
-  it at the AWS and GCS buckets that the adapter suite used would need them to exist
-  again, and they were deleted.
+- **The eight-step demo against real S3.** Half of this came off the list on
+  2026-08-25: the demo now runs twice against a real Google Cloud Storage bucket,
+  recorded above with what it took and what was torn down. AWS is the half that is
+  left, and it is worth doing separately rather than assuming GCS covers it, because
+  `Flavour` exists precisely because the two differ: the conditional-write header,
+  the version header, the version parameter and the pagination style. A pass on one
+  says nothing about those four on the other.
 - **Azure against real Blob Storage: decided against**, not pending. S3 and GCS have
   been run against their own clouds; Azure has met Azurite and will not be taken
   further. Recorded as a decision so nobody reads it later as unfinished work.
