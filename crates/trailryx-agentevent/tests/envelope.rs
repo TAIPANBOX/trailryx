@@ -723,3 +723,192 @@ fn an_established_subject_under_v0_3_still_maps() {
     let unit = map(OURS, &event).expect("an established subject maps under any accepted version");
     assert_eq!(unit.meta.event_type, EventType::IdentityFinding);
 }
+
+// ---------------------------------------------------------------------------
+// The box's own dependency (tokenfuse), SPEC 6.2
+// ---------------------------------------------------------------------------
+
+/// tokenfuse's line for a provider it could not reach, with the members the
+/// producer actually writes.
+///
+/// The shape is the contract of 25 August 2026: `type` is `dependency_failed`,
+/// `severity` is fixed at `high` inside tokenfuse rather than chosen per call
+/// site, and `data` carries which of the box's own dependencies died
+/// (`provider` or `policy_plane`), how far the call had got, what the failure did
+/// to the call, and a capped piece of transport-error text.
+///
+/// Every one of those four is in `data`, which is where they belong and where
+/// this mapper is forbidden from reading. `detail` is why that is not a
+/// formality: a transport error quotes the request, so a host, a path and
+/// occasionally a query string ride in it, and the metadata plane is the one
+/// erasure cannot reach.
+const TOKENFUSE_PROVIDER_OUTAGE: &str = concat!(
+    r#"{"schema":"taipanbox.dev/agent-event/v0.2","ts":"2026-08-25T09:41:07Z","#,
+    r#""source":"tokenfuse","type":"dependency_failed","severity":"high","#,
+    r#""agent_id":"agent://acme.example/support/tier1-bot","run_id":"run-8842","#,
+    r#""data":{"dependency":"provider","stage":"send","effect":"call_failed","#,
+    r#""detail":"connection refused: api.vendor.example:443"}}"#,
+);
+
+/// The same type when the dependency that died is the policy plane, and the
+/// default failmode let the call through ungoverned.
+const TOKENFUSE_POLICY_PLANE_UNREACHABLE: &str = concat!(
+    r#"{"schema":"taipanbox.dev/agent-event/v0.2","ts":"2026-08-25T09:41:09Z","#,
+    r#""source":"tokenfuse","type":"dependency_failed","severity":"high","#,
+    r#""agent_id":"agent://acme.example/support/tier1-bot","run_id":"run-8842","#,
+    r#""data":{"dependency":"policy_plane","stage":"decide","effect":"allowed_ungoverned","#,
+    r#""detail":"tcp connect timed out after 250ms"}}"#,
+);
+
+/// A dependency of the box itself died, and the record says a call was made and
+/// failed upstream. That is the whole claim, and it is the true one.
+///
+/// This is the first type in the registry that is not about the agent at all.
+/// Every other one here is an agent misbehaving or a plane refusing it; this one
+/// is the gateway saying its own provider was unreachable, which until now left a
+/// `502` on the wire and nothing in any store, in the owner's words: "коли лягає
+/// апстрім, шлюз чисто вертає 502, і жоден план цього не записує".
+///
+/// `ModelCall` + `Failed` + `UpstreamError` is what
+/// `trailryx_otlp::semconv` already writes for the same real-world fact, so the
+/// two doors agree about it rather than each inventing a reading, and no new
+/// record type is needed: this is an existing fact arriving through a second
+/// door.
+#[test]
+fn a_failed_dependency_is_a_model_call_that_failed_upstream() {
+    let unit = map(OURS, TOKENFUSE_PROVIDER_OUTAGE).expect("a dependency failure must map");
+    assert_eq!(unit.meta.event_type, EventType::ModelCall);
+    assert_eq!(
+        unit.meta.verdict,
+        Some(Verdict::Failed),
+        "the call was attempted and did not complete"
+    );
+    assert_eq!(
+        unit.meta.error,
+        Some(ErrorCode::UpstreamError),
+        "what failed was somebody else's service, which is what that code names"
+    );
+    assert_eq!(unit.meta.severity, Severity::Error, "`high` is Error");
+    assert_eq!(unit.meta.mapper, MAPPER_VERSION);
+    assert_eq!(
+        unit.meta.run_id.as_str(),
+        "run-8842",
+        "the run whose call died, carried whole"
+    );
+}
+
+/// The policy plane is a dependency too, and it maps through the same arm.
+///
+/// This is the case that would tempt a second arm, and a second arm would be
+/// wrong twice over. `PolicyDecision` would assert that a policy decided
+/// something, and the whole content of the event is that no policy was reachable
+/// to decide anything: under `failmode=open` the call went through ungoverned,
+/// and under `failmode=closed` it was refused without any rule having been
+/// consulted. A model call still happened or was still stopped, so `ModelCall`
+/// stays true of both.
+///
+/// The mapper does not read `data`, so it could not tell the two apart even if
+/// it wanted to, and that is the design rather than a shortcut: which dependency
+/// died and what the failure did to the call are facts a reader gets from the
+/// payload plane, where this store makes no claim about them.
+#[test]
+fn an_unreachable_policy_plane_maps_the_same_way_as_an_unreachable_provider() {
+    let open = map(OURS, TOKENFUSE_POLICY_PLANE_UNREACHABLE).expect("it must map");
+    assert_eq!(open.meta.event_type, EventType::ModelCall);
+    assert_eq!(open.meta.verdict, Some(Verdict::Failed));
+    assert_eq!(open.meta.error, Some(ErrorCode::UpstreamError));
+
+    // The same event under `failmode=closed`. Only the effect changes: the stage
+    // stays `decide`, because the dependency that could not be reached is the one
+    // consulted there, and a refusal that never reached a provider did not happen
+    // at `send`.
+    let closed = TOKENFUSE_POLICY_PLANE_UNREACHABLE.replace("allowed_ungoverned", "denied_unasked");
+    let closed = map(OURS, &closed).expect("it must map");
+    assert_eq!(
+        (
+            closed.meta.event_type,
+            closed.meta.verdict,
+            closed.meta.error
+        ),
+        (open.meta.event_type, open.meta.verdict, open.meta.error),
+        "the failmode is the operator's configuration, not a different fact about the store"
+    );
+
+    // And the provider case, so that all three readings of `data` land on one
+    // typed reading rather than three.
+    let provider = map(OURS, TOKENFUSE_PROVIDER_OUTAGE).expect("it must map");
+    assert_eq!(open.meta.event_type, provider.meta.event_type);
+    assert_eq!(open.meta.verdict, provider.meta.verdict);
+    assert_eq!(open.meta.error, provider.meta.error);
+}
+
+/// Which dependency died reaches the payload plane and no typed field, and the
+/// partition is asserted rather than described.
+///
+/// Two halves. The first is the ordinary plane boundary: `dependency`, `stage`,
+/// `effect` and `detail` are members of `data`, this mapper reads nothing out of
+/// `data`, so all four are in the payload and none is in the metadata. The
+/// second is the one that would go wrong quietly, and it is a claim about the
+/// mapper rather than about this line: none of the four may ever appear in
+/// [`trailryx_agentevent::consumed_members`], because a member listed there is a
+/// member some typed field has taken, and the only typed fields that could take
+/// these are the ones this arm deliberately leaves alone.
+#[test]
+fn which_dependency_failed_travels_in_the_payload_plane_and_never_in_a_typed_field() {
+    let unit = map(OURS, TOKENFUSE_PROVIDER_OUTAGE).expect("a dependency failure must map");
+    let payload = payload_text(&unit);
+    let metadata = format!("{:?}", unit.meta);
+
+    for from_data in [
+        "dependency",
+        "provider",
+        "stage",
+        "send",
+        "effect",
+        "call_failed",
+        "detail",
+        "connection refused",
+        "api.vendor.example",
+    ] {
+        assert!(
+            payload.contains(from_data),
+            "{from_data} reached neither plane:\n{payload}"
+        );
+        assert!(
+            !metadata.contains(from_data),
+            "{from_data} came out of `data` and reached the metadata plane:\n{metadata}"
+        );
+    }
+
+    for member in trailryx_agentevent::consumed_members() {
+        assert!(
+            !["dependency", "stage", "effect", "detail"].contains(member),
+            "{member} is read into a typed field, which is this store asserting a \
+             producer's free-form member as a fact it stands behind"
+        );
+    }
+}
+
+/// The band the arm falls back to, and the band the producer sends, are the same
+/// band, and this test is what says so.
+///
+/// `severity_for` prefers the producer's value on every line that carries one,
+/// and tokenfuse fixes this type at `high` in its own code rather than letting a
+/// call site choose, so the fallback in the table is reached only by some later
+/// producer of this type that sends nothing. `high` is `Severity::Error` and the
+/// fallback is `Severity::Error`, so a line with the member and a line without it
+/// produce one record shape rather than two, and nobody has to know which of the
+/// two paths a given record came down.
+#[test]
+fn a_dependency_failure_with_no_severity_lands_in_the_band_the_producer_stamps() {
+    let no_severity = TOKENFUSE_PROVIDER_OUTAGE.replace(r#""severity":"high","#, "");
+    let unit = map(OURS, &no_severity).expect("a dependency failure with no severity must map");
+    assert_eq!(unit.meta.severity, Severity::Error);
+
+    let stamped = map(OURS, TOKENFUSE_PROVIDER_OUTAGE).expect("it must map");
+    assert_eq!(
+        unit.meta.severity, stamped.meta.severity,
+        "the fallback and the producer's own band must agree, or one record in a \
+         run would read louder than its neighbour for no reason a reader can see"
+    );
+}
