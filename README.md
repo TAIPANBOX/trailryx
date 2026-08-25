@@ -630,9 +630,12 @@ that nobody has to have read this page.
   what the journal's sequence requires; more shards means more processes.
 
 Two more absences worth naming, because they are the ones somebody would assume
-away: nothing here has been measured for throughput, and a segment that has been
-sealed is never re-read into memory by `run`, so the process holds one open
-journal and nothing else.
+away. The receiver and `run` have still not been measured for throughput; the
+agent-event importer now has been, on 2026-08-25, at 50,000 records in 1.63 s
+with the commands and the limits in [`VALIDATION.md`](VALIDATION.md), and the
+limits are the half worth reading. And a segment that has been sealed is never
+re-read into memory by `run`, so the process holds one open journal and nothing
+else.
 
 ## Build it instead
 

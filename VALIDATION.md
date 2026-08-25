@@ -1166,6 +1166,49 @@ of it.
 
 ---
 
+### The agent-event importer, end to end
+
+Run 2026-08-25 on the development Mac (Darwin 25.6.0, Apple silicon, local APFS,
+release build). The README said in two places that nothing here had been measured
+for throughput, which was true and is what this section replaces. It measures the
+importer, not the OTLP receiver and not `run`: those are still unmeasured and are
+named as such below.
+
+The corpus is 50,000 synthetic envelopes, 12 MB, over seven event types this
+version maps (`budget_threshold`, `breaker_tripped`, `policy_allow`,
+`policy_deny`, `web_fetch`, `web_blocked`, `memory_written`), 50 agents and 500
+runs, every line in the node's own trust domain so nothing is refused:
+
+```bash
+trailryx-node events --file bus.ndjson --data DATA --trust-domain demo.local
+```
+
+| what | measured |
+|---|---|
+| import | **50,000 records in 1.63 s**, about 30,700 records/s, 7.4 MiB/s |
+| sealing | 13 segments, 4,596 records each, written during the same run |
+| on disk | 11.7 MiB for 56,500 records, about **245 B per record** |
+| second run, same file | **0.08 s**, nothing new taken, cursor at the same byte |
+| query one run, `read --run` | **0.91 s**, 113 rows, `proof Full`, across 13 segments |
+| evidence pack | 8.7 MB, and `trailryx-verify` returns VERIFIED in **0.41 s** for 56,500 records |
+
+56,500 rather than 50,000 because the plane records its own ingest: the extra
+6,500 are `store_event` records about the segments it sealed, which is the store
+saying what it did to itself and is exactly what that event type is for.
+
+**What this does not establish, and the list is longer than the table.** One
+process, one shard, one local disk, no signing key, no witnesses and no object
+store, so it measures the mapper, the journal and the sealer and nothing about
+publication. Synthetic lines are uniform, and a real bus is not: the `data`
+member here is two small keys, where a real one carries prompts. Nothing was
+concurrent: the importer is single-writer by construction, and this says nothing
+about what happens when a second one is pointed at the same directory. And the
+numbers are one machine on one day; they are a floor for "is this fast enough to
+put on a timer", which is the question the deployment repos actually ask, and not
+a benchmark.
+
+---
+
 ## Not yet measured
 
 Stated so the absence is visible rather than inferred:
