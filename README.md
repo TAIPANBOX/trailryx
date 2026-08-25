@@ -230,13 +230,9 @@ about the *log* and not about an answer to a question. A ledger with temporal
 tables can query a past state, which is a version history rather than a bitemporal
 one: it answers what a row *was*, not what the system *believed* at the time.
 
-The signed-receipt column carries two entries that are not verdicts. **"Not claimed"**
-means we looked and the property is not offered, which is different from looking and
-finding it absent. **"Not established"** means we did not look hard enough to say: a
-verifier's dependency count is a question about somebody's build, and this column was
-filled by reading two projects' own material rather than by running them. Both are
-written that way on purpose, because a column of confident noes about other people's
-software is the easiest thing in this document to get wrong.
+In the signed-receipt column, **"not claimed"** means the property is not offered and
+**"not established"** means reading their own material cannot answer it. That column
+was read rather than run.
 
 ### What we are not aware of an equivalent for
 
@@ -251,26 +247,11 @@ world. If any of these is wrong, the correction is welcome and the claim comes o
   reader, about 3,600 lines including tests, so an auditor can read all of it before
   trusting any of it.
 
-**Two claims came out of this list on 25 August 2026, and how they came out is the
-point of keeping it.** It used to also claim crypto-erasure that leaves every
-published root intact, and an erasure that is itself a checkable record. Reading
-[AIR Blackbox](https://airblackbox.ai)'s own material that day found the same
-mechanism described in its own words: *"Tombstone destroys the data's key, so the log
-stays intact and permanent while the personal data becomes unrecoverable"*, offered as
-*"crypto-shredded erasure, with a receipt"*. That is this design, arrived at
-independently, and the correct response to a list that invites correction is to take
-the correction rather than to argue with it.
-
-Nothing was tested here: this is their description, read on that date, and the claim
-is gone because *we are not aware of an equivalent* stopped being true the moment we
-became aware of one. What the erasure does here is unchanged and still worth reading
-about below; what changed is a sentence about the rest of the world.
-
-The field those two came from grew fast. In 2026 a wide set of projects converged on
-signing agent actions and chaining the receipts, several open source, several already
-post-quantum, and the mechanism is no longer unusual. What none of the ones we have
-looked at does is prove an answer is **all of it**, which is why that claim is still
-here and is the one worth pressing on.
+Crypto-erasure is deliberately not on that list. A signed-receipt recorder describes
+the same mechanism, in its own words: *"Tombstone destroys the data's key, so the log
+stays intact and permanent while the personal data becomes unrecoverable"*
+([AIR Blackbox](https://airblackbox.ai), read 25 August 2026). What this store does
+with erasure is below and unchanged; it is simply not unusual.
 
 Trailryx is **complementary** to observability rather than a replacement: keep the
 tracing you have, and point this at the same OTLP stream when somebody will one day
@@ -278,11 +259,10 @@ ask you to prove what happened.
 
 <sub>Signed-receipt row checked on 25 August 2026 against the projects' own material:
 <a href="https://airblackbox.ai">AIR Blackbox</a> (Apache-2.0 gateway, HMAC-SHA256 chain,
-Ed25519 or FIPS 204 ML-DSA-65 on the chain head, and the Tombstone erasure quoted above) and
-<a href="https://asqav.com/docs">Asqav</a> (an SDK that signs each action server-side with
-ML-DSA-65, RFC 8785 canonicalisation, integrations across ten-plus agent frameworks, and no
-claim about completeness or erasure). Read rather than run: neither was tested here, and a
-description is not a measurement.</sub>
+Ed25519 or FIPS 204 ML-DSA-65 on the chain head, Tombstone erasure) and
+<a href="https://asqav.com/docs">Asqav</a> (an SDK signing each action server-side with
+ML-DSA-65 and RFC 8785 canonicalisation, across ten-plus agent frameworks). Read rather
+than run.</sub>
 
 <sub>Competitor facts checked on 30 July 2026 against primary sources:
 <a href="https://learn.microsoft.com/en-us/sql/relational-databases/security/ledger/ledger-limits">Azure SQL ledger considerations and limitations</a>,
