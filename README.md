@@ -208,26 +208,35 @@ structural rather than a gap somebody forgot to fill.
 | **Transparency logs** (Trillian, Certificate Transparency) | Append-only Merkle logs, inclusion and consistency proofs, run by people who mean it | Erasure entirely, and any notion of an agent, a run or a causal edge. They prove a log is a log |
 | **Agent observability** (tracing and eval platforms) | Record every run, cost it, evaluate it, show it back to you beautifully | Proof of any kind. A row can be edited or dropped and nothing about the remaining rows changes |
 | **SIEM and audit-log products** | Retention, search, alerting, compliance reporting at scale | Proof that an answer is complete. Retention is a policy, not a commitment somebody else can check |
+| **Signed-receipt agent recorders** (AIR Blackbox, Asqav, and a wide field of 2026 projects doing the same thing) | Sign each agent action as it happens, chain the receipts, hand you a file a third party can check. Several are open source, several sign post-quantum, and one of them crypto-shreds a payload and issues a receipt for it | Completeness. A signed receipt proves the actions you were given are genuine; it does not prove they are all of them, and a receipt that was never issued leaves nothing behind to notice |
 
 ### The capability that decides it
 
-| | Trailryx | Ledgers | Transparency logs | Observability |
-|---|:---:|:---:|:---:|:---:|
-| Show what an agent did | yes | yes | no | yes |
-| Prove a record was not altered | yes | yes | yes | no |
-| Prove the history was not rewritten | yes | yes | yes | no |
-| **Prove an answer is all of it** | **yes** | no | partial | no |
-| **Erase one person and keep the proofs** | **yes** | no | no | not applicable |
-| Agent semantics: runs, causal edges, `basis` | yes | no | no | partial |
-| Bitemporal `as_of`: what we knew in March | yes | partial | no | no |
-| An auditor checks it without the vendor | yes | partial | yes | no |
-| Zero third-party dependencies in the verifier | yes | no | no | no |
+| | Trailryx | Signed receipts | Ledgers | Transparency logs | Observability |
+|---|:---:|:---:|:---:|:---:|:---:|
+| Show what an agent did | yes | yes | yes | no | yes |
+| Prove a record was not altered | yes | yes | yes | yes | no |
+| Prove the history was not rewritten | yes | yes | yes | yes | no |
+| **Prove an answer is all of it** | **yes** | no | no | partial | no |
+| Erase one person and keep the proofs | yes | yes | no | no | not applicable |
+| Agent semantics: runs, causal edges, `basis` | yes | partial | no | no | partial |
+| Bitemporal `as_of`: what we knew in March | yes | not claimed | partial | no | no |
+| An auditor checks it without the vendor | yes | yes | partial | yes | no |
+| Zero third-party dependencies in the verifier | yes | not established | no | no | no |
 
 "Partial" is doing real work in that table and is not a hedge. A transparency log
 proves consistency between two versions of a log, which is a completeness property
 about the *log* and not about an answer to a question. A ledger with temporal
 tables can query a past state, which is a version history rather than a bitemporal
 one: it answers what a row *was*, not what the system *believed* at the time.
+
+The signed-receipt column carries two entries that are not verdicts. **"Not claimed"**
+means we looked and the property is not offered, which is different from looking and
+finding it absent. **"Not established"** means we did not look hard enough to say: a
+verifier's dependency count is a question about somebody's build, and this column was
+filled by reading two projects' own material rather than by running them. Both are
+written that way on purpose, because a column of confident noes about other people's
+software is the easiest thing in this document to get wrong.
 
 ### What we are not aware of an equivalent for
 
@@ -238,19 +247,42 @@ world. If any of these is wrong, the correction is welcome and the claim comes o
   proof that the four records handed over are *every* record in the range. It works
   by carrying the entry immediately either side of the answer, whose keys must fall
   outside it, so an omitted record has nowhere left to hide.
-- **Crypto-erasure that leaves every published root intact.** A record commits to
-  four fields about a payload it does not contain, so the key can be destroyed and
-  no chain, root or proof moves. Erasure without deletion, in a store whose object
-  interface has no delete method at all.
-- **The erasure is itself a record.** A manifest an auditor can check, verifiable by
-  whoever holds the subject handle and meaningless to everybody else.
 - **A verifier with no dependencies.** Its own SHA-384, its own ECDSA P-384, its own
   reader, about 3,600 lines including tests, so an auditor can read all of it before
   trusting any of it.
 
+**Two claims came out of this list on 25 August 2026, and how they came out is the
+point of keeping it.** It used to also claim crypto-erasure that leaves every
+published root intact, and an erasure that is itself a checkable record. Reading
+[AIR Blackbox](https://airblackbox.ai)'s own material that day found the same
+mechanism described in its own words: *"Tombstone destroys the data's key, so the log
+stays intact and permanent while the personal data becomes unrecoverable"*, offered as
+*"crypto-shredded erasure, with a receipt"*. That is this design, arrived at
+independently, and the correct response to a list that invites correction is to take
+the correction rather than to argue with it.
+
+Nothing was tested here: this is their description, read on that date, and the claim
+is gone because *we are not aware of an equivalent* stopped being true the moment we
+became aware of one. What the erasure does here is unchanged and still worth reading
+about below; what changed is a sentence about the rest of the world.
+
+The field those two came from grew fast. In 2026 a wide set of projects converged on
+signing agent actions and chaining the receipts, several open source, several already
+post-quantum, and the mechanism is no longer unusual. What none of the ones we have
+looked at does is prove an answer is **all of it**, which is why that claim is still
+here and is the one worth pressing on.
+
 Trailryx is **complementary** to observability rather than a replacement: keep the
 tracing you have, and point this at the same OTLP stream when somebody will one day
 ask you to prove what happened.
+
+<sub>Signed-receipt row checked on 25 August 2026 against the projects' own material:
+<a href="https://airblackbox.ai">AIR Blackbox</a> (Apache-2.0 gateway, HMAC-SHA256 chain,
+Ed25519 or FIPS 204 ML-DSA-65 on the chain head, and the Tombstone erasure quoted above) and
+<a href="https://asqav.com/docs">Asqav</a> (an SDK that signs each action server-side with
+ML-DSA-65, RFC 8785 canonicalisation, integrations across ten-plus agent frameworks, and no
+claim about completeness or erasure). Read rather than run: neither was tested here, and a
+description is not a measurement.</sub>
 
 <sub>Competitor facts checked on 30 July 2026 against primary sources:
 <a href="https://learn.microsoft.com/en-us/sql/relational-databases/security/ledger/ledger-limits">Azure SQL ledger considerations and limitations</a>,
