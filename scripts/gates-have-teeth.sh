@@ -233,6 +233,38 @@ echo "=== and what they must NOT catch ==="
 
 # The word `unsafe` inside a comment or a string is not an unsafe block, and a
 # gate that flagged one would be flagging the prose that explains the rule.
+# The advisory check asks another repository a question, and git hands a hook
+# GIT_DIR pointing at the repository being pushed. `git -C <elsewhere>` changes
+# the directory and keeps that variable, so the check read the advisory
+# database's working tree against THIS repository's index and every one of its
+# 1221 entries came back untracked. Deterministic, invisible from a terminal,
+# and it cost push attempts across the estate on 2026-08-26 before anybody
+# looked at the environment rather than at the database.
+#
+# Both cases run the gate the way the hook runs it. The `pass` one is the point:
+# a check must give the same answer whether or not it inherited a hook's
+# environment, and only running it under that environment can say so.
+run_case "audit: the same answer under a hook's environment" pass \
+	'GIT_DIR="$PWD/.git" ./scripts/audit.sh' \
+	""
+
+# There is deliberately NO `fail` case putting the leak back, and the reason is
+# the harness's own rule rather than laziness. The check sits behind
+# `[ -d "$db/.git" ]`, and a fresh CI runner has no advisory database until
+# `cargo audit` creates one, which happens AFTER this check. So on CI the leak
+# changes nothing, the gate passes, and the case reports TOOTHLESS: the gate
+# passed on a fault it exists to catch. It did exactly that on the first run of
+# this branch, which is the harness working.
+#
+# Making it bite everywhere would mean pointing CARGO_HOME at a fixture, and
+# CARGO_HOME is also where the crate registry lives, so `cargo audit` two lines
+# later would fetch the world. That is a bigger change to a security gate than
+# this fix earns.
+#
+# So the fail direction is pinned by the commit that found it and by the
+# measurement in audit.sh's own comment, and not by this harness. Said here
+# rather than left as an absence somebody reads as coverage.
+
 run_case "no-unsafe: the word in a comment and in a string" pass \
 	'./scripts/no-unsafe.sh' \
 	"$(py 'p = "crates/trailryx-anchor/src/lib.rs"

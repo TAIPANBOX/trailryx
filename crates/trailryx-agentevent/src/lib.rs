@@ -51,15 +51,43 @@
 //! rather than because nobody got to it: `mcp_drift`, `sustained_loop`,
 //! `fanout_explosion`, `crypto_finding`, `crypto_drift`, `policy_violation`,
 //! `evidence_signed`, `eval_run`, `quality_score`, `quality_drift`, `slo_burn`,
-//! `sim_run`, `sim_finding`, `blast_radius_measured` and `console_command`. Each
-//! is a finding or an observation about infrastructure rather than a decision an
-//! agent took, and ten of the twelve event types are decisions.
+//! `sim_run`, `sim_finding`, `blast_radius_measured`, `console_command` and
+//! `policy_updated`.
+//!
+//! They are two kinds and the sentence that used to cover them named only one.
+//! Most are a finding or an observation about infrastructure rather than a
+//! decision an agent took. The last two are the other kind: an operator acting
+//! ON the stack, a console command or a policy rewritten through the
+//! policy-as-code API, which is a decision and is simply not an agent's. This
+//! store's subject axis is `agent_id`, every trail hangs off it, and both of
+//! those arrive carrying a synthetic identity naming an API rather than an
+//! agent (`agent://wardryx.internal/admin/policy-api` for `policy_updated`).
+//! A record filed under that subject would put an administrator's action in
+//! the trail of an agent that does not exist.
+//!
+//! `policy_updated` is the one worth pausing on, because refusing it is
+//! genuinely uncomfortable and the discomfort is the useful part. "Somebody
+//! changed the rules" is exactly the kind of thing an auditor asks about, and
+//! this store's whole claim is that it holds what happened in a form nobody
+//! can quietly alter. What makes the refusal right anyway is the same thing
+//! that makes it uncomfortable: the change was not made by an agent and is not
+//! about one, so recording it here would mean either inventing a subject or
+//! filing it under a subject that names an API. The event is not lost. It is
+//! on the shared bus with its own hash chain, and heraldyx mails on it. What
+//! this store declines to do is claim it as part of some agent's history.
+//!
+//! It was neither mapped nor named here until 26 August 2026, which is a
+//! different thing from being refused: an unnamed type is refused as
+//! `UnknownType` and counted with every other unknown, so a reader could not
+//! tell a decision from an omission. It was an omission. `estate-gates` C8
+//! now compares the registry against these two lists and reports a registered
+//! type that appears on neither.
 //!
 //! # The two that got types of their own, and what that cost
 //!
 //! `alert_sent` is heraldyx saying it mailed a person about a run. It is not a
 //! decision either, and it was refused here until 6 August 2026 for exactly that
-//! reason. What made it different from the fifteen above is that it is not a
+//! reason. What made it different from the sixteen above is that it is not a
 //! finding about infrastructure: it is an event in the run's own history, with a
 //! subject, a time and an auditor's question attached to it ("when was this
 //! escalated, and to whom"), and no other event type can answer that question

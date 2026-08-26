@@ -321,6 +321,12 @@ fn an_unmapped_type_is_refused_rather_than_mapped_to_something_adjacent() {
         "console_command",
         "sim_run",
         "slo_burn",
+        // The operator-action kind, which is refused for a different reason
+        // from the findings above it: it is a decision, and simply not an
+        // agent's. Here because it was neither mapped nor named until
+        // 26 August 2026, so its refusal was an omission that looked exactly
+        // like this assertion passing.
+        "policy_updated",
     ] {
         assert_eq!(
             map(OURS, &line(kind, "")),

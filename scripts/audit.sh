@@ -161,9 +161,33 @@ fi
 # The diagnosis is one line and nobody runs it, so it runs here. Naming the
 # files is the whole value, because cargo-audit's own error names an advisory
 # id and sends a reader to the wrong repository.
+# ASKING ANOTHER REPOSITORY A QUESTION FROM INSIDE A HOOK NEEDS THE ENVIRONMENT
+# CLEARED, AND THIS SCRIPT LEARNED THAT THE EXPENSIVE WAY.
+#
+# git runs a hook with GIT_DIR set to the repository being pushed. `git -C
+# <other repo>` changes the DIRECTORY and does not clear that variable, so the
+# command below was reading the advisory database's working tree against
+# TRAILRYX's index. Every one of the database's 1221 entries then reports as
+# untracked, deterministically, on every push from the hook and never from a
+# terminal, which is why it read as a flaky machine rather than as a bug here.
+# Measured 2026-08-26: `git -C ~/.cargo/advisory-db status --porcelain` returns
+# nothing in a shell and 1221 lines with GIT_DIR set.
+#
+# The false positive cost push attempts across this estate all day. The half
+# that is worse than the wasted time is the remediation this check prints: `git
+# -C <db> clean -fd`. Harmless in a terminal, where nothing is untracked. In
+# the environment the message actually appears in, it deletes the advisory
+# database.
+#
+# So every git command aimed at a repository that is not this one clears the
+# three variables git exports into a hook. GIT_INDEX_FILE is in the list even
+# though GIT_DIR alone caused this: a check that guards against one of a family
+# invites the next member.
+dbgit() { env -u GIT_DIR -u GIT_WORK_TREE -u GIT_INDEX_FILE git "$@"; }
+
 db="${CARGO_HOME:-$HOME/.cargo}/advisory-db"
 if [ -d "$db/.git" ]; then
-  dirty="$(git -C "$db" status --porcelain 2>/dev/null || true)"
+  dirty="$(dbgit -C "$db" status --porcelain 2>/dev/null || true)"
   if [ -n "$dirty" ]; then
     echo "FAIL: the advisory database at $db has files git does not track."
     echo
@@ -176,8 +200,17 @@ if [ -d "$db/.git" ]; then
     echo "      not one."
     echo
     echo "      Fix it with:  git -C $db clean -fd"
+    echo "      (from a terminal. NOT from inside a hook, where GIT_DIR points"
+    echo "       at the repository being pushed and this would delete the"
+    echo "       database rather than tidy it.)"
     exit 1
   fi
+else
+  # Not a failure and not a pass either. A fresh runner has no database until
+  # `cargo audit` below creates one, so there is nothing here to be clean or
+  # dirty. Said out loud because the alternative is a check that reports
+  # nothing and reads as agreement, which is the shape invariant 19 is about.
+  echo "note: no advisory database at $db yet, so its cleanliness was not checked."
 fi
 
 args=()
