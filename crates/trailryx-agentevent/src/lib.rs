@@ -52,9 +52,10 @@
 //! `fanout_explosion`, `crypto_finding`, `crypto_drift`, `policy_violation`,
 //! `evidence_signed`, `eval_run`, `quality_score`, `quality_drift`, `slo_burn`,
 //! `sim_run`, `sim_finding`, `blast_radius_measured`, `console_command`,
-//! `policy_updated` and `taint_raised`.
+//! `policy_updated`, `taint_raised`, `delegation_issued`, `delegation_denied`
+//! and `delegation_revoked`.
 //!
-//! They are two kinds and the sentence that used to cover them named only one.
+//! They are three kinds and the sentence that used to cover them named one.
 //! Most are a finding or an observation about infrastructure rather than a
 //! decision an agent took. The last two are the other kind: an operator acting
 //! ON the stack, a console command or a policy rewritten through the
@@ -82,6 +83,31 @@
 //! tell a decision from an omission. It was an omission. `estate-gates` C8
 //! now compares the registry against these two lists and reports a registered
 //! type that appears on neither.
+//!
+//! The last three are the third kind, and they are the hardest refusal in this
+//! table because they are so nearly mappable. A delegation IS a decision, it IS
+//! about an agent, and after TAIPANBOX/vouchryx#3 it names a real one: the
+//! actor that received the authority. `Allowed`, `Denied` and `NotApplicable`
+//! were each the obvious verdict for one of the three, and the mapping was
+//! written before this paragraph was.
+//!
+//! What refuses them is one line of this reader's own contract, and it is
+//! structural rather than a matter of taste: **a record names a run.** An RFC
+//! 8693 exchange has none. A token is minted BEFORE a run, or between two of
+//! them, so `run_id` is absent from every event vouchryx writes and there is no
+//! honest value to supply. `NoRunId`'s own doc says why inventing one is worse
+//! than refusing: it would put unrelated events in a single run.
+//!
+//! So the delegation trail lives on the bus with its own hash chain, and this
+//! store declines to claim it as part of a run that did not exist yet. The
+//! nearest thing this store CAN hold is what the agent then did with the
+//! authority, which arrives as ordinary events carrying `on_behalf_of`, and
+//! that chain is the join a reader wants: from a record here, back to the
+//! delegation that permitted it, by jti and by chain rather than by run.
+//!
+//! Naming them costs a reading. They were unnamed until 26 August 2026 and were
+//! therefore refused as `UnknownType` and counted with every other unknown,
+//! which is the omission this passage above describes rather than a decision.
 //!
 //! # The two that got types of their own, and what that cost
 //!

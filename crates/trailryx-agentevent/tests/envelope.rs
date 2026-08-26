@@ -1153,3 +1153,102 @@ fn a_clearance_and_a_refusal_differ_by_verdict_and_not_by_band() {
     assert_eq!(cleared.meta.verdict, Some(Verdict::NotApplicable));
     assert_eq!(blocked.meta.verdict, Some(Verdict::Denied));
 }
+
+/// vouchryx's line for an exchange it permitted, with the members the producer
+/// actually writes. `agent_id` is the ACTOR, the agent that received the
+/// authority, and `on_behalf_of` carries the whole chain root-first with the
+/// human at its head: see TAIPANBOX/vouchryx#3, which corrected a version of
+/// this service that wrote the subject there and failed SPEC 6.1.
+///
+/// Note what it does NOT carry: a `run_id`. An RFC 8693 exchange is not part of
+/// a run. That is the whole reason the three delegation types are refused here.
+const VOUCHRYX_ISSUED: &str = concat!(
+    r#"{"schema":"taipanbox.dev/agent-event/v0.2","ts":"2026-08-26T17:04:11Z","#,
+    r#""source":"vouchryx","type":"delegation_issued","severity":"info","#,
+    r#""agent_id":"agent://acme.example/support/triage","#,
+    r#""on_behalf_of":["user://acme.example/alice","agent://acme.example/support/triage"],"#,
+    r#""data":{"jti":"tok-9f2c","cnf_jkt":"NzbLsXh8uDCcd-6MNwXF4W_7noWXFZAfHkxZsRGC9Xs","#,
+    r#""subject_issuer":"https://idp.acme.example","expires_at":1786000000,"chain_depth":1}}"#,
+);
+
+const VOUCHRYX_DENIED: &str = concat!(
+    r#"{"schema":"taipanbox.dev/agent-event/v0.2","ts":"2026-08-26T17:04:12Z","#,
+    r#""source":"vouchryx","type":"delegation_denied","severity":"high","#,
+    r#""agent_id":"agent://acme.example/support/triage","#,
+    r#""data":{"reason":"bad_delegation_chain","detail":"actor already in chain"}}"#,
+);
+
+const VOUCHRYX_REVOKED: &str = concat!(
+    r#"{"schema":"taipanbox.dev/agent-event/v0.2","ts":"2026-08-26T17:09:40Z","#,
+    r#""source":"vouchryx","type":"delegation_revoked","severity":"high","#,
+    r#""agent_id":"agent://acme.example/support/triage","#,
+    r#""data":{"jti":"tok-9f2c","subject":"agent://acme.example/support/triage","#,
+    r#""actor":"user://acme.example/s.dawson","reason":"laptop lost","expires":1786000000}}"#,
+);
+
+/// The three delegation types are refused, and the refusal is structural.
+///
+/// This is the hardest one in the table because they are so nearly mappable. A
+/// delegation IS a decision, it IS about an agent, and it names a real one. I
+/// wrote the mapping first: `Allowed` for issued, `Denied` for denied,
+/// `NotApplicable` for revoked, each the obvious verdict, each defensible.
+///
+/// Then I ran it, and this reader answered `NoRunId`, whose own doc carries the
+/// rule: a record names a run, and inventing one would put unrelated events in a
+/// single run. An RFC 8693 exchange has no run. A token is minted BEFORE a run
+/// or between two of them, so no value exists to supply and any supplied value
+/// would be a fabrication that joins unrelated things.
+///
+/// The trail is not lost. It is on the bus with its own hash chain, and what
+/// the agent then DID with the authority arrives here as ordinary events
+/// carrying `on_behalf_of`, which is the join a reader actually wants: from a
+/// record, back to the delegation that permitted it, by jti and by chain.
+#[test]
+fn a_delegation_is_refused_because_a_record_names_a_run() {
+    for (name, line) in [
+        ("delegation_issued", VOUCHRYX_ISSUED),
+        ("delegation_denied", VOUCHRYX_DENIED),
+        ("delegation_revoked", VOUCHRYX_REVOKED),
+    ] {
+        match map(OURS, line) {
+            // `UnknownType`, because a refused type has no mapping and the type
+            // is checked before the run. `NoRunId` is what stops the MAPPING
+            // from being possible, not what this reader answers; the module doc
+            // carries that argument and this test carries the outcome.
+            Err(Rejection::UnknownType) => {}
+            Err(other) => panic!("{name} is refused for {other:?}, expected UnknownType"),
+            Ok(unit) => panic!(
+                "{name} mapped to {:?}. Then either it acquired a run from \
+                 somewhere, or this reader stopped requiring one, and the module \
+                 doc's argument for refusing it no longer holds.",
+                unit.meta.event_type
+            ),
+        }
+    }
+}
+
+/// And the same line WITH a run is still refused, or the paragraph above is
+/// describing a limitation of the producer rather than a decision of this
+/// reader.
+///
+/// This is the case that tells the two apart. If a run_id were all that stood
+/// between a delegation and a record, then the honest doc would say "vouchryx
+/// does not carry one yet", and the fix would be in vouchryx. It is not: the
+/// type is refused by name.
+#[test]
+fn a_delegation_carrying_a_run_is_still_refused() {
+    let with_run = VOUCHRYX_ISSUED.replace(
+        r#""severity":"info","#,
+        r#""severity":"info","run_id":"run-invented-1","#,
+    );
+    match map(OURS, &with_run) {
+        Err(Rejection::UnknownType) => {}
+        Err(other) => panic!("refused for {other:?}, expected the type to be refused by name"),
+        Ok(unit) => panic!(
+            "a delegation with a run mapped to {:?}. Then the refusal above is about \
+             a missing field rather than about this store's shape, and the doc \
+             comment says the wrong thing.",
+            unit.meta.event_type
+        ),
+    }
+}
