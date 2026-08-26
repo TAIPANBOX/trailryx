@@ -213,7 +213,7 @@ use trailryx_record::{
 /// was ever let through. Anybody comparing a shadow week against an enforced
 /// one across that boundary would otherwise conclude that enforcement had
 /// stopped things nothing had ever permitted.
-pub const MAPPER_VERSION: MapperVersion = MapperVersion(105);
+pub const MAPPER_VERSION: MapperVersion = MapperVersion(106);
 
 /// The schema values this reader accepts.
 ///
@@ -672,6 +672,45 @@ fn mapping_for(kind: &str) -> Option<Mapping> {
             Some(Verdict::Allowed),
             None,
             Severity::Warning,
+        ),
+        // A human decided a constraint no longer applies to this run
+        // (docs/07 B.4 gate 1). The firewall's model is monotonic, so a taint
+        // label lasts the life of a run and this is the only way one comes off.
+        //
+        // `NotApplicable` is the only verdict that says what happened, and the
+        // two temptations are wrong in the same direction, which is claiming
+        // more than occurred. `Allowed` asserts an ACTION was permitted and no
+        // action took place: a clearance is about the run's future, not about a
+        // call. `Denied` inverts it outright. Read literally, `NotApplicable`
+        // is exactly the fact: the constraint stopped applying.
+        //
+        // It MAPS, and the line it sits on the right side of is the one
+        // `policy_updated` sits on the wrong side of. That is refused because
+        // an operator rewriting policy through an admin API is not an agent, is
+        // not about one, and arrives carrying a synthetic identity naming the
+        // API. This carries a REAL `agent_id` and a real `run_id`: a decision
+        // about one agent's own run, taken by a person, changing what that
+        // agent may do next. The subject axis this store is built around is
+        // satisfied without inventing anything, which is the whole of the
+        // objection to the other one.
+        //
+        // WHO lifted it never reaches a typed field. `data.actor` is a
+        // `user://` principal, which is to say a person, and the metadata plane
+        // is the one erasure cannot reach; the producer already puts the run's
+        // agent in `agent_id` and the person in `data`, and this mapper does not
+        // undo that. `reason` is a human's sentence about a document and belongs
+        // on the same side.
+        //
+        // `Severity::Error` is the fallback for `high`, the same band
+        // `taint_block` takes, deliberately: an estate that records enforcement
+        // loudly and exemption quietly has its weights backwards. What
+        // separates a clearance from a refusal in this store is the verdict,
+        // not the band.
+        "taint_cleared" => m(
+            EventType::PolicyDecision,
+            Some(Verdict::NotApplicable),
+            None,
+            Severity::Error,
         ),
         _ => None,
     }
