@@ -1054,3 +1054,102 @@ fn a_run_becoming_untrusted_is_refused_rather_than_filed_as_an_act() {
         "refused BY NAME and counted, not dropped in silence: {err:?}"
     );
 }
+
+/// tokenfuse's line for a human taking a taint label off a run
+/// (docs/07 B.4 gate 1), with the members the producer actually writes.
+const TOKENFUSE_TAINT_CLEARED: &str = concat!(
+    r#"{"schema":"taipanbox.dev/agent-event/v0.2","ts":"2026-08-26T10:52:04Z","#,
+    r#""source":"tokenfuse","type":"taint_cleared","severity":"high","#,
+    r#""agent_id":"agent://acme.example/sre/rca-copilot","run_id":"run-web-1","#,
+    r#""data":{"labels":["web"],"actor":"user://acme.example/s.dawson","#,
+    r#""reason":"read the page myself, it is our own status board","#,
+    r#""authenticated":true,"still_inherited":[]}}"#,
+);
+
+/// A human decided a constraint no longer applies to this run. That is the
+/// whole claim, and `NotApplicable` is the only verdict that makes it.
+///
+/// The temptations are both worse and both in the same direction, which is
+/// saying more than happened. `Allowed` asserts that an ACTION was permitted,
+/// and no action occurred: a clearance is about the run's future, not about a
+/// call. `Denied` inverts it outright. `NotApplicable` is what the vocabulary
+/// has for a decision whose outcome is neither, and read literally it is exactly
+/// right here: the constraint no longer applies.
+///
+/// It maps rather than being refused, and the distinction from `policy_updated`
+/// one row up is the one that decides it. That is refused because an operator
+/// rewriting policy through an admin API is not an agent and is not about one,
+/// and it arrives carrying a synthetic identity naming the API. This carries a
+/// REAL `agent_id` and a real `run_id`: it is a decision about one agent's own
+/// run, taken by a person, and it changes what that agent may do next. The
+/// subject axis this store is built around is satisfied without inventing
+/// anything.
+#[test]
+fn a_lifted_control_is_a_policy_decision_that_no_longer_applies() {
+    let unit = map(OURS, TOKENFUSE_TAINT_CLEARED).expect("a clearance must map");
+    assert_eq!(unit.meta.event_type, EventType::PolicyDecision);
+    assert_eq!(
+        unit.meta.verdict,
+        Some(Verdict::NotApplicable),
+        "a constraint stopped applying; nothing was allowed and nothing refused"
+    );
+    assert_eq!(unit.meta.error, None);
+    assert_eq!(unit.meta.severity, Severity::Error, "`high` is Error");
+    assert_eq!(unit.meta.mapper, MAPPER_VERSION);
+    assert_eq!(unit.meta.run_id.as_str(), "run-web-1");
+}
+
+/// Who lifted it reaches the payload plane and no typed field.
+///
+/// `actor` is a `user://` principal, which is to say a PERSON, and this store's
+/// metadata plane is the one erasure cannot reach. The producer already keeps
+/// them apart, putting the run's agent in `agent_id` and the person in `data`;
+/// this asserts that the mapper does not undo that by promoting the person into
+/// a typed field. `reason` is a human's sentence about a document and belongs on
+/// the same side of the line.
+#[test]
+fn the_person_who_cleared_it_stays_in_the_payload_plane() {
+    let unit = map(OURS, TOKENFUSE_TAINT_CLEARED).expect("a clearance must map");
+    let text = payload_text(&unit);
+    for m in [
+        "actor",
+        "reason",
+        "labels",
+        "authenticated",
+        "still_inherited",
+    ] {
+        assert!(text.contains(m), "{m} must reach the payload plane: {text}");
+    }
+    assert!(
+        text.contains("s.dawson"),
+        "the person is in the payload, where erasure reaches: {text}"
+    );
+    assert!(
+        !trailryx_agentevent::consumed_members().contains(&"actor"),
+        "no typed field may ever take `actor`: it names a person, and the \
+         metadata plane is where erasure cannot reach"
+    );
+    assert_eq!(
+        unit.meta.agent_id.as_str(),
+        "agent://acme.example/sre/rca-copilot",
+        "the subject is the run's agent, never the person who cleared it"
+    );
+}
+
+/// A clearance and a refusal do not read at the same volume, and both are loud.
+///
+/// `taint_block` is `Error` because a control fired; this is `Error` because a
+/// control was switched off. They are the same band deliberately: an estate that
+/// records enforcement loudly and exemption quietly has its weights backwards.
+/// What separates them in the record is the VERDICT, `Denied` against
+/// `NotApplicable`, which is where a reader should look and not at the severity.
+#[test]
+fn a_clearance_and_a_refusal_differ_by_verdict_and_not_by_band() {
+    let cleared = map(OURS, TOKENFUSE_TAINT_CLEARED).expect("must map");
+    let blocked =
+        TOKENFUSE_TAINT_CLEARED.replace(r#""type":"taint_cleared""#, r#""type":"taint_block""#);
+    let blocked = map(OURS, &blocked).expect("must map");
+    assert_eq!(cleared.meta.severity, blocked.meta.severity);
+    assert_eq!(cleared.meta.verdict, Some(Verdict::NotApplicable));
+    assert_eq!(blocked.meta.verdict, Some(Verdict::Denied));
+}
