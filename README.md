@@ -261,7 +261,7 @@ migration. What stage 13 still wants is measured absence rather than a guess, an
 | `trailryx-ingest` | the OTLP/HTTP server: HTTP/1.1, gzip, bearer auth, all hand-written | 119 |
 | `trailryx-compliance` | a versioned map from what is proved to what a framework asks, and what it does not | 12 |
 | `trailryx-sql` | the SQL facade: DataFusion and the Postgres wire protocol, predicates pushed into the index, statements gated, reads authorised, connections bounded, four dialect extensions | 64 |
-| `trailryx-agentevent` | the estate's shared agent-event envelope, mapped into records: the same `agent://` grammar, the same run and delegation chain | 31 |
+| `trailryx-agentevent` | the estate's shared agent-event envelope, mapped into records: the same `agent://` grammar, the same run and delegation chain | 34 |
 | `trailryx-node` | the record plane as one process: ingest, journal, sealing on a schedule, a reader that rebuilds a segment from the journal, and a cursor that moves with every seal so an import is safe to repeat | 31 |
 | `trailryx-demo` | the eight acceptance steps, and a reader for a collector's file | - |
 
