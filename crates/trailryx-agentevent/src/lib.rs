@@ -51,8 +51,8 @@
 //! rather than because nobody got to it: `mcp_drift`, `sustained_loop`,
 //! `fanout_explosion`, `crypto_finding`, `crypto_drift`, `policy_violation`,
 //! `evidence_signed`, `eval_run`, `quality_score`, `quality_drift`, `slo_burn`,
-//! `sim_run`, `sim_finding`, `blast_radius_measured`, `console_command` and
-//! `policy_updated`.
+//! `sim_run`, `sim_finding`, `blast_radius_measured`, `console_command`,
+//! `policy_updated` and `taint_raised`.
 //!
 //! They are two kinds and the sentence that used to cover them named only one.
 //! Most are a finding or an observation about infrastructure rather than a
@@ -203,7 +203,17 @@ use trailryx_record::{
 /// in which nothing broke. That distinction is the whole reason this field exists,
 /// and it matters more for an outage than for anything else in the table: silence
 /// is what an outage looks like from the outside anyway.
-pub const MAPPER_VERSION: MapperVersion = MapperVersion(104);
+///
+/// 105 is the reading that maps `taint_shadow` and refuses `taint_raised` by
+/// name. The 103 argument applies once more, and this time it cuts in a
+/// direction worth stating: a shadow verdict written before this reading
+/// deployed stayed a counted refusal, so the trail of actions the firewall
+/// PERMITTED starts at 105. A reader who finds none before it is looking at a
+/// reader that could not map them, not at a fleet in which no dangerous action
+/// was ever let through. Anybody comparing a shadow week against an enforced
+/// one across that boundary would otherwise conclude that enforcement had
+/// stopped things nothing had ever permitted.
+pub const MAPPER_VERSION: MapperVersion = MapperVersion(105);
 
 /// The schema values this reader accepts.
 ///
@@ -629,6 +639,39 @@ fn mapping_for(kind: &str) -> Option<Mapping> {
             Some(Verdict::Failed),
             Some(ErrorCode::UpstreamError),
             Severity::Error,
+        ),
+        // The agent firewall matched a deny rule and let the action through
+        // anyway, because it is running in shadow. It maps for the reason
+        // `policy_allow` maps and onto the same pair: a policy plane was
+        // consulted about an agent's action, and the action went through.
+        //
+        // `Verdict::Allowed` and not `Denied`, and the temptation to write
+        // `Denied` is the whole reason this arm is separate from the
+        // `dlp_block | taint_block` one above. A deny RULE matched, so the
+        // event reads like a refusal; nothing was refused. In shadow the
+        // answer carrying the tool call reaches the client and the client
+        // executes the tool. A record saying the action was denied would tell
+        // an auditor the opposite of what happened, which is the one thing
+        // this mapper may never do.
+        //
+        // No `ErrorCode`, for the same reason: nothing failed. The band is
+        // `Warning`, which is where `medium` lands, and the difference from
+        // `taint_block`'s `Error` is load-bearing rather than incidental: one
+        // subsystem produces both, and folding them into one arm would make a
+        // permitted action and a refused one read at one volume with no way
+        // for a reader of the store to recover which had happened.
+        //
+        // Which rule matched, what it would have refused, what the run was
+        // carrying and which tool it named all travel in the payload plane,
+        // where a reader can see them and this store claims nothing about
+        // them. As everywhere else here, `severity_for` prefers the producer's
+        // own band on any line that carries one; this fallback is set to the
+        // value tokenfuse fixes for the type so the two cannot disagree.
+        "taint_shadow" => m(
+            EventType::PolicyDecision,
+            Some(Verdict::Allowed),
+            None,
+            Severity::Warning,
         ),
         _ => None,
     }

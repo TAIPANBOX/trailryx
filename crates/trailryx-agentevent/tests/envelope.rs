@@ -934,3 +934,123 @@ fn a_dependency_failure_with_no_severity_lands_in_the_band_the_producer_stamps()
          run would read louder than its neighbour for no reason a reader can see"
     );
 }
+
+// ---------------------------------------------------------------------------
+// The agent firewall (tokenfuse), SPEC 6.2, added 26 August 2026
+// ---------------------------------------------------------------------------
+
+/// A rule matched and the firewall let the action through anyway, because it is
+/// running in shadow.
+///
+/// The shape is the contract of 26 August 2026. `severity` is fixed at `medium`
+/// inside tokenfuse rather than chosen per call site, and `data` carries the
+/// stage, the mode, the rule by name, the labels the run was carrying, the
+/// capabilities it asked for, the subset that was denied, and the tools it
+/// named. All seven are in `data`, which is where they belong and where this
+/// mapper is forbidden from reading.
+const TOKENFUSE_TAINT_SHADOW: &str = concat!(
+    r#"{"schema":"taipanbox.dev/agent-event/v0.2","ts":"2026-08-26T07:46:31Z","#,
+    r#""source":"tokenfuse","type":"taint_shadow","severity":"medium","#,
+    r#""agent_id":"agent://acme.example/sre/rca-copilot","run_id":"run-web-1","#,
+    r#""data":{"stage":"model_tool_call","mode":"shadow","rule":"no-exec-after-untrusted","#,
+    r#""labels":["web"],"requested":["exec"],"denied":["exec"],"tools":["run_shell"]}}"#,
+);
+
+/// The same firewall noticing that a run has become untrusted. Refused, and the
+/// test below is about why.
+const TOKENFUSE_TAINT_RAISED: &str = concat!(
+    r#"{"schema":"taipanbox.dev/agent-event/v0.2","ts":"2026-08-26T07:46:31Z","#,
+    r#""source":"tokenfuse","type":"taint_raised","severity":"low","#,
+    r#""agent_id":"agent://acme.example/sre/rca-copilot","run_id":"run-web-1","#,
+    r#""data":{"stage":"request_history","added":["web"],"from_tools":["web_search"],"#,
+    r#""carrying":["web"]}}"#,
+);
+
+/// A rule matched, and the action was ALLOWED. That is the whole claim.
+///
+/// It maps for the reason `policy_allow` maps and to the same pair: a policy
+/// plane was consulted about an agent's action and the action went through. The
+/// tempting reading is `Denied`, because a deny rule matched, and it would be
+/// false about the world: in shadow the answer reaches the client and the client
+/// runs the tool. A record saying the action was denied would tell an auditor
+/// the opposite of what happened, which is exactly the failure this mapper's
+/// first rule is about.
+///
+/// That the mode was shadow, which rule matched and what it would have refused
+/// are in the payload plane, where a reader can see them and this store claims
+/// nothing about them.
+#[test]
+fn a_shadowed_would_block_is_a_policy_decision_that_allowed_the_action() {
+    let unit = map(OURS, TOKENFUSE_TAINT_SHADOW).expect("a shadow verdict must map");
+    assert_eq!(unit.meta.event_type, EventType::PolicyDecision);
+    assert_eq!(
+        unit.meta.verdict,
+        Some(Verdict::Allowed),
+        "shadow permits the action; the client executes the tool"
+    );
+    assert_eq!(
+        unit.meta.error, None,
+        "nothing failed and nothing was refused"
+    );
+    assert_eq!(unit.meta.severity, Severity::Warning, "`medium` is Warning");
+    assert_eq!(unit.meta.mapper, MAPPER_VERSION);
+    assert_eq!(unit.meta.run_id.as_str(), "run-web-1");
+}
+
+/// The band the producer set is the band the record takes, and the two differ
+/// here on purpose.
+///
+/// `taint_block` arrives at `high` and becomes `Error`; this arrives at `medium`
+/// and becomes `Warning`. A mapper that folded the shadow case into the block
+/// arm would have made a permitted action and a refused one read at one volume,
+/// and no reader of the store could have recovered which had happened.
+#[test]
+fn a_shadowed_action_and_a_blocked_one_do_not_read_at_the_same_volume() {
+    let shadowed = map(OURS, TOKENFUSE_TAINT_SHADOW).expect("must map");
+    let blocked = TOKENFUSE_TAINT_SHADOW
+        .replace(r#""type":"taint_shadow""#, r#""type":"taint_block""#)
+        .replace(r#""severity":"medium""#, r#""severity":"high""#)
+        .replace(r#""mode":"shadow""#, r#""mode":"enforce""#);
+    let blocked = map(OURS, &blocked).expect("must map");
+
+    assert_eq!(shadowed.meta.severity, Severity::Warning);
+    assert_eq!(blocked.meta.severity, Severity::Error);
+    assert_eq!(shadowed.meta.verdict, Some(Verdict::Allowed));
+    assert_eq!(
+        blocked.meta.verdict,
+        Some(Verdict::Denied),
+        "the same subsystem, two facts, and the record keeps them apart"
+    );
+}
+
+/// A run becoming untrusted is refused by name, and the refusal is the
+/// uncomfortable one in this file.
+///
+/// It is uncomfortable because the acquisition is the CAUSE of every refusal
+/// this store DOES record: taint accumulates monotonically, so a reader holding
+/// a `taint_block` sees "context was [web, file]" and cannot learn from this
+/// store where the web came from. Refusing it means the trail keeps the verdict
+/// without its reason.
+///
+/// It is right anyway, and for the reason `sustained_loop` is refused, which is
+/// the closest thing in the registry: an observation about a run's STATE is not
+/// an event in it. Nothing was decided, no policy was consulted, no budget
+/// moved, no memory was touched, and the agent did not act. `ToolCall` is the
+/// one that looks available and is the trap: the tool that carried the label in
+/// ran on an EARLIER turn and is already in the history, so a record stamped at
+/// the moment the gateway noticed would place a tool invocation at a time it did
+/// not happen. That is saying more than happened, which this mapper may never
+/// do.
+///
+/// The event is not lost. It is on the shared bus with its own hash chain, and
+/// `tokenfuse firewall --events` reads exactly these lines back. What this store
+/// declines to do is claim an observation as an act.
+#[test]
+fn a_run_becoming_untrusted_is_refused_rather_than_filed_as_an_act() {
+    let err = map(OURS, TOKENFUSE_TAINT_RAISED)
+        .expect_err("an observation about a run's state has no home in the vocabulary");
+    assert!(
+        matches!(err, Rejection::UnknownType),
+        "refused BY NAME and counted, not dropped in silence: {err:?}"
+    );
+}
