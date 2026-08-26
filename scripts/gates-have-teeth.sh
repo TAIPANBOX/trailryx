@@ -233,6 +233,26 @@ echo "=== and what they must NOT catch ==="
 
 # The word `unsafe` inside a comment or a string is not an unsafe block, and a
 # gate that flagged one would be flagging the prose that explains the rule.
+# The advisory check asks another repository a question, and git hands a hook
+# GIT_DIR pointing at the repository being pushed. `git -C <elsewhere>` changes
+# the directory and keeps that variable, so the check read the advisory
+# database's working tree against THIS repository's index and every one of its
+# 1221 entries came back untracked. Deterministic, invisible from a terminal,
+# and it cost push attempts across the estate on 2026-08-26 before anybody
+# looked at the environment rather than at the database.
+#
+# Both cases run the gate the way the hook runs it. The `pass` one is the point:
+# a check must give the same answer whether or not it inherited a hook's
+# environment, and only running it under that environment can say so.
+run_case "audit: the same answer under a hook's environment" pass \
+	'GIT_DIR="$PWD/.git" ./scripts/audit.sh' \
+	""
+
+run_case "audit: the environment leak put back" fail \
+	'GIT_DIR="$PWD/.git" ./scripts/audit.sh' \
+	"$(py 'edit("scripts/audit.sh", "dirty=\"$(dbgit -C", "dirty=\"$(git -C")')" \
+	"does not track"
+
 run_case "no-unsafe: the word in a comment and in a string" pass \
 	'./scripts/no-unsafe.sh' \
 	"$(py 'p = "crates/trailryx-anchor/src/lib.rs"
