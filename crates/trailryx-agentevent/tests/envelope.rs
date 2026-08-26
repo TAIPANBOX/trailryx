@@ -303,9 +303,25 @@ fn a_dispatch_with_no_severity_is_information_rather_than_a_warning() {
 
 /// A type this reading does not map is refused rather than mapped to something
 /// adjacent, which is the rule `map_span` states for an unknown operation.
+///
+/// `slo_burn` is the one on this list worth naming, because it is where
+/// "something adjacent" is easiest to reach for. verdryx computes an error
+/// budget over a window of runs and emits this type when the budget is gone or
+/// burning fast, and two record types sit one word away from it: `BudgetCheck`
+/// would assert that spend was metered, which nothing here did, and `StoreEvent`
+/// would put another product's arithmetic in the one type that means this store
+/// speaking about itself. Both would also fix a statement about a POPULATION of
+/// runs onto the single run the line names. The refusal is counted under
+/// `unknown_type`, which is the whole difference between a decision and a hole.
 #[test]
 fn an_unmapped_type_is_refused_rather_than_mapped_to_something_adjacent() {
-    for kind in ["mcp_drift", "crypto_finding", "console_command", "sim_run"] {
+    for kind in [
+        "mcp_drift",
+        "crypto_finding",
+        "console_command",
+        "sim_run",
+        "slo_burn",
+    ] {
         assert_eq!(
             map(OURS, &line(kind, "")),
             Err(Rejection::UnknownType),
