@@ -200,8 +200,17 @@ if [ -d "$db/.git" ]; then
     echo "      not one."
     echo
     echo "      Fix it with:  git -C $db clean -fd"
+    echo "      (from a terminal. NOT from inside a hook, where GIT_DIR points"
+    echo "       at the repository being pushed and this would delete the"
+    echo "       database rather than tidy it.)"
     exit 1
   fi
+else
+  # Not a failure and not a pass either. A fresh runner has no database until
+  # `cargo audit` below creates one, so there is nothing here to be clean or
+  # dirty. Said out loud because the alternative is a check that reports
+  # nothing and reads as agreement, which is the shape invariant 19 is about.
+  echo "note: no advisory database at $db yet, so its cleanliness was not checked."
 fi
 
 args=()

@@ -248,10 +248,22 @@ run_case "audit: the same answer under a hook's environment" pass \
 	'GIT_DIR="$PWD/.git" ./scripts/audit.sh' \
 	""
 
-run_case "audit: the environment leak put back" fail \
-	'GIT_DIR="$PWD/.git" ./scripts/audit.sh' \
-	"$(py 'edit("scripts/audit.sh", "dirty=\"$(dbgit -C", "dirty=\"$(git -C")')" \
-	"does not track"
+# There is deliberately NO `fail` case putting the leak back, and the reason is
+# the harness's own rule rather than laziness. The check sits behind
+# `[ -d "$db/.git" ]`, and a fresh CI runner has no advisory database until
+# `cargo audit` creates one, which happens AFTER this check. So on CI the leak
+# changes nothing, the gate passes, and the case reports TOOTHLESS: the gate
+# passed on a fault it exists to catch. It did exactly that on the first run of
+# this branch, which is the harness working.
+#
+# Making it bite everywhere would mean pointing CARGO_HOME at a fixture, and
+# CARGO_HOME is also where the crate registry lives, so `cargo audit` two lines
+# later would fetch the world. That is a bigger change to a security gate than
+# this fix earns.
+#
+# So the fail direction is pinned by the commit that found it and by the
+# measurement in audit.sh's own comment, and not by this harness. Said here
+# rather than left as an absence somebody reads as coverage.
 
 run_case "no-unsafe: the word in a comment and in a string" pass \
 	'./scripts/no-unsafe.sh' \
