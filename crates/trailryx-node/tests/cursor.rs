@@ -72,6 +72,30 @@ fn attempt(policy: SealPolicy, dir: &Path, file: &Path, seed: u64) -> Result<Shi
     })
 }
 
+/// One run under a trust domain of the caller's choosing.
+///
+/// Separate from [`attempt`] because the domain is a RUN parameter, not a
+/// property of the file or of this build, which is the whole of why a run
+/// refused for it is different from one refused for a type this build does not
+/// map.
+fn ship_as(
+    trust_domain: &str,
+    policy: SealPolicy,
+    dir: &Path,
+    file: &Path,
+    seed: u64,
+) -> Result<Shipped, PlaneError> {
+    ship(&Ship {
+        dir,
+        shard: ShardIx(0),
+        tenant: tenant(),
+        trust_domain,
+        policy,
+        seed,
+        file,
+    })
+}
+
 /// A policy that seals inside a run rather than only at the end of one.
 fn sealing_every(records: u64) -> SealPolicy {
     SealPolicy {
@@ -641,5 +665,181 @@ fn a_cursor_counts_the_whole_file_rather_than_the_fragment_one_run_read() {
             .expect("the fixture is there")
             .len()
     );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// A run that mapped nothing because the domain was wrong must not move the
+/// position, so correcting the domain still finds the file to read.
+///
+/// THE DEFECT, measured on stack-up's own bus on 2026-08-27 before this test
+/// existed. The seal was given `demo.local` while every line was minted under
+/// `local.invalid`, `mockryx.local` or `acme`. It wrote 0 records across 52
+/// lines, committed a position past every one of them, and exited 0. The next
+/// run, with the domain corrected, answered `nothing new. The cursor is at byte
+/// 19463 of 19463 (40 line(s), 0 record(s) so far)`. Forty real events were
+/// outside the record and no correction reached them; the only way back was
+/// deleting a cursor file by hand.
+///
+/// The rule the final commit rests on is right for every other refusal and
+/// wrong for this one. `events::ship` says a file of lines this build cannot map
+/// is not read for ever because "nothing can be lost by not reading them again".
+/// For an unknown type that holds: refusing it is this build's registry being
+/// correct. The trust domain is not a property of the line or of the build, it
+/// is an argument to this run, and the same bytes map under a different one.
+#[test]
+fn a_run_refused_for_the_trust_domain_leaves_the_position_where_it_was() {
+    let dir = scratch("wrong-domain");
+    let file = dir.join("heraldyx.ndjson");
+    std::fs::write(&file, journal(3)).expect("a journal");
+
+    let wrong = ship_as("other.example", policy(), &dir, &file, 0x77726f6e)
+        .expect("the file is read even when nothing in it is served");
+    assert_eq!(
+        wrong.ingested.accepted.written, 0,
+        "no line is under the domain this run was given"
+    );
+    assert_eq!(
+        wrong.ingested.report.foreign_trust_domain, 3,
+        "and every one of them is counted as that, not as something else"
+    );
+    assert!(
+        !wrong.cursor_written,
+        "a run that stored nothing and refused only for a domain it was HANDED \
+         must not claim it has finished with those lines"
+    );
+    assert!(
+        wrong.held_for_trust_domain,
+        "and it must SAY the position was held, which is a different answer from \
+         the quiet !cursor_written a run over an unchanged file also gives"
+    );
+
+    let right = run(&dir, &file);
+    assert_eq!(
+        right.ingested.accepted.written, 3,
+        "the same bytes, the right domain: the events are still there to record"
+    );
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// And the exception is exactly one refusal class wide.
+///
+/// A file whose lines this build does not map is still read to the end and not
+/// read again. That is the rule the test above carves out of, and carving too
+/// wide would put every heraldyx dispatch with no run id back in front of the
+/// reader on every run, for ever.
+#[test]
+fn a_run_refused_for_a_type_this_build_does_not_map_still_moves_on() {
+    let dir = scratch("unknown-type");
+    let file = dir.join("stream.ndjson");
+    let unmapped = r#"{"schema":"taipanbox.dev/agent-event/v0.2","ts":"2026-08-06T03:14:00Z","source":"costcrew","type":"sprint_planned","agent_id":"agent://acme.example/desk/planner","run_id":"run-1","severity":"info"}
+"#;
+    std::fs::write(&file, unmapped).expect("a journal");
+
+    let first = run(&dir, &file);
+    assert_eq!(
+        first.ingested.accepted.written, 0,
+        "this build maps no such type"
+    );
+    assert_eq!(first.ingested.report.unknown_type, 1);
+    assert!(
+        first.cursor_written,
+        "the run has finished with that line: refusing it is this build's \
+         registry being correct, not a setting somebody can change"
+    );
+    assert!(
+        !first.held_for_trust_domain,
+        "and the held flag must not leak into a class it is not about"
+    );
+
+    let again = run(&dir, &file);
+    assert!(
+        again.nothing_new(),
+        "so it is not offered to the reader a second time"
+    );
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// The other half of the condition, which nothing held until a review planted
+/// its fault and every test stayed green.
+///
+/// A run that stored SOMETHING commits past the foreign lines beside it. That is
+/// the designed state for a bus whose planes mint under more than one domain,
+/// and holding the position there would re-read the file on every scheduled run
+/// and mint a fresh identity for every line that did map, for ever: unbounded
+/// compounding duplication of the trail, which invariant 37 calls worse than no
+/// trail at all.
+#[test]
+fn a_run_that_stored_something_commits_past_the_foreign_lines_beside_it() {
+    let dir = scratch("mixed-domains");
+    let file = dir.join("mixed.ndjson");
+    let foreign = r#"{"schema":"taipanbox.dev/agent-event/v0.2","ts":"2026-08-06T03:14:30Z","source":"scopyx","type":"web_blocked","agent_id":"agent://other.example/demo-agent","run_id":"run-9","severity":"high","data":{"host":"169.254.169.254"}}
+"#;
+    std::fs::write(&file, format!("{}{}{}", dispatch(0), foreign, dispatch(1)))
+        .expect("a journal of two domains");
+
+    let mixed = run(&dir, &file);
+    assert_eq!(
+        mixed.ingested.accepted.written, 2,
+        "the two native lines record"
+    );
+    assert_eq!(
+        mixed.ingested.report.foreign_trust_domain, 1,
+        "and the third is refused for its domain, in the same run"
+    );
+    assert!(
+        mixed.cursor_written,
+        "a run that stored something has finished with the whole region, foreign \
+         lines included; holding here would re-import the two that mapped on \
+         every run for ever"
+    );
+    assert!(!mixed.held_for_trust_domain);
+
+    let again = run(&dir, &file);
+    assert!(
+        again.nothing_new(),
+        "so an unchanged file is not offered a second time"
+    );
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// And the carve-out does not reach the other two classes `is_producer_fixable`
+/// groups with this one.
+///
+/// That grouping is three lines from the condition in the same file and is the
+/// most tempting refactor there is. It is the right split for an operator's
+/// attention and the wrong one for a cursor: a line with no run identifier is
+/// missing something no later run adds to those same bytes, so holding for it
+/// would put every heraldyx dispatch that carries no run back in front of the
+/// reader on every run, for ever.
+#[test]
+fn a_run_refused_for_a_missing_run_id_still_moves_on() {
+    let dir = scratch("no-run-id");
+    let file = dir.join("dispatches.ndjson");
+    let no_run = r#"{"schema":"taipanbox.dev/agent-event/v0.2","ts":"2026-08-06T03:14:04Z","source":"heraldyx","type":"alert_sent","agent_id":"agent://acme.example/eng/ci-fixer","severity":"info","data":{"kind":"alert","about":"policy_deny","to":["ops@acme.example"],"transport":"smtp","outcome":"accepted"}}
+"#;
+    std::fs::write(&file, no_run).expect("a journal");
+
+    let first = run(&dir, &file);
+    assert_eq!(
+        first.ingested.accepted.written, 0,
+        "nothing in it can be a record"
+    );
+    assert_eq!(first.ingested.report.no_run_id, 1);
+    assert_eq!(
+        first.ingested.report.foreign_trust_domain, 0,
+        "and it is refused for the run id, not the domain"
+    );
+    assert!(
+        first.cursor_written,
+        "so the position moves: no later run makes these bytes a record"
+    );
+    assert!(!first.held_for_trust_domain);
+
+    let again = run(&dir, &file);
+    assert!(again.nothing_new());
+
     let _ = std::fs::remove_dir_all(&dir);
 }

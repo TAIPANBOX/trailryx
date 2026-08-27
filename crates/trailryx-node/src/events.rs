@@ -126,6 +126,14 @@ pub struct Shipped {
     pub cursor: Cursor,
     /// Whether that position was written down this run.
     pub cursor_written: bool,
+    /// Whether the position was HELD BACK because the run stored nothing and
+    /// every refusal was the trust domain it was handed.
+    ///
+    /// A separate answer from `!cursor_written`, which is also what a run over
+    /// an unchanged file reports, and the two want opposite reactions from an
+    /// operator: one is the quiet correct case and this one means the argument
+    /// they passed matches nothing on their bus.
+    pub held_for_trust_domain: bool,
     /// How many times it was written. One per sealed segment, plus the one at the
     /// end of the run, minus any that would have rewritten a position unchanged.
     pub cursor_commits: u64,
@@ -195,6 +203,7 @@ pub fn ship(ship: &Ship<'_>) -> Result<Shipped, PlaneError> {
             at: Timestamp(SystemClock::new().wall_nanos()),
         },
         cursor_written: false,
+        held_for_trust_domain: false,
         cursor_commits: 0,
         cursor_path: cursor::path_of(ship.dir, ship.shard, ship.file),
         committed: match &resume {
@@ -282,6 +291,42 @@ pub fn ship(ship: &Ship<'_>) -> Result<Shipped, PlaneError> {
     if let Some(sealed) = plane.seal(plane.now())? {
         out.sealed.push(sealed);
     }
+
+    // ONE REFUSAL CLASS IS NOT THE RUN'S TO FINISH WITH.
+    //
+    // The paragraph above is right about every rejection but one. A type this
+    // reading does not map is this build's registry being CORRECT, and a line
+    // with no run identifier is missing something no later run will add to
+    // these bytes. Neither can be lost by not reading them again.
+    //
+    // The trust domain is different in kind: it is an ARGUMENT to this run, not
+    // a property of the line or of the build. The same bytes under a different
+    // `--trust-domain` map. So a run that stored nothing and refused only
+    // because of the domain it was handed has not finished with those lines,
+    // and a position committed past them is the silent loss this module's own
+    // opening paragraph says it will not take: correcting the domain then
+    // answers "nothing new. The cursor is at byte N of N (0 record(s) so far)",
+    // and the only way back is deleting a cursor file by hand.
+    //
+    // Measured on stack-up's bus, 2026-08-27: 52 lines, 0 records, a position
+    // past every one, exit 0. Seven sealed segments held 35 records and all 35
+    // were that launcher's synthetic demo fleet, while four real planes had
+    // been writing into the same directory for weeks.
+    //
+    // NARROW ON PURPOSE, and both halves matter. It applies only when the run
+    // wrote NOTHING: a partial refusal is the designed state for a box whose
+    // planes mint under more than one domain, and holding the position there
+    // would re-read and duplicate every line that did map, on every run, for
+    // ever. And it applies only to this class: `is_producer_fixable` groups
+    // this one with two whose bytes will never map, which is the right split
+    // for an operator's attention and the wrong one for a cursor.
+    let stored_nothing_but_saw_a_foreign_domain =
+        out.ingested.accepted.written == 0 && out.ingested.report.foreign_trust_domain > 0;
+    if stored_nothing_but_saw_a_foreign_domain {
+        out.held_for_trust_domain = true;
+        return Ok(out);
+    }
+
     let lines = out.resume.lines_before() + out.ingested.lines;
     let records = out.resume.records_before() + out.ingested.accepted.written;
     out.commit(ship, &bytes, &mut prefix, to, lines, records)?;
