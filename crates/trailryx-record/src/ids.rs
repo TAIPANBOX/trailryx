@@ -112,6 +112,27 @@ token!(
 );
 
 token!(
+    TokenId,
+    128,
+    segment_char,
+    "A delegation token's `jti`, so an auditor can find it in the issuer's own record. An identifier, never the token."
+);
+
+token!(
+    KeyThumbprint,
+    128,
+    segment_char,
+    "RFC 7638 JWK thumbprint a delegation token was bound to: WHO was holding it, which a chain of names cannot say. Base64url, so `segment_char` covers it."
+);
+
+token!(
+    IssuerId,
+    255,
+    uri_char,
+    "The issuer that minted a delegation token, so the right keys and the right revocation list are consulted."
+);
+
+token!(
     ModelId,
     128,
     |c: char| segment_char(c) || c == '/',

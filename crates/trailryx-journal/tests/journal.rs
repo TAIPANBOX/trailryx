@@ -7,11 +7,15 @@ use trailryx_crypto::{ChainState, Sha384};
 use trailryx_journal::journal::{
     Appended, ChainStart, DurabilityViolation, Journal, JournalError, StoppedBecause,
 };
-use trailryx_journal::wire::{WireError, decode_frame, decode_record, encode_record};
+use trailryx_journal::wire::{
+    FRAME_VERSION, WireError, decode_frame, decode_record, decode_record_at, encode_frame,
+    encode_frame_at, encode_record,
+};
 use trailryx_record::{
-    AgentId, Algorithms, Basis, ErrorCode, EventType, Hash, MapperVersion, ModelId, Outcome,
-    PayloadClass, PayloadRef, PolicyVersion, PrincipalId, Record, RecordId, RunId, SegmentId,
-    Severity, ShardIx, TenantId, Timestamp, ToolName, Untrusted, Verdict,
+    AgentId, Algorithms, Basis, DelegationProof, ErrorCode, EventType, Hash, IssuerId,
+    KeyThumbprint, MapperVersion, ModelId, Outcome, PayloadClass, PayloadRef, PolicyVersion,
+    PrincipalId, Record, RecordId, RunId, SegmentId, Severity, ShardIx, TenantId, Timestamp,
+    TokenId, ToolName, Untrusted, Verdict,
 };
 use trailryx_sim::{Io, IoFaults, SimClock, SimIo};
 
@@ -73,6 +77,12 @@ fn maximal(n: u128) -> Record {
             ToolName::parse("send-mail").unwrap(),
         ],
         identity_chain: vec![PrincipalId::parse("user://analyst-7").unwrap()],
+        delegation_proof: Some(DelegationProof {
+            jti: TokenId::parse("tok-4kmsltbtx").unwrap(),
+            jkt: KeyThumbprint::parse("uhqrs9p3jpnqqgty-b0pxkutr6o42sr9iul4jsyjjg0").unwrap(),
+            iss: IssuerId::parse("https://vouchryx.acme.example").unwrap(),
+            exp: Timestamp(1_787_823_801_000_000_000),
+        }),
     };
     r.caused_by = vec![RecordId(11), RecordId(12), RecordId(13)];
     r.outcome = Outcome {
@@ -1013,4 +1023,111 @@ fn every_event_code_ever_written_still_decodes_and_the_next_unused_one_is_refuse
         }
         other => panic!("an undefined event code must be refused by name: {other:?}"),
     }
+}
+
+// ---------------------------------------------------------------------------
+// The v1 to v2 migration
+// ---------------------------------------------------------------------------
+
+/// Encode a body the way FRAME_VERSION 1 did: everything except the trailing
+/// `delegation_proof`. Written by hand rather than kept as a fixture blob so
+/// the test says WHAT a v1 body is, and so it keeps compiling against the real
+/// encoder rather than against a copy of it.
+fn v1_body(rec: &Record) -> Vec<u8> {
+    let mut r = rec.clone();
+    r.basis.delegation_proof = None;
+    let full = encode_record(&r);
+    // A v2 body whose proof is absent is a v1 body plus one `None` marker
+    // byte, which is exactly what "appended at the end" means. Drop it.
+    assert_eq!(*full.last().expect("a body"), 0, "the absent-option marker");
+    full[..full.len() - 1].to_vec()
+}
+
+/// The migration, and the whole reason it is shaped this way: nothing is
+/// rewritten.
+///
+/// A store whose claim is tamper-evidence cannot rewrite its own history to add
+/// a field. A migration that did would be indistinguishable from the tampering
+/// the chain exists to catch. So a record written under v1 stays byte for byte
+/// as it was, keeps its own hash, and keeps verifying; the reader is what moved.
+#[test]
+fn a_record_written_under_v1_still_reads_and_keeps_its_hash() {
+    let rec = maximal(9);
+    let body = v1_body(&rec);
+    let before = Sha384::digest(&body);
+
+    let back = decode_record_at(&body, 1).expect("a v1 body decodes under the new reader");
+
+    assert_eq!(
+        back.basis.delegation_proof, None,
+        "a field the record never had must read as absent, which is what its \
+         absence always meant (SPEC 5.2: absent is NOT PROVEN)"
+    );
+    let mut want = rec.clone();
+    want.basis.delegation_proof = None;
+    assert_eq!(back, want, "everything else must survive unchanged");
+
+    assert_eq!(
+        Sha384::digest(&body),
+        before,
+        "reading must not touch the bytes; the chain hashes these"
+    );
+}
+
+/// A whole v1 FRAME, not just a body: the version byte is what tells the
+/// reader which shape to expect, and a reader that ignored it would run off
+/// the end of a v1 body or leave bytes over on a v2 one.
+#[test]
+fn a_v1_frame_is_accepted_and_a_v2_frame_is_too() {
+    let rec = maximal(10);
+    let link = Sha384::digest(b"previous");
+
+    let v1 = {
+        let body = v1_body(&rec);
+        encode_frame_at(&body, &link, 1)
+    };
+    let f1 = decode_frame(&v1).expect("a v1 frame is still readable");
+    assert_eq!(f1.version, 1);
+    let r1 = decode_record_at(f1.body, f1.version).expect("its body decodes as v1");
+    assert_eq!(r1.basis.delegation_proof, None);
+
+    let v2 = encode_frame(&encode_record(&rec), &link);
+    let f2 = decode_frame(&v2).expect("a v2 frame is readable");
+    assert_eq!(f2.version, FRAME_VERSION);
+    let r2 = decode_record_at(f2.body, f2.version).expect("its body decodes as v2");
+    assert_eq!(r2.basis.delegation_proof, rec.basis.delegation_proof);
+}
+
+/// Reading a body as the WRONG version must fail loudly rather than produce a
+/// record with the wrong shape. This is what `finish` is for, and it is the
+/// reason the version is a parameter instead of a guess.
+#[test]
+fn a_body_read_as_the_wrong_version_is_refused() {
+    let rec = maximal(11);
+
+    let v2 = encode_record(&rec);
+    assert!(
+        decode_record_at(&v2, 1).is_err(),
+        "a v2 body read as v1 leaves the proof unread, and trailing bytes are \
+         refused rather than ignored"
+    );
+
+    let v1 = v1_body(&rec);
+    assert!(
+        decode_record_at(&v1, 2).is_err(),
+        "a v1 body read as v2 runs off the end"
+    );
+}
+
+/// A version this reader has never heard of is refused at the frame, before
+/// any of the body is trusted.
+#[test]
+fn a_frame_from_the_future_is_refused() {
+    let rec = maximal(12);
+    let mut f = encode_frame(&encode_record(&rec), &Sha384::digest(b"prev"));
+    f[1] = FRAME_VERSION + 1;
+    assert!(matches!(
+        decode_frame(&f),
+        Err(WireError::UnknownVersion(_))
+    ));
 }

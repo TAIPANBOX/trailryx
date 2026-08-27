@@ -11,12 +11,54 @@
 //! ```
 
 use std::path::PathBuf;
-use trailryx_record::RECORD_V1;
+use trailryx_record::{RECORD_V1, RECORD_V2, Schema};
 
 fn artifact_path() -> PathBuf {
+    path_for(&RECORD_V1)
+}
+
+/// Where a schema's published artifact lives, named by the version it IS.
+fn path_for(schema: &Schema) -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("schema")
-        .join("record.v1.json")
+        .join(format!("record.v{}.json", schema.version))
+}
+
+/// v1's artifact must not move, ever.
+///
+/// This is the whole claim the migration rests on: v1 is a PREFIX of v2, so
+/// every record already on disk is described by exactly the fields it was
+/// written under. Insert a field above the v2 block and this goes red, which
+/// is the point of it being a separate test from v2's.
+#[test]
+fn the_v1_artifact_is_frozen_and_did_not_move() {
+    let want = RECORD_V1.to_json();
+    let path = path_for(&RECORD_V1);
+    let got = std::fs::read_to_string(&path).expect("v1 artifact present");
+    assert_eq!(
+        got, want,
+        "v1's published schema changed. Records already on disk were written \
+         under it, so it describes history and history does not move. If a \
+         field was added, it belongs at the END, after the v2 block."
+    );
+}
+
+#[test]
+fn committed_v2_schema_matches_the_types() {
+    let want = RECORD_V2.to_json();
+    let path = path_for(&RECORD_V2);
+    if std::env::var_os("UPDATE_SCHEMA").is_some() {
+        std::fs::create_dir_all(path.parent().expect("parent")).expect("mkdir");
+        std::fs::write(&path, &want).expect("write schema");
+        return;
+    }
+    let got = std::fs::read_to_string(&path).unwrap_or_else(|e| {
+        panic!(
+            "cannot read {}: {e}\nrun: UPDATE_SCHEMA=1 cargo test -p trailryx-record",
+            path.display()
+        )
+    });
+    assert_eq!(got, want, "v2's published schema disagrees with the types");
 }
 
 #[test]

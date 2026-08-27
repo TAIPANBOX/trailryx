@@ -13,8 +13,8 @@
 
 use crate::hash::Hash;
 use crate::ids::{
-    AgentId, ModelId, PolicyVersion, PrincipalId, RecordId, RunId, SegmentId, ShardIx, TenantId,
-    ToolName,
+    AgentId, IssuerId, KeyThumbprint, ModelId, PolicyVersion, PrincipalId, RecordId, RunId,
+    SegmentId, ShardIx, TenantId, TokenId, ToolName,
 };
 use crate::time::{Timestamp, Untrusted};
 
@@ -266,6 +266,40 @@ pub struct Basis {
     pub tool_manifest: Vec<ToolName>,
     /// Delegation chain in force, root first.
     pub identity_chain: Vec<PrincipalId>,
+    /// That the chain above was PROVED, and by which token. agent-passport
+    /// SPEC 5.2, and `None` means NOT proven rather than proven elsewhere.
+    ///
+    /// # Why it is typed metadata and not payload
+    ///
+    /// The chain is typed and kept; the payload plane is what a per-event key
+    /// erases. SPEC 5.2 reads a chain with no proof beside it as not proven, so
+    /// a proof in the erasable half means a routine erasure turns a proven
+    /// chain into an unproven one, silently, in the store whose whole claim is
+    /// that nobody can quietly alter what it holds. 5.2 spends a MUST on that
+    /// downgrade.
+    ///
+    /// It carries no personal content: a token id, a key thumbprint, an issuer
+    /// URL and an expiry. Nothing about privacy argues for the erasable plane.
+    pub delegation_proof: Option<DelegationProof>,
+}
+
+/// That a delegation chain was proved, and by which token (SPEC 5.2).
+///
+/// The token itself never travels. It is a live credential and this is a
+/// replicated, hash-chained record that outlives it; what is kept is enough to
+/// walk to the issuer's own record and to its revocation list.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DelegationProof {
+    /// The token's id, so an auditor can find it in the issuer's own record.
+    pub jti: TokenId,
+    /// RFC 7638 thumbprint the token was bound to: WHO was holding it, which a
+    /// chain of names cannot say.
+    pub jkt: KeyThumbprint,
+    /// The issuer, so the right keys and the right revocation list are read.
+    pub iss: IssuerId,
+    /// When the proof stopped being one. The chain carries no freshness; this
+    /// is the freshness, and it belongs to the proof rather than to the names.
+    pub exp: Timestamp,
 }
 
 /// How it ended, and what it cost.

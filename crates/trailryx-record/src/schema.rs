@@ -233,7 +233,14 @@ impl Schema {
         let mut s = String::with_capacity(8 << 10);
         s.push_str("{\n");
         s.push_str("  \"$schema\": \"https://json-schema.org/draft/2020-12/schema\",\n");
-        s.push_str("  \"$id\": \"https://trailryx.dev/schema/record.v1.json\",\n");
+        // The version this schema IS, not a literal. It said `record.v1.json`
+        // for every schema, so v2's artifact would have claimed to be v1's:
+        // a published document naming the wrong version of itself is the one
+        // kind of drift a reader cannot see.
+        s.push_str(&format!(
+            "  \"$id\": \"https://trailryx.dev/schema/record.v{}.json\",\n",
+            self.version
+        ));
         s.push_str("  \"title\": \"Trailryx decision record\",\n");
         s.push_str(&format!("  \"x-version\": {},\n", self.version));
         s.push_str("  \"description\": \"Metadata plane holds typed fields only. Any free text lives in the encrypted payload plane.\",\n");
@@ -313,11 +320,46 @@ fn escape(s: &str) -> String {
 /// Version 1 of the record schema.
 ///
 /// Frozen at the end of stage 1. A change here is a format change and needs a
-/// version bump plus a migration, not an edit.
+/// version bump plus a migration, not an edit, and [`RECORD_V2`] is what that
+/// looked like when it came.
+///
+/// It is a PREFIX of v2 rather than a separate list, which is not a trick to
+/// save typing: it is the claim that the migration was ADDITIVE, written where
+/// the compiler checks it. Every record ever written under v1 is described by
+/// exactly these fields, and if somebody ever changes one of them in place this
+/// stops being true and v1's own artifact moves, which `schema_artifact.rs`
+/// then refuses.
 pub const RECORD_V1: Schema = Schema {
     version: 1,
+    fields: FIELDS_V1,
+};
+
+/// Version 2: v1 plus `basis.delegation_proof` (agent-passport SPEC 5.2).
+///
+/// # What the migration is, and what it deliberately is not
+///
+/// Nothing is rewritten. Records already on disk stay byte for byte as they
+/// were written, keep their own hashes, and keep verifying: a store whose whole
+/// claim is tamper-evidence cannot rewrite its own history to add a field, and
+/// a migration that did would be indistinguishable from the tampering the chain
+/// exists to catch.
+///
+/// So the migration lives in the READER. `wire::FRAME_VERSION` moves to 2 and
+/// the decoder accepts 1 and 2; a v1 frame yields `delegation_proof: None`,
+/// which SPEC 5.2 already defines as "not proven" rather than "unknown". The
+/// only thing that changes about an old record is that a field it never had
+/// reads as absent, which is what it always meant.
+pub const RECORD_V2: Schema = Schema {
+    version: 2,
     fields: FIELDS,
 };
+
+/// The v1 fields: every entry of [`FIELDS`] except the ones v2 added.
+const FIELDS_V1: &[Field] = FIELDS.split_at(FIELDS.len() - V2_ADDED).0;
+
+/// How many entries v2 appended. Named so the split above reads as an
+/// arithmetic fact rather than a magic index.
+const V2_ADDED: usize = 4;
 
 const TOKEN_SEGMENT: &str = "[a-z0-9._-]";
 const TOKEN_URI: &str = "[a-z0-9._:/-]";
@@ -820,6 +862,62 @@ const FIELDS: &[Field] = &[
         pii: Pii::Never,
         provable: false,
         why: "Which mapper version produced this record. When the semantic conventions move, this moves and the store does not.",
+    },
+    // ------------------------------------------------------------- v2 adds
+    //
+    // These four are `V2_ADDED`, and they sit LAST because `FIELDS_V1` is the
+    // prefix before them. Appending is the only edit that keeps v1's own
+    // artifact byte-identical, which is what makes the migration additive
+    // rather than a rewrite. Anything inserted above this line changes what v1
+    // says it was, about records already written.
+    Field {
+        path: "basis.delegation_proof.jti",
+        kind: Kind::Token {
+            max_bytes: 128,
+            charset: TOKEN_SEGMENT,
+        },
+        optional: true,
+        repeated: false,
+        plane: Plane::Metadata,
+        pii: Pii::OperatorPseudonymous,
+        provable: false,
+        why: "Which token proved the chain, so an auditor can find it in the issuer's own record. An identifier, never the token.",
+    },
+    Field {
+        path: "basis.delegation_proof.jkt",
+        kind: Kind::Token {
+            max_bytes: 128,
+            charset: TOKEN_SEGMENT,
+        },
+        optional: true,
+        repeated: false,
+        plane: Plane::Metadata,
+        pii: Pii::OperatorPseudonymous,
+        provable: false,
+        why: "RFC 7638 thumbprint the token was bound to: who was holding it, which a chain of names cannot say. A key digest, not a person.",
+    },
+    Field {
+        path: "basis.delegation_proof.iss",
+        kind: Kind::Token {
+            max_bytes: 255,
+            charset: TOKEN_URI,
+        },
+        optional: true,
+        repeated: false,
+        plane: Plane::Metadata,
+        pii: Pii::Never,
+        provable: false,
+        why: "Which issuer minted it, so the right keys and the right revocation list are consulted. A service URL.",
+    },
+    Field {
+        path: "basis.delegation_proof.exp",
+        kind: Kind::Timestamp,
+        optional: true,
+        repeated: false,
+        plane: Plane::Metadata,
+        pii: Pii::Never,
+        provable: false,
+        why: "When the proof stopped being one. SPEC 2 says the chain carries no freshness; this is the freshness, and it belongs to the proof.",
     },
 ];
 
