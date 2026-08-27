@@ -38,7 +38,7 @@ use trailryx_contracts::ObjectStore;
 use trailryx_crypto::chain_step;
 use trailryx_index::segment::Segment;
 use trailryx_index::{SealError, SegmentManifest};
-use trailryx_journal::wire::decode_record;
+use trailryx_journal::wire::{decode_record, decode_record_at};
 use trailryx_record::{Hash, Record, SegmentId, ShardIx};
 
 use crate::cold::{self, ColdError};
@@ -218,7 +218,21 @@ impl<O: ObjectStore> Tier<O> {
         let mut records: Vec<(Record, Hash)> = Vec::with_capacity(fetched.records.len());
         let mut link = fetched.manifest.chain_before;
         for bytes in &fetched.records {
-            let record = decode_record(bytes).map_err(|_| TierError::Undecodable)?;
+            // Cold objects are BODIES, not frames, so there is no version byte
+            // to read: the archive path lost the one thing the journal path
+            // carries. Trying both is a DETERMINATION rather than a guess, and
+            // the reason is `Reader::finish`: it refuses trailing bytes as well
+            // as truncation, so a v1 body read as v2 runs off the end and a v2
+            // body read as v1 leaves bytes over. Exactly one version can
+            // succeed, and if neither does the object is undecodable, which is
+            // what it was before.
+            //
+            // The current version is tried FIRST, so the common path costs one
+            // attempt and the fallback is only paid by an archive older than
+            // this build.
+            let record = decode_record(bytes)
+                .or_else(|_| decode_record_at(bytes, 1))
+                .map_err(|_| TierError::Undecodable)?;
             // Recomputed rather than stored: a link that travelled with the record
             // would be a claim by whoever wrote the object, and this is the one
             // number that must not be taken on trust.

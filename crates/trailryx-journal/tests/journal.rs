@@ -1131,3 +1131,96 @@ fn a_frame_from_the_future_is_refused() {
         Err(WireError::UnknownVersion(_))
     ));
 }
+
+/// A segment written by the binary BEFORE `RECORD_V2`, read by this one.
+///
+/// `testdata/v1-segment-3acf4bd.journal` is 1072 real bytes produced by a
+/// checkout of 3acf4bd through `StdIo`, not constructed by this build. That
+/// distinction is the whole point: every other v1 test here builds a v1 body
+/// with today's encoder minus one field, which proves the reader handles a
+/// shape this build can describe. It does not prove the reader handles bytes an
+/// older build actually wrote, and those are different claims.
+///
+/// The PR that added `RECORD_V2` said so in its own NOT PROVEN section. This is
+/// that line closed, and it stays closed: the fixture is committed, so every
+/// future build reads real v1 bytes rather than its own idea of them.
+#[test]
+fn a_segment_an_older_binary_wrote_still_reads() {
+    let bytes = std::fs::read(
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("testdata")
+            .join("v1-segment-3acf4bd.journal"),
+    )
+    .expect("the committed v1 segment");
+
+    // It is v1 on the wire, not merely named so.
+    let at = bytes
+        .iter()
+        .position(|b| *b == trailryx_journal::wire::FRAME_MAGIC)
+        .expect("a frame");
+    assert_eq!(bytes[at + 1], 1, "the fixture is not a v1 segment");
+
+    let walked = Journal::walk_bytes(&bytes, ChainStart::First).expect("it walks");
+    assert_eq!(walked.records.len(), 3, "three records were written");
+
+    for (rec, _link) in &walked.records {
+        assert_eq!(
+            rec.basis.delegation_proof, None,
+            "a field the record never had must read as absent, which is what \
+             its absence always meant (SPEC 5.2: absent is NOT PROVEN)"
+        );
+    }
+
+    // The middle one is `maximal`, so this is not a test over three empty
+    // records that would decode under almost any reader.
+    let (mid, _) = &walked.records[1];
+    assert!(mid.basis.policy_version.is_some(), "the maximal record");
+    assert_eq!(mid.basis.identity_chain.len(), 1);
+
+    // And the walk ran to the end of the file rather than stopping at a link
+    // it could not follow, over bytes this build did not produce.
+    assert_eq!(
+        walked.good_bytes as usize,
+        bytes.len(),
+        "the walk stopped early on an older binary's bytes: {:?}",
+        walked.stopped_because
+    );
+}
+
+/// The bodies out of that same real segment, decoded the way the COLD tier
+/// does it: without a frame, and therefore without a version byte.
+///
+/// The archive path lost the one thing the journal path carries, and trying
+/// both versions there is a determination rather than a guess: `finish` refuses
+/// trailing bytes as well as truncation, so exactly one version can succeed.
+/// This proves that on bytes an older binary wrote.
+#[test]
+fn a_body_from_an_older_binary_decodes_without_a_frame() {
+    let bytes = std::fs::read(
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("testdata")
+            .join("v1-segment-3acf4bd.journal"),
+    )
+    .expect("the committed v1 segment");
+    let walked = Journal::walk_bytes(&bytes, ChainStart::First).expect("it walks");
+    assert_eq!(walked.records.len(), 3);
+
+    // Re-encode nothing: take the raw body straight out of the file, the way a
+    // cold object holds it.
+    let at = bytes
+        .iter()
+        .position(|b| *b == trailryx_journal::wire::FRAME_MAGIC)
+        .expect("a frame");
+    let frame = decode_frame(&bytes[at..]).expect("the first frame");
+    assert_eq!(frame.version, 1);
+
+    assert!(
+        decode_record_at(frame.body, FRAME_VERSION).is_err(),
+        "a v1 body must NOT decode as the current version, or trying both \
+         would be a guess instead of a determination"
+    );
+    assert!(
+        decode_record_at(frame.body, 1).is_ok(),
+        "and it must decode as the version it actually is"
+    );
+}
