@@ -450,6 +450,31 @@ fn events(args: Vec<String>) -> ExitCode {
     if shipped.sealed.is_empty() && !shipped.nothing_new() {
         println!("nothing durable to seal");
     }
+    if shipped.held_for_trust_domain {
+        // Loud, and it names the argument rather than the counter, because the
+        // counter is already printed above and told nobody anything: this run
+        // read the file, stored none of it, and the reason is a value the
+        // caller passed. The position is deliberately where it was, so the
+        // same bytes are still here once that value is right.
+        // "nothing was stored" is about THIS region, and on a run that resumed
+        // after a crash it would be printed directly under a `sealed ...` line
+        // holding the previous run's recovered records, contradicting it. The
+        // ordering is right (a seal that failed never reaches the commit) and
+        // only the wording would lie, so the wording changes.
+        let stored = if shipped.sealed.is_empty() {
+            "nothing was stored"
+        } else {
+            "nothing NEW was stored, and the segment sealed above holds records \
+             recovered from an earlier run"
+        };
+        println!(
+            "cursor: NOT moved. Every line this run read names an agent outside the \
+             trust domain it was given, and {stored}, so the position stays at byte \
+             {} rather than marking those lines read. Give --trust-domain the domain \
+             this bus actually mints under and run it again.",
+            shipped.cursor.bytes
+        );
+    }
     if shipped.cursor_written {
         println!(
             "cursor: byte {}, {} line(s), {} record(s), committed {} time(s), in {}",
