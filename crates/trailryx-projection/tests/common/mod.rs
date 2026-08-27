@@ -48,6 +48,7 @@ pub fn record(id: u128, seq: u64, rich: bool) -> Record {
                 Vec::new()
             },
             identity_chain: Vec::new(),
+            delegation_proof: None,
         },
         caused_by: if rich { vec![RecordId(1)] } else { Vec::new() },
         outcome: Outcome {

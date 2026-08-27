@@ -1252,3 +1252,86 @@ fn a_delegation_carrying_a_run_is_still_refused() {
         ),
     }
 }
+
+// ---------------------------------------------------------------------------
+// SPEC 5.2: the proof is typed metadata, and survives an erasure
+// ---------------------------------------------------------------------------
+
+/// The whole reason `RECORD_V2` exists.
+///
+/// The chain is typed metadata and is kept. The payload plane is what a
+/// per-event key erases. SPEC 5.2 reads a chain with no proof beside it as NOT
+/// PROVEN, so a proof in the erasable half means a routine erasure turns a
+/// proven chain into an unproven one, silently, in the store whose whole claim
+/// is that nobody can quietly alter what it holds.
+///
+/// Measured 2026-08-27: `delegation_proof` was in the payload plane here, and
+/// `estate-gates` C12 held it as an open cross-repo finding.
+#[test]
+fn the_proof_is_typed_metadata_and_not_payload() {
+    let ing = map(
+        "acme.example",
+        r#"{"schema":"taipanbox.dev/agent-event/v0.2","ts":"2026-08-27T09:00:00Z",
+            "source":"tokenfuse","type":"policy_deny","severity":"high",
+            "agent_id":"agent://acme.example/triage","run_id":"run-1",
+            "on_behalf_of":["user://acme.example/alice","agent://acme.example/triage"],
+            "delegation_proof":{"jti":"tok-live-1","jkt":"uhqrs9p3jpnq",
+                                "iss":"https://vouchryx.acme.example","exp":1787823801},
+            "data":{"reason":"deny_tool"}}"#,
+    )
+    .expect("a v0.2 envelope with a proof");
+
+    let proof = ing
+        .meta
+        .basis
+        .delegation_proof
+        .as_ref()
+        .expect("the proof reached TYPED metadata, not the payload plane");
+    assert_eq!(proof.jti.as_str(), "tok-live-1");
+    assert_eq!(proof.iss.as_str(), "https://vouchryx.acme.example");
+
+    // And it is not ALSO in the payload: consumed or payload, never both.
+    let payload = String::from_utf8_lossy(
+        &ing.payload
+            .first()
+            .map(|p| p.bytes.clone())
+            .unwrap_or_default(),
+    )
+    .to_string();
+    assert!(
+        !payload.contains("delegation_proof"),
+        "the proof is in both planes at once: {payload}"
+    );
+
+    // The erasure this exists to survive: drop every payload part and the
+    // proof is still there, beside the chain it qualifies.
+    let mut erased = ing;
+    erased.payload.clear();
+    assert!(
+        erased.meta.basis.delegation_proof.is_some(),
+        "a routine payload erasure took the proof with it, which SPEC 5.2 reads \
+         as downgrading a proven chain to an unproven one"
+    );
+    assert_eq!(
+        erased.meta.on_behalf_of.len(),
+        2,
+        "and the chain is still there"
+    );
+}
+
+/// A proof missing a member is not a weaker proof, it is an unreadable one.
+/// It goes to the payload plane WHOLE, so a reader can still see what arrived,
+/// and the typed field stays empty rather than half filled.
+#[test]
+fn a_partial_proof_is_not_typed() {
+    let ing = map(
+        "acme.example",
+        r#"{"schema":"taipanbox.dev/agent-event/v0.2","ts":"2026-08-27T09:00:00Z",
+            "source":"tokenfuse","type":"policy_deny","severity":"high",
+            "agent_id":"agent://acme.example/triage","run_id":"run-1",
+            "delegation_proof":{"jti":"tok-1","iss":"https://vouchryx.acme.example"},
+            "data":{}}"#,
+    )
+    .expect("the envelope is still an envelope");
+    assert!(ing.meta.basis.delegation_proof.is_none());
+}

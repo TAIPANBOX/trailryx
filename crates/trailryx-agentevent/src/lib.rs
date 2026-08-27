@@ -20,27 +20,28 @@
 //! has never seen is by definition something this version cannot classify. None
 //! of them is dropped and none of them is promoted.
 //!
-//! # `delegation_proof` is in the payload plane, and that is a known cost
+//! # `delegation_proof` is typed metadata, and that took a format version
 //!
 //! SPEC 5.2's `delegation_proof` records that the `on_behalf_of` chain was
-//! PROVED by an RFC 8693 token. tokenfuse has emitted it since 2026-08-26, and
-//! it lands in the payload plane here.
+//! PROVED by an RFC 8693 token. It is TYPED here, beside the chain it
+//! qualifies.
 //!
-//! **That is not where it belongs.** The chain is typed metadata and is kept, a
-//! per-event key erases the payload plane, and 5.2 reads a chain with no proof
-//! beside it as NOT proven. So an erasure downgrades a proven chain into an
-//! unproven one, silently, and 5.2 spends a MUST on exactly that downgrade.
+//! It was in the payload plane until 2026-08-27, and that was a real defect:
+//! the chain is typed and kept, a per-event key erases the payload plane, and
+//! 5.2 reads a chain with no proof beside it as NOT proven. So a routine
+//! erasure turned a proven chain into an unproven one, silently, in the store
+//! whose whole claim is that nobody can quietly alter what it holds. 5.2 spends
+//! a MUST on exactly that downgrade.
 //!
-//! It is written down here rather than fixed because `RECORD_V1` is frozen: the
-//! typed home is `basis.delegation_proof`, and that is a FORMAT change needing a
-//! version bump and a migration rather than an edit. Nothing about privacy
-//! argues for the erasable plane, since the proof carries a token id, a key
-//! thumbprint, an issuer URL and an expiry and no personal content. Only the
-//! freeze does.
+//! Fixing it needed `RECORD_V2` and a format version, because `RECORD_V1` was
+//! frozen. The migration is in the READER and nothing on disk was rewritten: a
+//! store whose claim is tamper-evidence cannot rewrite its own history to add a
+//! field, and one that did would be indistinguishable from the tampering the
+//! chain exists to catch.
 //!
-//! Until that lands, a consumer must read an absent proof on a trailryx record
-//! as "unknown" rather than as 5.2's "not proven". `estate-gates` C12 holds it
-//! as an open cross-repo finding rather than as a silence.
+//! A proof missing a member is not a weaker proof, it is an unreadable one. It
+//! goes to the payload plane WHOLE and the typed field stays empty, which is
+//! the same rule the chain itself follows one member up.
 //!
 //! # Rule two: strict at the ingest door
 //!
@@ -216,8 +217,8 @@ use std::fmt;
 use trailryx_contracts::ingest::{Cursor, Ingest, MetaDraft, PayloadPart};
 use trailryx_json::{Event, Limits, Reader};
 use trailryx_record::{
-    AgentId, Basis, ErrorCode, EventType, MapperVersion, PayloadClass, PrincipalId, RunId,
-    Severity, TenantId, Untrusted, Verdict,
+    AgentId, Basis, ErrorCode, EventType, IssuerId, KeyThumbprint, MapperVersion, PayloadClass,
+    PrincipalId, RunId, Severity, TenantId, Timestamp, TokenId, Untrusted, Verdict,
 };
 
 /// Which reading of the registry produced a record.
@@ -779,6 +780,7 @@ fn severity_for(raw: &str) -> Option<Severity> {
 /// Members this mapper reads into a typed field, and therefore does not repeat in
 /// the payload plane.
 const CONSUMED: &[&str] = &[
+    "delegation_proof",
     "schema",
     "ts",
     "type",
@@ -898,7 +900,27 @@ pub fn map_line(cfg: &EnvelopeConfig, line: &[u8], cursor: Cursor) -> Result<Ing
         // Nothing in this envelope is a basis. `data` is free-form by
         // specification, so a policy version read out of it would be a policy
         // version this store asserted on a producer's behalf.
-        basis: Basis::default(),
+        basis: Basis {
+            // SPEC 5.2, into TYPED metadata: it qualifies `on_behalf_of`, which
+            // is typed and kept, and a proof in the erasable half would let a
+            // routine erasure turn a proven chain into an unproven one.
+            //
+            // A member whose identifiers do not parse takes the whole proof to
+            // the payload plane rather than a shortened one to metadata, which
+            // is the same rule the chain itself follows one member up.
+            delegation_proof: parsed
+                .delegation_proof
+                .as_ref()
+                .and_then(|(jti, jkt, iss, exp)| {
+                    Some(trailryx_record::DelegationProof {
+                        jti: TokenId::parse(jti).ok()?,
+                        jkt: KeyThumbprint::parse(jkt).ok()?,
+                        iss: IssuerId::parse(iss).ok()?,
+                        exp: Timestamp(*exp),
+                    })
+                }),
+            ..Basis::default()
+        },
         verdict: mapping.verdict,
         error: mapping.error,
         latency_micros: None,
@@ -929,6 +951,10 @@ struct Parsed {
     agent_id: Option<String>,
     run_id: Option<String>,
     on_behalf_of: Vec<String>,
+    /// SPEC 5.2's proof, as four raw strings. Parsed here and typed later, so
+    /// a member of the wrong shape goes to the payload plane like any other
+    /// rather than being repaired into a typed field.
+    delegation_proof: Option<(String, String, String, u64)>,
     /// Everything bound for the payload plane, as `(member, rendered)`.
     rest: Vec<(String, String)>,
 }
@@ -997,6 +1023,61 @@ impl Parsed {
                             Err(_) => return Err(Rejection::NotAnEnvelope),
                         }
                     },
+                    Ok(other) => {
+                        let rendered = canonical(&mut reader, other)?;
+                        out.rest.push((name, rendered));
+                    }
+                    Err(_) => return Err(Rejection::NotAnEnvelope),
+                }
+                continue;
+            }
+
+            if name == "delegation_proof" && first {
+                // SPEC 5.2. Typed HERE rather than left in the payload plane,
+                // because the chain it qualifies is typed and kept, the payload
+                // plane is what a per-event key erases, and 5.2 reads a chain
+                // with no proof beside it as NOT proven. A proof in the
+                // erasable half means a routine erasure silently downgrades a
+                // proven chain, which 5.2 spends a MUST on.
+                //
+                // All four members or none: a partial proof is not a weaker
+                // proof, it is an unreadable one, and it goes to the payload
+                // plane whole so a reader can still see what arrived.
+                match reader.value() {
+                    Ok(Event::ObjectStart) => {
+                        let (mut jti, mut jkt, mut iss, mut exp) = (None, None, None, None);
+                        loop {
+                            match reader.next_name() {
+                                Ok(Some(key)) => {
+                                    let key = key.into_owned();
+                                    match (key.as_str(), reader.value()) {
+                                        ("jti", Ok(Event::Str(t))) => jti = Some(t.into_owned()),
+                                        ("jkt", Ok(Event::Str(t))) => jkt = Some(t.into_owned()),
+                                        ("iss", Ok(Event::Str(t))) => iss = Some(t.into_owned()),
+                                        ("exp", Ok(Event::Number(n))) => {
+                                            exp = std::str::from_utf8(n.raw())
+                                                .ok()
+                                                .and_then(|t| t.parse::<u64>().ok());
+                                        }
+                                        (_, Ok(other)) => {
+                                            let _ = canonical(&mut reader, other)?;
+                                        }
+                                        (_, Err(_)) => return Err(Rejection::NotAnEnvelope),
+                                    }
+                                }
+                                Ok(None) => break,
+                                Err(_) => return Err(Rejection::NotAnEnvelope),
+                            }
+                        }
+                        match (jti, jkt, iss, exp) {
+                            (Some(jti), Some(jkt), Some(iss), Some(exp)) => {
+                                out.delegation_proof = Some((jti, jkt, iss, exp));
+                            }
+                            _ => {
+                                out.rest.push((name, "{}".to_string()));
+                            }
+                        }
+                    }
                     Ok(other) => {
                         let rendered = canonical(&mut reader, other)?;
                         out.rest.push((name, rendered));

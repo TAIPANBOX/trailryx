@@ -8,10 +8,10 @@
 
 use crate::pb;
 use trailryx_record::{
-    AgentId, Algorithms, Basis, ErrorCode, EventType, HASH_BYTES, Hash, HashAlg, KemAlg,
-    MapperVersion, ModelId, Outcome, PayloadClass, PayloadRef, PolicyVersion, PrincipalId, Record,
-    RecordId, RunId, SegmentId, Severity, ShardIx, SigAlg, TenantId, Timestamp, ToolName,
-    Untrusted, Verdict,
+    AgentId, Algorithms, Basis, DelegationProof, ErrorCode, EventType, HASH_BYTES, Hash, HashAlg,
+    IssuerId, KemAlg, KeyThumbprint, MapperVersion, ModelId, Outcome, PayloadClass, PayloadRef,
+    PolicyVersion, PrincipalId, Record, RecordId, RunId, SegmentId, Severity, ShardIx, SigAlg,
+    TenantId, Timestamp, TokenId, ToolName, Untrusted, Verdict,
 };
 
 /// Why a message that arrived could not become a record.
@@ -339,6 +339,16 @@ pub fn to_wire(record: &Record) -> pb::Record {
                 .iter()
                 .map(|p| p.as_str().to_owned())
                 .collect(),
+            delegation_proof: record
+                .basis
+                .delegation_proof
+                .as_ref()
+                .map(|p| pb::DelegationProof {
+                    jti: p.jti.as_str().to_owned(),
+                    jkt: p.jkt.as_str().to_owned(),
+                    iss: p.iss.as_str().to_owned(),
+                    exp: p.exp.as_nanos() as i64,
+                }),
         }),
         caused_by: record.caused_by.iter().copied().map(id_to_wire).collect(),
         outcome: Some(pb::Outcome {
@@ -444,6 +454,21 @@ pub fn from_wire(wire: pb::Record) -> Result<Record, WireError> {
                 .into_iter()
                 .map(|p| ident("basis.identity_chain", PrincipalId::parse(p)))
                 .collect::<Result<_, _>>()?,
+            // Re-parsed through the constructors like every other identifier
+            // here: a peer is not a trusted input, and a value that decoded
+            // straight into a typed id would carry a shape the type system
+            // promises is impossible.
+            delegation_proof: basis
+                .delegation_proof
+                .map(|p| -> Result<DelegationProof, WireError> {
+                    Ok(DelegationProof {
+                        jti: ident("basis.delegation_proof.jti", TokenId::parse(p.jti))?,
+                        jkt: ident("basis.delegation_proof.jkt", KeyThumbprint::parse(p.jkt))?,
+                        iss: ident("basis.delegation_proof.iss", IssuerId::parse(p.iss))?,
+                        exp: Timestamp(u64::try_from(p.exp).unwrap_or(0)),
+                    })
+                })
+                .transpose()?,
         },
         caused_by: wire
             .caused_by
@@ -531,6 +556,7 @@ mod tests {
                 identity_chain: vec![
                     PrincipalId::parse("user://acme-bank.example/ivan").expect("a principal"),
                 ],
+                delegation_proof: None,
             },
             caused_by: vec![RecordId(1), RecordId(u128::MAX)],
             outcome: Outcome {

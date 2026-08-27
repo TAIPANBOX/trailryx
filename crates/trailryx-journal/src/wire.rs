@@ -28,13 +28,29 @@
 
 use trailryx_record::{AgentId, ids::IdError};
 use trailryx_record::{
-    Algorithms, Basis, ErrorCode, EventType, HASH_BYTES, Hash, HashAlg, KemAlg, MapperVersion,
-    ModelId, Outcome, PayloadClass, PayloadRef, PolicyVersion, PrincipalId, Record, RecordId,
-    RunId, SegmentId, Severity, ShardIx, SigAlg, TenantId, Timestamp, ToolName, Untrusted, Verdict,
+    Algorithms, Basis, DelegationProof, ErrorCode, EventType, HASH_BYTES, Hash, HashAlg, IssuerId,
+    KemAlg, KeyThumbprint, MapperVersion, ModelId, Outcome, PayloadClass, PayloadRef,
+    PolicyVersion, PrincipalId, Record, RecordId, RunId, SegmentId, Severity, ShardIx, SigAlg,
+    TenantId, Timestamp, TokenId, ToolName, Untrusted, Verdict,
 };
 
 pub const FRAME_MAGIC: u8 = 0xA7;
-pub const FRAME_VERSION: u8 = 1;
+/// The frame version this writer emits.
+///
+/// Moved to 2 on 2026-08-27, when `basis.delegation_proof` was added
+/// (agent-passport SPEC 5.2). Records already on disk are NOT rewritten: a
+/// store whose whole claim is tamper-evidence cannot rewrite its own history to
+/// add a field, and a migration that did would be indistinguishable from the
+/// tampering the chain exists to catch. So the migration lives in the reader.
+pub const FRAME_VERSION: u8 = 2;
+
+/// The oldest frame this reader accepts.
+///
+/// A v1 frame decodes into a record whose `delegation_proof` is `None`, which
+/// SPEC 5.2 already defines as NOT PROVEN rather than unknown. So the only
+/// thing that changes about an old record is that a field it never had reads as
+/// absent, which is what its absence always meant.
+pub const OLDEST_FRAME_VERSION: u8 = 1;
 pub const SEGMENT_MAGIC: &[u8; 4] = b"TRLX";
 pub const FORMAT_VERSION: u16 = 1;
 
@@ -439,6 +455,19 @@ pub fn encode_record(rec: &Record) -> Vec<u8> {
     kem_alg::put(&mut w, rec.algorithms.kem);
     w.varint(u64::from(rec.mapper.0));
 
+    // v2 adds `basis.delegation_proof`, and it is written LAST rather than
+    // beside the rest of the basis. The body is a fixed field order with no
+    // tags, so a v1 decoder reads positionally: putting this in the middle
+    // would move every field after it and make a v1 body undecodable by any
+    // reader that knew only v1. Appended, a v2 body IS a v1 body with more
+    // after it, and the version says whether to read the more.
+    w.opt(rec.basis.delegation_proof.as_ref(), |w, p| {
+        w.str(p.jti.as_str());
+        w.str(p.jkt.as_str());
+        w.str(p.iss.as_str());
+        w.varint(p.exp.as_nanos());
+    });
+
     w.into_bytes()
 }
 
@@ -447,6 +476,16 @@ fn id<T>(field: &'static str, r: Result<T, IdError>) -> WireResult<T> {
 }
 
 pub fn decode_record(bytes: &[u8]) -> WireResult<Record> {
+    decode_record_at(bytes, FRAME_VERSION)
+}
+
+/// Decode a body written under `version`.
+///
+/// The version is a parameter and not a guess, because the body carries no
+/// tags: what fields are present is a fact about the frame that wrapped it.
+/// Reading a v1 body as v2 would run off the end; reading a v2 body as v1 would
+/// leave bytes over, which `finish` refuses.
+pub fn decode_record_at(bytes: &[u8], version: u8) -> WireResult<Record> {
     let mut r = Reader::new(bytes);
 
     let rec_id = RecordId(r.u128()?);
@@ -467,7 +506,7 @@ pub fn decode_record(bytes: &[u8]) -> WireResult<Record> {
     let event_type = event_type::get(&mut r)?;
     let severity = severity::get(&mut r)?;
 
-    let basis = Basis {
+    let mut basis = Basis {
         policy_version: r.opt(|r| id("basis.policy_version", PolicyVersion::parse(r.str()?)))?,
         budget_remaining_micros: r.opt(Reader::varint_i64)?,
         memory_ref: r.opt(Reader::hash)?,
@@ -478,6 +517,9 @@ pub fn decode_record(bytes: &[u8]) -> WireResult<Record> {
         prompt_hash: r.opt(Reader::hash)?,
         tool_manifest: r.seq(|r| id("basis.tool_manifest", ToolName::parse(r.str()?)))?,
         identity_chain: r.seq(|r| id("basis.identity_chain", PrincipalId::parse(r.str()?)))?,
+        // v2 fills this below, after the fields v1 also has. A v1 body leaves
+        // it None, which SPEC 5.2 defines as NOT proven.
+        delegation_proof: None,
     };
 
     let caused_by = r.seq(|r| Ok(RecordId(r.u128()?)))?;
@@ -509,6 +551,20 @@ pub fn decode_record(bytes: &[u8]) -> WireResult<Record> {
         kem: kem_alg::get(&mut r)?,
     };
     let mapper = MapperVersion(u16::try_from(r.varint()?).map_err(|_| WireError::Truncated)?);
+
+    // v2's trailing field. A v1 body simply has nothing here, and `finish`
+    // below is what turns "read as the wrong version" into an error rather
+    // than into a record with the wrong shape.
+    if version >= 2 {
+        basis.delegation_proof = r.opt(|r| {
+            Ok(DelegationProof {
+                jti: id("basis.delegation_proof.jti", TokenId::parse(r.str()?))?,
+                jkt: id("basis.delegation_proof.jkt", KeyThumbprint::parse(r.str()?))?,
+                iss: id("basis.delegation_proof.iss", IssuerId::parse(r.str()?))?,
+                exp: Timestamp(r.varint()?),
+            })
+        })?;
+    }
 
     r.finish()?;
 
@@ -545,9 +601,19 @@ pub fn decode_record(bytes: &[u8]) -> WireResult<Record> {
 
 /// The bytes of one journal entry.
 pub fn encode_frame(body: &[u8], chain_link: &Hash) -> Vec<u8> {
+    encode_frame_at(body, chain_link, FRAME_VERSION)
+}
+
+/// Frame a body under an EXPLICIT version.
+///
+/// The version is inside the CRC, so a v1 frame cannot be made by writing a
+/// v2 one and patching the byte: the frame catches that, correctly, as a bad
+/// CRC. Building an older frame honestly is what a migration test needs, and
+/// there is no way to do it from outside without this.
+pub fn encode_frame_at(body: &[u8], chain_link: &Hash, version: u8) -> Vec<u8> {
     let mut w = Writer::new();
     w.u8(FRAME_MAGIC);
-    w.u8(FRAME_VERSION);
+    w.u8(version);
     w.varint(body.len() as u64);
     let mut out = w.into_bytes();
     out.extend_from_slice(body);
@@ -562,6 +628,10 @@ pub struct Frame<'a> {
     pub body: &'a [u8],
     pub chain_link: Hash,
     pub total_len: usize,
+    /// Which frame version this was written under. `decode_record` needs it:
+    /// the body is a fixed field order with no tags, so what fields are present
+    /// is a fact about the version and cannot be read off the bytes.
+    pub version: u8,
 }
 
 /// Read one frame from the front of `buf`.
@@ -574,7 +644,7 @@ pub fn decode_frame(buf: &[u8]) -> WireResult<Frame<'_>> {
         return Err(WireError::BadMagic);
     }
     let version = r.u8()?;
-    if version != FRAME_VERSION {
+    if !(OLDEST_FRAME_VERSION..=FRAME_VERSION).contains(&version) {
         return Err(WireError::UnknownVersion(version));
     }
     let len = usize::try_from(r.varint()?).map_err(|_| WireError::Truncated)?;
@@ -606,6 +676,7 @@ pub fn decode_frame(buf: &[u8]) -> WireResult<Frame<'_>> {
         body: &buf[header_len..body_end],
         chain_link: Hash(link),
         total_len: crc_end,
+        version,
     })
 }
 

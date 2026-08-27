@@ -17,9 +17,10 @@ use trailryx_federation::replication::{Refusal, accept_from};
 use trailryx_federation_grpc::{from_wire, to_wire};
 use trailryx_journal::wire::encode_record;
 use trailryx_record::{
-    AgentId, Algorithms, Basis, ErrorCode, EventType, MapperVersion, ModelId, Outcome,
-    PayloadClass, PayloadRef, PolicyVersion, PrincipalId, Record, RecordId, RunId, SegmentId,
-    Severity, ShardIx, TenantId, Timestamp, ToolName, Untrusted, Verdict,
+    AgentId, Algorithms, Basis, DelegationProof, ErrorCode, EventType, IssuerId, KeyThumbprint,
+    MapperVersion, ModelId, Outcome, PayloadClass, PayloadRef, PolicyVersion, PrincipalId, Record,
+    RecordId, RunId, SegmentId, Severity, ShardIx, TenantId, Timestamp, TokenId, ToolName,
+    Untrusted, Verdict,
 };
 
 const SHARD: ShardIx = ShardIx(0);
@@ -60,6 +61,12 @@ fn record(seq: u64, prev: Hash) -> Record {
                 ToolName::parse("send-mail").expect("a tool"),
             ],
             identity_chain: vec![PrincipalId::parse("user://analyst-7").expect("a principal")],
+            delegation_proof: Some(DelegationProof {
+                jti: TokenId::parse("tok-federated-1").unwrap(),
+                jkt: KeyThumbprint::parse("uhqrs9p3jpnqqgty-b0pxkutr6o42sr9").unwrap(),
+                iss: IssuerId::parse("https://vouchryx.acme.example").unwrap(),
+                exp: Timestamp(1_787_823_801_000_000_000),
+            }),
         },
         caused_by: vec![RecordId(11), RecordId(12), RecordId(13)],
         outcome: Outcome {
