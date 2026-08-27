@@ -20,6 +20,28 @@
 //! has never seen is by definition something this version cannot classify. None
 //! of them is dropped and none of them is promoted.
 //!
+//! # `delegation_proof` is in the payload plane, and that is a known cost
+//!
+//! SPEC 5.2's `delegation_proof` records that the `on_behalf_of` chain was
+//! PROVED by an RFC 8693 token. tokenfuse has emitted it since 2026-08-26, and
+//! it lands in the payload plane here.
+//!
+//! **That is not where it belongs.** The chain is typed metadata and is kept, a
+//! per-event key erases the payload plane, and 5.2 reads a chain with no proof
+//! beside it as NOT proven. So an erasure downgrades a proven chain into an
+//! unproven one, silently, and 5.2 spends a MUST on exactly that downgrade.
+//!
+//! It is written down here rather than fixed because `RECORD_V1` is frozen: the
+//! typed home is `basis.delegation_proof`, and that is a FORMAT change needing a
+//! version bump and a migration rather than an edit. Nothing about privacy
+//! argues for the erasable plane, since the proof carries a token id, a key
+//! thumbprint, an issuer URL and an expiry and no personal content. Only the
+//! freeze does.
+//!
+//! Until that lands, a consumer must read an absent proof on a trailryx record
+//! as "unknown" rather than as 5.2's "not proven". `estate-gates` C12 holds it
+//! as an open cross-repo finding rather than as a silence.
+//!
 //! # Rule two: strict at the ingest door
 //!
 //! Invariant 23. `trailryx-journal` reads identifiers back with the lax
