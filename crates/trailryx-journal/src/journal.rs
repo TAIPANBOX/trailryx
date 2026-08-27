@@ -8,7 +8,7 @@
 //! crash**. Nothing else in the system means anything if that is not true.
 
 use crate::wire::{
-    self, Frame, WireError, decode_frame, decode_record, decode_segment_header, encode_frame,
+    self, Frame, WireError, decode_frame, decode_record_at, decode_segment_header, encode_frame,
     encode_record, encode_segment_header,
 };
 use std::collections::{BTreeMap, VecDeque};
@@ -434,7 +434,11 @@ impl Journal {
                     break;
                 }
             };
-            let rec = match decode_record(frame.body) {
+            // The frame's OWN version, not this build's. Reading a v1 body as
+            // v2 runs off the end, which is what a real v1 segment produced:
+            // `TornTail(Truncated)` at the first frame, on bytes that were
+            // perfectly good.
+            let rec = match decode_record_at(frame.body, frame.version) {
                 Ok(r) => r,
                 Err(e) => {
                     stopped = StoppedBecause::TornTail(e);
@@ -486,7 +490,7 @@ impl Journal {
         while at < bytes.len() {
             if bytes[at] == wire::FRAME_MAGIC {
                 if let Ok(frame) = decode_frame(&bytes[at..]) {
-                    if decode_record(frame.body).is_ok() {
+                    if decode_record_at(frame.body, frame.version).is_ok() {
                         return Some(at);
                     }
                 }
