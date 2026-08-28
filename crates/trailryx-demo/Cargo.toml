@@ -57,3 +57,11 @@ tls = ["trailryx-s3/tls", "trailryx-azure/tls"]
 
 [lints]
 workspace = true
+
+[dev-dependencies]
+# Only tests/manifest.rs uses it, to read components.json and the output of
+# `cargo metadata`. This crate is one of the four on declared-deps.sh's
+# allow-list, which is why the manifest test lives here rather than beside the
+# binary it mostly talks about: the zero-dependency rule for the core and the
+# verifier is not worth bending for a test fixture.
+serde_json = "1"
