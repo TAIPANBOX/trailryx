@@ -5,6 +5,15 @@
     "crates/trailryx-node/tests/manifest.rs in this repository's own CI;",
     "`declared` is a statement nobody can verify and carries its own `why`.",
     "",
+    "AND THE TWO ROUTINE NAMES ARE COMPONENTS TOO, WHICH THIS FILE FIRST GOT WRONG.",
+    "estate.json's `runs` carries ROUTINE names and the first version of this file",
+    "carried only BINARY names, so C15 correctly reported that the registry names",
+    "two things this repository declares nothing about. idryx and verdryx had",
+    "already set the pattern -- `idryx-detect` and `verdryx-drift` are components",
+    "there, each mapping to a binary and a subcommand -- and this file broke it.",
+    "`trailryx-seal` and `record-seal` are both `trailryx-node events`; the two",
+    "names exist because the three launchers schedule it differently.",
+    "",
     "TEN BINARIES, AND estate.json NAMES NONE OF THEM. Its `runs` list is",
     "`trailryx-seal` and `record-seal`, which are ROUTINE names in two launchers,",
     "both of which run `trailryx-node events`. That is not a mistake in either",
@@ -229,6 +238,38 @@
         "what_it_is": {
           "value": "trailryx-verify",
           "why": "The offline verifier a pack is checked with, and the only binary here with no dependency on the rest."
+        }
+      }
+    },
+    {
+      "name": "trailryx-seal",
+      "class": "tool",
+      "checked": {
+        "binary": "trailryx-node",
+        "crate": "trailryx-node",
+        "workspace": ".",
+        "subcommand": "events"
+      },
+      "declared": {
+        "it_is_a_routine_name_not_a_binary": {
+          "value": "trailryx-node events",
+          "why": "The name stack-up's routines.sh and stack-k8s's CronJob use for `trailryx-node events` over the shared bus. estate.json's `runs` carries routine names, so this is the component that name refers to."
+        }
+      }
+    },
+    {
+      "name": "record-seal",
+      "class": "tool",
+      "checked": {
+        "binary": "trailryx-node",
+        "crate": "trailryx-node",
+        "workspace": ".",
+        "subcommand": "events"
+      },
+      "declared": {
+        "it_is_a_routine_name_not_a_binary": {
+          "value": "trailryx-node events",
+          "why": "The same work under stack-single's name for it: a long-running compose service rather than a scheduled job, because compose has no cron. Two names for one command, which is why both are here."
         }
       }
     }
