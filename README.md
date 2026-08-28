@@ -593,6 +593,19 @@ limits are the half worth reading. And a segment that has been sealed is never
 re-read into memory by `run`, so the process holds one open journal and nothing
 else.
 
+Throughput was the other absence on this list until 8 August 2026, when
+`./scripts/append-rate.sh` measured the APPEND rate across five `sync_every`
+policies, which is a different question from the importer's end-to-end figure
+above: this one is the field between "durable before the next record is
+written" and "durable in batches". The figures live in
+[`VALIDATION.md`](VALIDATION.md) and only there, with the machine they were
+taken on and what they exclude, for the same reason the gate's own timing does:
+the answer is a property of the disk underneath, so a copy here would be a
+second owner of a number nothing re-derives. What is worth knowing before you
+go looking is the shape: the two ends of that field are three orders of
+magnitude apart, and what a batch buys is paid for in time rather than in
+records.
+
 ## Build it instead
 
 If you would rather build than download, that is fast and it is worth saying why,
