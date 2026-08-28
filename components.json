@@ -108,6 +108,10 @@
         "what_it_is": {
           "value": "trailryx-ingest",
           "why": "The OTLP receiver, and the ONE binary the published GHCR image carries."
+        },
+        "nothing_installs_it": {
+          "value": "no launcher",
+          "why": "@claude 2026-08-28, and this is a reading rather than a decision anybody stated. Measured across stack-up, stack-single, stack-k8s and taipan: not one starts it. The estate's planes couple through a shared NDJSON bus on disk, so nothing here needs an OTLP receiver; it is the door for a fleet that already speaks OTLP and wants its spans in the record, which is somebody outside this estate. That is why it is the one binary the published GHCR image carries while every sealing command lives in `trailryx-node`, published nowhere.\\n\\nC15's `nothing-installs-it` check found this on the day it was written, which is what it is for: `tokenfuse-cluster` was found by hand and this one was found by a run. If the reading above is wrong and a deployment should serve it, this entry is the wrong answer and the right one is a launcher entry."
         }
       }
     },
