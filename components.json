@@ -1,0 +1,236 @@
+{
+  "$comment": [
+    "What this repository contributes to a running stack, and what a check may",
+    "believe about it. `checked` is proved against this repository by",
+    "crates/trailryx-node/tests/manifest.rs in this repository's own CI;",
+    "`declared` is a statement nobody can verify and carries its own `why`.",
+    "",
+    "TEN BINARIES, AND estate.json NAMES NONE OF THEM. Its `runs` list is",
+    "`trailryx-seal` and `record-seal`, which are ROUTINE names in two launchers,",
+    "both of which run `trailryx-node events`. That is not a mistake in either",
+    "file: a registry records what a deployment installs, and this records what",
+    "the repository builds. They answer different questions and only the second",
+    "one can see a binary nobody installs.",
+    "",
+    "AND THAT IS WHY `dev-tool` EXISTS AS A CLASS HERE.",
+    "",
+    "tokenfuse-cluster, one repository over, is built, tested, CI-gated and",
+    "installable by nothing, and has been for fifty-seven days. Seven of the ten",
+    "binaries here are ALSO installed by nothing, and that is correct: they are a",
+    "demo, a JSONL reader, a kill test, a rate measurement, a reproducer, a",
+    "coverage printer and a federation probe. Without a way to say so, a check",
+    "that looked for uninstalled components would flag seven right answers here",
+    "and be switched off before it ever reached the one real finding next door.",
+    "",
+    "So `dev-tool` means: nothing should install this, and its absence from every",
+    "deployment is not a finding. `service` and `tool` mean the opposite, and for",
+    "those the absence IS worth asking about.",
+    "",
+    "THE PUBLISHED IMAGE CARRIES ONE OF THE THREE. ghcr.io/taipanbox/trailryx",
+    "ships `trailryx-ingest`, and every sealing command lives in `trailryx-node`,",
+    "which is published nowhere. stack-k8s records this in its own",
+    "images/trailryx.Dockerfile and builds the sealing image from source because",
+    "of it.",
+    "",
+    "TRAILRYX_TRUST_DOMAIN IS NOT LISTED AND THAT IS DELIBERATE. stack-k8s sets it",
+    "in a ConfigMap and interpolates it into `--trust-domain` in a shell argument.",
+    "No code in this repository reads it, so it is the deployment's variable and",
+    "not this repository's, and declaring it would put a name here that nothing",
+    "in this tree would ever answer for."
+  ],
+  "schema": "taipanbox.dev/components/v1",
+  "repo": "TAIPANBOX/trailryx",
+  "components": [
+    {
+      "name": "fed-probe",
+      "class": "dev-tool",
+      "checked": {
+        "binary": "fed-probe",
+        "crate": "trailryx-federation-grpc",
+        "workspace": "."
+      },
+      "declared": {
+        "nothing_should_install_it": {
+          "value": "dev-tool",
+          "why": "One federation peer, or one query across several, from a command line."
+        }
+      }
+    },
+    {
+      "name": "trailryx-coverage",
+      "class": "dev-tool",
+      "checked": {
+        "binary": "trailryx-coverage",
+        "crate": "trailryx-compliance",
+        "workspace": "."
+      },
+      "declared": {
+        "nothing_should_install_it": {
+          "value": "dev-tool",
+          "why": "Prints what a pack proves next to what each claim needs."
+        }
+      }
+    },
+    {
+      "name": "trailryx-demo",
+      "class": "dev-tool",
+      "checked": {
+        "binary": "trailryx-demo",
+        "crate": "trailryx-demo",
+        "workspace": "."
+      },
+      "declared": {
+        "nothing_should_install_it": {
+          "value": "dev-tool",
+          "why": "The eight-step demo run."
+        }
+      }
+    },
+    {
+      "name": "trailryx-ingest",
+      "class": "service",
+      "checked": {
+        "binary": "trailryx-ingest",
+        "crate": "trailryx-ingest",
+        "workspace": ".",
+        "listen_default": "127.0.0.1:4318"
+      },
+      "declared": {
+        "what_it_is": {
+          "value": "trailryx-ingest",
+          "why": "The OTLP receiver, and the ONE binary the published GHCR image carries."
+        }
+      }
+    },
+    {
+      "name": "trailryx-jsonl",
+      "class": "dev-tool",
+      "checked": {
+        "binary": "trailryx-jsonl",
+        "crate": "trailryx-demo",
+        "workspace": "."
+      },
+      "declared": {
+        "nothing_should_install_it": {
+          "value": "dev-tool",
+          "why": "Reads a file or a pipe, for looking at one journal by hand."
+        }
+      }
+    },
+    {
+      "name": "trailryx-kill",
+      "class": "dev-tool",
+      "checked": {
+        "binary": "trailryx-kill",
+        "crate": "trailryx-demo",
+        "workspace": "."
+      },
+      "declared": {
+        "nothing_should_install_it": {
+          "value": "dev-tool",
+          "why": "The kill run: a real process, a real disk, a real SIGKILL."
+        }
+      }
+    },
+    {
+      "name": "trailryx-node",
+      "class": "tool",
+      "checked": {
+        "binary": "trailryx-node",
+        "crate": "trailryx-node",
+        "workspace": ".",
+        "subcommands": [
+          "run",
+          "read",
+          "events"
+        ],
+        "env": {
+          "TRAILRYX_AZURE_ACCOUNT": {
+            "required": false
+          },
+          "TRAILRYX_AZURE_CONTAINER": {
+            "required": false
+          },
+          "TRAILRYX_AZURE_ENDPOINT": {
+            "required": false
+          },
+          "TRAILRYX_AZURE_KEY": {
+            "required": false
+          },
+          "TRAILRYX_DEMO_STORE": {
+            "required": false
+          },
+          "TRAILRYX_S3_ADDRESSING": {
+            "required": false
+          },
+          "TRAILRYX_S3_BUCKET": {
+            "required": false
+          },
+          "TRAILRYX_S3_ENDPOINT": {
+            "required": false
+          },
+          "TRAILRYX_S3_KEY": {
+            "required": false
+          },
+          "TRAILRYX_S3_REGION": {
+            "required": false
+          },
+          "TRAILRYX_S3_SECRET": {
+            "required": false
+          }
+        }
+      },
+      "declared": {
+        "what_it_is": {
+          "value": "trailryx-node",
+          "why": "The sealing tool. Every deployment's record profile runs `trailryx-node events` and then `read --pack`."
+        }
+      }
+    },
+    {
+      "name": "trailryx-rate",
+      "class": "dev-tool",
+      "checked": {
+        "binary": "trailryx-rate",
+        "crate": "trailryx-demo",
+        "workspace": "."
+      },
+      "declared": {
+        "nothing_should_install_it": {
+          "value": "dev-tool",
+          "why": "The append-rate measurement, against a real filesystem."
+        }
+      }
+    },
+    {
+      "name": "trailryx-sim-run",
+      "class": "dev-tool",
+      "checked": {
+        "binary": "trailryx-sim-run",
+        "crate": "trailryx-core",
+        "workspace": "."
+      },
+      "declared": {
+        "nothing_should_install_it": {
+          "value": "dev-tool",
+          "why": "One command to reproduce any run."
+        }
+      }
+    },
+    {
+      "name": "trailryx-verify",
+      "class": "tool",
+      "checked": {
+        "binary": "trailryx-verify",
+        "crate": "trailryx-verify",
+        "workspace": "."
+      },
+      "declared": {
+        "what_it_is": {
+          "value": "trailryx-verify",
+          "why": "The offline verifier a pack is checked with, and the only binary here with no dependency on the rest."
+        }
+      }
+    }
+  ]
+}
