@@ -75,10 +75,13 @@
 //! `fanout_explosion`, `crypto_finding`, `crypto_drift`, `policy_violation`,
 //! `evidence_signed`, `eval_run`, `quality_score`, `quality_drift`, `slo_burn`,
 //! `sim_run`, `sim_finding`, `blast_radius_measured`, `console_command`,
-//! `policy_updated`, `taint_raised`, `delegation_issued`, `delegation_denied`
-//! and `delegation_revoked`.
+//! `policy_updated`, `taint_raised`, `delegation_issued`, `delegation_denied`,
+//! `delegation_revoked`, `anomaly_triaged`, `anomaly_explained`,
+//! `anomaly_accepted`, `anomaly_dismissed`, `budgets_set`, `forecast_frozen`,
+//! `explainer_published`, `sprint_planned`, `agent_hired`, `agent_rebriefed`,
+//! `agent_state_changed`, `agent_removed` and `agent_transferred`.
 //!
-//! They are three kinds and the sentence that used to cover them named one.
+//! They are four kinds and the sentence that used to cover them named one.
 //! Most are a finding or an observation about infrastructure rather than a
 //! decision an agent took. The last two are the other kind: an operator acting
 //! ON the stack, a console command or a policy rewritten through the
@@ -106,6 +109,29 @@
 //! tell a decision from an omission. It was an omission. `estate-gates` C8
 //! now compares the registry against these two lists and reports a registered
 //! type that appears on neither.
+//!
+//! The last thirteen are the fourth kind, and they arrived when costcrew was
+//! registered in SPEC 6.2 on 28 August 2026. They are about a PRACTICE rather
+//! than a run: a finding was triaged, an agent was hired, a sprint was planned,
+//! a forecast was frozen. That producer argues the refusal itself, in
+//! `internal/stack/vocabulary.go`, and argues it the right way round: the
+//! shared vocabulary is about a RUN, a budget checked, a policy decided, a tool
+//! called, and inventing an equivalent for a roster change would be a false
+//! claim in a record somebody audits. An agent being hired is not a policy
+//! decision. A sprint being planned is not a tool call.
+//!
+//! Two of that console's types are NOT here, and the difference is the whole
+//! point of the split: it renames `anomaly_detected` to `spend_spike` and
+//! `guard_passed` to `budget_threshold` on the way out, because those two ARE
+//! the shared thing found the same way. Both are mapped below, and the original
+//! travels in the payload under `costcrew_type` so a reader can still tell
+//! which of that console's decisions produced the record.
+//!
+//! It also considered `budget_exhausted` and rejected it, which is a refusal
+//! worth knowing about from this side: that type maps here to a DENIED verdict,
+//! and the console denies nothing. Every `budget_threshold` it emits carries
+//! `enforced: false`, stamped by the translation rather than by the caller, so
+//! nothing it writes can put a refusal that never happened into this record.
 //!
 //! The last three are the third kind, and they are the hardest refusal in this
 //! table because they are so nearly mappable. A delegation IS a decision, it IS
