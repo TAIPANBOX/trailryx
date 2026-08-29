@@ -90,8 +90,14 @@ flowchart TB
   WX -.->|"allow / deny / hold"| TF
   TF -->|"cheapest model, budget OK"| LLM[("LLM provider")]
   TF -->|"CallRecords"| CL["TokenFuse Cloud: control plane, incidents, replay, evidence, kill-switch"]
+  VCX["Vouchryx: delegation proved, and endable"] -->|"short-lived token: act + cnf"| TF
+  TF -.->|"polls /v1/revocations"| VCX
+  VCX ==> BUS
   TF ==>|"agent-event NDJSON"| BUS{{"agent-event bus + Agent Passport"}}
   WX ==> BUS
+  Agent -->|"web fetch"| SCX["Scopyx: governed web egress"]
+  SCX -->|"POST /v1/decide"| WX
+  SCX ==> BUS
   ENG["Engram: memory"] -->|"reflect via base_url"| TF
   ENG ==> BUS
   BUS ==> IDX["Idryx: identity graph, detectors, Agent-BOM"]
@@ -101,6 +107,8 @@ flowchart TB
   TF -->|"outcome-tagged traces"| VX
   MX["Mockryx: pre-prod safety rehearsal"] -->|"hostile scenarios"| TF
   MX ==>|"sim events"| BUS
+  BILL[("cloud, SaaS and model bills")] --> CC["CostCrew: the bill, worked by a crew of agents"]
+  CC ==> BUS
   BUS ==> TRX["Trailryx: the record plane, sealed and packed"]
   BUS ==> HX["heraldyx: reads the log, mails you"]
   HX -->|"one mail, a view and never an action"| OPS["your mailbox"]
@@ -112,6 +120,8 @@ flowchart TB
   GX -.->|"reads it"| VX
   GX -.->|"reads it"| MX
   GX -.->|"reads it"| ENG
+  GX -.->|"reads it"| SCX
+  GX -.->|"reads it"| CC
   TFP["terraform-provider-taipan"] -->|"budgets + passports as code"| CL
   ASG[["agent-stack-go: shared Go contract"]] -.->|imported by| IDX
   ASG -.->|imported by| WX
