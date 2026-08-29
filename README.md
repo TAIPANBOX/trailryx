@@ -13,6 +13,14 @@
 ![Unsafe](https://img.shields.io/badge/unsafe-forbidden-success.svg)
 
 </div>
+<div align="center">
+
+<img src="docs/architecture.png" alt="trailryx architecture: OTLP traces and the shared agent-event bus go in, records are chained per shard and sealed with the one before them, an auditor's four questions each have an arithmetic answer, and the estate seals nightly" width="960">
+
+<sub>The same plane as its room on <a href="https://it-rat.com/services/trailryx.html">it-rat.com</a> draws it.</sub>
+
+</div>
+
 
 An agent is partway through a customer's request when it runs into its spending
 limit, and refuses. Months later somebody asks why: the customer, an auditor, a
@@ -67,6 +75,57 @@ Two sentences carry the whole design.
 </div>
 
 ---
+
+
+## Where this fits in the stack
+
+Trailryx is the record plane. It reads the same agent-event bus the other planes
+write, maps what it can and names what it refuses, and seals the result into a
+chain an auditor can verify without trusting the operator.
+
+```mermaid
+flowchart TB
+  Agent["AI agent (any framework)"] -->|"LLM call (base-URL swap)"| TF["TokenFuse proxy: spend + enforcement"]
+  TF -->|"POST /v1/decide (PEP)"| WX["Wardryx: policy PDP"]
+  WX -.->|"allow / deny / hold"| TF
+  TF -->|"cheapest model, budget OK"| LLM[("LLM provider")]
+  TF -->|"CallRecords"| CL["TokenFuse Cloud: control plane, incidents, replay, evidence, kill-switch"]
+  TF ==>|"agent-event NDJSON"| BUS{{"agent-event bus + Agent Passport"}}
+  WX ==> BUS
+  ENG["Engram: memory"] -->|"reflect via base_url"| TF
+  ENG ==> BUS
+  BUS ==> IDX["Idryx: identity graph, detectors, Agent-BOM"]
+  BUS ==> QX["Qryx: crypto / PQC, passport + hash-chain scan"]
+  BUS ==> VX["Verdryx: quality / drift"]
+  VX ==>|"quality events"| BUS
+  TF -->|"outcome-tagged traces"| VX
+  MX["Mockryx: pre-prod safety rehearsal"] -->|"hostile scenarios"| TF
+  MX ==>|"sim events"| BUS
+  BUS ==> TRX["Trailryx: the record plane, sealed and packed"]
+  BUS ==> HX["heraldyx: reads the log, mails you"]
+  HX -->|"one mail, a view and never an action"| OPS["your mailbox"]
+  YOU(["you, in a browser over your own tunnel"]) --> GX[["Genaryx: the console over all of it"]]
+  GX -->|"signed commands: the kill, an approval, a policy"| CL
+  GX -->|"signed commands"| WX
+  GX -.->|"reads it"| IDX
+  GX -.->|"reads it"| QX
+  GX -.->|"reads it"| VX
+  GX -.->|"reads it"| MX
+  GX -.->|"reads it"| ENG
+  TFP["terraform-provider-taipan"] -->|"budgets + passports as code"| CL
+  ASG[["agent-stack-go: shared Go contract"]] -.->|imported by| IDX
+  ASG -.->|imported by| WX
+  ASG -.->|imported by| MX
+  ASG -.->|imported by| TFP
+  ASG -.->|imported by| HX
+  ASG -.->|imported by| QX
+  SPEC[["agent-passport: the spec"]] -.->|governs| BUS
+```
+
+`stack-up` runs the seal at 06:57 by default and the Kubernetes install has a
+nightly job that packs the ledger and verifies the pack before it exits. The one
+gap left: the console has no panel for this plane, so what is sealed is read with
+the CLI rather than in a browser.
 
 ## See it do all of it
 
@@ -2178,3 +2237,17 @@ audit lasts forever.
 ## Licence
 
 Apache-2.0.
+
+## Status
+
+- [x] Chain per shard, sealed segments, packs verified before a run exits 0
+- [x] The offline verifier: a separate binary, zero dependencies, unsafe forbidden
+- [x] Reads the shared agent-event bus, and names the types it refuses
+- [x] A run that maps nothing does not advance its cursor
+- [x] Installed by `stack-up` and by the Kubernetes profile
+- [ ] A panel in the console; today the record is read with the CLI
+- [ ] One box with several trust domains cannot be sealed in a single pass
+
+## Licence
+
+Apache-2.0, like the rest of the stack. See [LICENSE](./LICENSE).
