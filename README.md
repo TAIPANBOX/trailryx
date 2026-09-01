@@ -519,8 +519,10 @@ What is in the image is `trailryx-ingest`: it accepts OTLP over HTTP, refuses
 what it should refuse, and hands what arrives to whatever embeds it. **It stores
 nothing.** Its drain thread counts records and lets them go, which was right for
 a receiver and wrong for a page that called it the server. The process that
-stores is `trailryx-node`, one section below, and it is built from source today
-rather than shipped in this image.
+stores is `trailryx-node`, and it has an image of its own, one section below.
+Not the same image: this one is `FROM scratch` and spends that on an argument
+about what is underneath a receiver, and the store's needs a shell to be useful
+to a scheduler.
 
 An immutable tag, never `latest`, so a pod that restarts comes back as the same
 program. `FROM scratch` with one statically linked file inside it: `trailryx-ingest`
@@ -564,6 +566,19 @@ directories of different lengths and refuses if a byte differs, which is what ma
 that checksum worth checking rather than worth reading.
 
 ## Run it as a store
+
+As an image, since v0.1.2:
+
+```bash
+docker pull ghcr.io/taipanbox/trailryx-node:v0.1.2
+```
+
+It carries `trailryx-node` and `trailryx-verify` on busybox, and it has no
+default command: a job that is told what to do cannot open a port because
+somebody forgot an argument. The binaries in it are the same bytes the release
+page serves, for the reason the receiver's image gives.
+
+Or from source, which needs nothing but a toolchain:
 
 ```bash
 cargo build --release --bin trailryx-node
