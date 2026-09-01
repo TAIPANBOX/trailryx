@@ -1,0 +1,49 @@
+# The record plane as an image, beside the receiver rather than inside it.
+#
+# WHY THIS IS A SECOND FILE AND NOT A SECOND COPY IN THE FIRST
+#
+# `Dockerfile` is FROM scratch with one statically linked file, and that is an
+# argument rather than a preference: `trailryx-ingest` has zero third-party
+# crates, so there is nothing under it to patch, to scan, or to explain to
+# whoever runs it beside their own workloads. Adding a shell and two more
+# binaries to it would spend that argument to save a file.
+#
+# What needs the shell is the consumer. A deployment that seals on a schedule
+# loops over the event files it finds, stamps a pack name from the clock and
+# runs the verifier on the result, which is four shell builtins and `date`. So
+# this image carries busybox, and the receiver's image carries nothing.
+#
+# The binaries are the SAME BYTES as the release page's, copied in by
+# `.github/workflows/release.yml` from the artifacts the build job produced.
+# Two builds of one tag are two answers to one question.
+#
+# The context holds one directory per architecture, named the way buildx names
+# them, exactly as `Dockerfile` does:
+#
+#   ctx-node/amd64/{trailryx-node,trailryx-verify}
+#   ctx-node/arm64/{trailryx-node,trailryx-verify}
+
+# Pinned by digest, not by tag. A base that moves makes a pod that comes back
+# different after a restart nobody ran, which is the same property the image
+# tag below is chosen for; pinning one and letting the other drift would be
+# holding half a rule.
+FROM busybox@sha256:fc6dddc4c44b1bfe37f41cae8e67d1693828e8f42a91862816d7953e2c9d3f23
+
+# Set by buildx for every platform it builds. Declared, because an undeclared
+# TARGETARCH expands to nothing and the COPY below silently takes the wrong
+# path rather than failing.
+ARG TARGETARCH
+
+COPY ${TARGETARCH}/trailryx-node   /usr/local/bin/trailryx-node
+COPY ${TARGETARCH}/trailryx-verify /usr/local/bin/trailryx-verify
+
+# Numeric, because a name needs an /etc/passwd entry to resolve against and a
+# kubelet running with runAsNonRoot cannot verify one anyway: it refuses the
+# container outright. 10001 is the id the stack's own manifests pin.
+USER 10001:10001
+
+# No EXPOSE and no CMD. This image is run as a job that is told what to do, and
+# a default that started a server would be a port opened by whoever forgot to
+# pass arguments. `serve`, `events`, `read` and the verifier are all reached by
+# naming them.
+ENTRYPOINT []

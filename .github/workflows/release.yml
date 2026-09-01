@@ -105,9 +105,17 @@ jobs:
       # in the tag rather than from whatever resolved that morning. Without it a
       # published artifact cannot be rebuilt from its own commit.
       - name: build
+        shell: bash
         run: |
-          cargo build --release --locked --target ${{ matrix.target }} \
-            --bin trailryx-verify --bin trailryx-ingest
+          bins=(--bin trailryx-verify --bin trailryx-ingest)
+          # trailryx-node only on the musl legs. The one thing that consumes it
+          # is the cluster image below, which is Linux, and adding it to the
+          # macOS legs would let a release fail on a platform nothing is asking
+          # for it on.
+          case "${{ matrix.target }}" in
+            *-linux-musl) bins+=(--bin trailryx-node) ;;
+          esac
+          cargo build --release --locked --target ${{ matrix.target }} "${bins[@]}"
 
       # Named by target, because a file called `trailryx-verify` from four
       # different platforms in one directory is four files that overwrite each
@@ -116,7 +124,11 @@ jobs:
         shell: bash
         run: |
           mkdir -p dist
-          for bin in trailryx-verify trailryx-ingest; do
+          for bin in trailryx-verify trailryx-ingest trailryx-node; do
+            # Skipped rather than failed: trailryx-node is built on the musl
+            # legs only, and a loop that insisted on it would break the macOS
+            # ones for a file they were never asked to produce.
+            [ -f "target/${{ matrix.target }}/release/$bin" ] || continue
             cp "target/${{ matrix.target }}/release/$bin" "dist/$bin-${{ matrix.target }}"
           done
           cd dist
@@ -222,3 +234,69 @@ jobs:
           platforms: linux/amd64,linux/arm64
           push: true
           tags: ghcr.io/taipanbox/trailryx:${{ github.ref_name }}
+
+  # The record plane, as a second image.
+  #
+  # Separate from the receiver above because the two are not the same shape and
+  # should not be made into one: `Dockerfile` is FROM scratch and spends that on
+  # an argument about what is underneath `trailryx-ingest`, while a deployment
+  # that seals on a schedule needs a shell to loop over its event files. See the
+  # header of Dockerfile.node.
+  #
+  # THE DECISION THIS ENCODES, said out loud because the comment above asked for
+  # it. Trailryx is a separate product, and the image job above says nothing in
+  # stack-k8s should pull it "without that being decided on its own". It has now
+  # been decided, on 2026-09-01: stack-k8s built `trailryx-node` from source on
+  # every deploy, which cost a full Rust build per install and, on GCP and AWS,
+  # was not done at all, so the record-seal CronJob those clouds applied could
+  # never run. Publishing the binary it needs is what lets that stop being true.
+  # What is NOT decided here is anything about coupling the products: this
+  # publishes an artifact, and whether a deployment pulls it stays that
+  # deployment's own choice, pinned by tag.
+  node-image:
+    name: ghcr image, the node
+    needs: binaries
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/download-artifact@v8
+        with:
+          pattern: dist-*-linux-musl
+          merge-multiple: true
+          path: dist
+
+      # The same bytes the release page serves, for the same reason the receiver
+      # image gives: two builds of one tag are two answers to one question.
+      - name: layout for buildx
+        run: |
+          mkdir -p ctx-node/amd64 ctx-node/arm64
+          for pair in amd64:x86_64 arm64:aarch64; do
+            arch="${pair%%:*}"; triple="${pair##*:}-unknown-linux-musl"
+            for bin in trailryx-node trailryx-verify; do
+              cp "dist/$bin-$triple" "ctx-node/$arch/$bin"
+              chmod +x "ctx-node/$arch/$bin"
+            done
+          done
+          cp Dockerfile.node ctx-node/Dockerfile
+
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: build and push
+        uses: docker/build-push-action@v6
+        with:
+          context: ctx-node
+          file: ctx-node/Dockerfile
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ghcr.io/taipanbox/trailryx-node:${{ github.ref_name }}
