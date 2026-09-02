@@ -79,8 +79,9 @@
 //! `delegation_revoked`, `anomaly_triaged`, `anomaly_explained`,
 //! `anomaly_accepted`, `anomaly_dismissed`, `budgets_set`, `forecast_frozen`,
 //! `explainer_published`, `sprint_planned`, `agent_hired`, `agent_rebriefed`,
-//! `agent_state_changed`, `agent_removed`, `agent_transferred` and
-//! `generated_estate_replaced`.
+//! `agent_state_changed`, `agent_removed`, `agent_transferred`,
+//! `generated_estate_replaced`, `option_refused`, `option_applied` and
+//! `decision_requested`.
 //!
 //! They are four kinds and the sentence that used to cover them named one.
 //! Most are a finding or an observation about infrastructure rather than a
@@ -113,15 +114,21 @@
 //! now compares the registry against these two lists and reports a registered
 //! type that appears on neither.
 //!
-//! The last thirteen are the fourth kind, and they arrived when costcrew was
-//! registered in SPEC 6.2 on 28 August 2026. They are about a PRACTICE rather
-//! than a run: a finding was triaged, an agent was hired, a sprint was planned,
-//! a forecast was frozen. That producer argues the refusal itself, in
+//! The last sixteen are the fourth kind. Thirteen arrived when costcrew was
+//! registered in SPEC 6.2 on 28 August 2026, and three more, `option_refused`,
+//! `option_applied` and `decision_requested`, followed it from
+//! TAIPANBOX/costcrew#23. All are about a PRACTICE rather than a run: a
+//! finding was triaged, an agent was hired, a sprint was planned, an option
+//! was stamped. That producer argues the refusal itself, in
 //! `internal/stack/vocabulary.go`, and argues it the right way round: the
-//! shared vocabulary is about a RUN, a budget checked, a policy decided, a tool
-//! called, and inventing an equivalent for a roster change would be a false
-//! claim in a record somebody audits. An agent being hired is not a policy
-//! decision. A sprint being planned is not a tool call.
+//! shared vocabulary is about a RUN, a budget checked, a policy decided, a
+//! tool called, and inventing an equivalent for a roster change or a document
+//! review would be a false claim in a record somebody audits, a
+//! console-internal workflow step with no AI Act record-keeping meaning of
+//! its own. An agent being hired is not a policy decision. A sprint being
+//! planned is not a tool call, and costcrew names the kinship itself:
+//! `decisionRequested` is written as a `sprint_planned`-style event, on
+//! purpose.
 //!
 //! Two of that console's types are NOT here, and the difference is the whole
 //! point of the split: it renames `anomaly_detected` to `spend_spike` and
@@ -291,7 +298,7 @@ use trailryx_record::{
 /// was ever let through. Anybody comparing a shadow week against an enforced
 /// one across that boundary would otherwise conclude that enforcement had
 /// stopped things nothing had ever permitted.
-pub const MAPPER_VERSION: MapperVersion = MapperVersion(107);
+pub const MAPPER_VERSION: MapperVersion = MapperVersion(108);
 
 /// The schema values this reader accepts.
 ///
