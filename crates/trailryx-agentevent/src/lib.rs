@@ -79,16 +79,19 @@
 //! `delegation_revoked`, `anomaly_triaged`, `anomaly_explained`,
 //! `anomaly_accepted`, `anomaly_dismissed`, `budgets_set`, `forecast_frozen`,
 //! `explainer_published`, `sprint_planned`, `agent_hired`, `agent_rebriefed`,
-//! `agent_state_changed`, `agent_removed` and `agent_transferred`.
+//! `agent_state_changed`, `agent_removed`, `agent_transferred` and
+//! `generated_estate_replaced`.
 //!
 //! They are four kinds and the sentence that used to cover them named one.
 //! Most are a finding or an observation about infrastructure rather than a
-//! decision an agent took. The last two are the other kind: an operator acting
-//! ON the stack, a console command or a policy rewritten through the
-//! policy-as-code API, which is a decision and is simply not an agent's. This
-//! store's subject axis is `agent_id`, every trail hangs off it, and both of
-//! those arrive carrying a synthetic identity naming an API rather than an
-//! agent (`agent://wardryx.internal/admin/policy-api` for `policy_updated`).
+//! decision an agent took. The last three are the other kind: an operator acting
+//! ON the stack, a console command, a policy rewritten through the
+//! policy-as-code API, or a console's generated estate replaced with real
+//! charges by a person (`generated_estate_replaced`, costcrew), each a decision
+//! and simply not an agent's. This store's subject axis is `agent_id`, every
+//! trail hangs off it, and all three arrive carrying a synthetic identity
+//! naming an API or a console rather than an agent
+//! (`agent://wardryx.internal/admin/policy-api` for `policy_updated`).
 //! A record filed under that subject would put an administrator's action in
 //! the trail of an agent that does not exist.
 //!
@@ -288,7 +291,7 @@ use trailryx_record::{
 /// was ever let through. Anybody comparing a shadow week against an enforced
 /// one across that boundary would otherwise conclude that enforcement had
 /// stopped things nothing had ever permitted.
-pub const MAPPER_VERSION: MapperVersion = MapperVersion(106);
+pub const MAPPER_VERSION: MapperVersion = MapperVersion(107);
 
 /// The schema values this reader accepts.
 ///
