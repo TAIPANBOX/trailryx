@@ -81,7 +81,7 @@
 //! `explainer_published`, `sprint_planned`, `agent_hired`, `agent_rebriefed`,
 //! `agent_state_changed`, `agent_removed`, `agent_transferred`,
 //! `generated_estate_replaced`, `option_refused`, `option_applied`,
-//! `decision_requested`, `cadence_set` and `crew_ran`.
+//! `decision_requested`, `cadence_set`, `crew_ran` and `plan_asked`.
 //!
 //! They are four kinds and the sentence that used to cover them named one.
 //! Most are a finding or an observation about infrastructure rather than a
@@ -114,27 +114,33 @@
 //! now compares the registry against these two lists and reports a registered
 //! type that appears on neither.
 //!
-//! The last eighteen are the fourth kind. Thirteen arrived when costcrew was
+//! The last nineteen are the fourth kind. Thirteen arrived when costcrew was
 //! registered in SPEC 6.2 on 28 August 2026, three more, `option_refused`,
 //! `option_applied` and `decision_requested`, followed it from
-//! TAIPANBOX/costcrew#23, and two more, `cadence_set` and `crew_ran`,
-//! followed it from TAIPANBOX/costcrew#28. All are about a PRACTICE rather
-//! than a run: a finding was triaged, an agent was hired, a sprint was
-//! planned, an option was stamped, a cadence switch was flipped. That
-//! producer argues the refusal itself, in `internal/stack/vocabulary.go`,
-//! and argues it the right way round: the shared vocabulary is about a RUN,
-//! a budget checked, a policy decided, a tool called, and inventing an
-//! equivalent for a roster change, a document review or a console switch
-//! would be a false claim in a record somebody audits, a console-internal
-//! workflow step with no AI Act record-keeping meaning of its own. An agent
-//! being hired is not a policy decision. A sprint being planned is not a
-//! tool call. `crew_ran` is the nearest of the eighteen to a run this store
-//! would recognise, a clock-driven pass over a roster of tasks, and it is
-//! still refused on the same argument the others are: it names a sprint and
-//! a cost, never one agent's own `run_id`, so filing it under any single
-//! agent would assert a subject the event does not carry. costcrew names
-//! the kinship itself: `decisionRequested` is written as a
-//! `sprint_planned`-style event, on purpose.
+//! TAIPANBOX/costcrew#23, two more, `cadence_set` and `crew_ran`, followed it
+//! from TAIPANBOX/costcrew#28, and one more, `plan_asked`, followed it from
+//! TAIPANBOX/costcrew#37. All are about a PRACTICE rather than a run: a
+//! finding was triaged, an agent was hired, a sprint was planned, an option
+//! was stamped, a cadence switch was flipped, a supervisor was asked to plan
+//! with a model. That producer argues the refusal itself, in
+//! `internal/stack/vocabulary.go`, and argues it the right way round: the
+//! shared vocabulary is about a RUN, a budget checked, a policy decided, a
+//! tool called, and inventing an equivalent for a roster change, a document
+//! review, a console switch or a console's own call to a model would be a
+//! false claim in a record somebody audits, a console-internal workflow step
+//! with no AI Act record-keeping meaning of its own. An agent being hired is
+//! not a policy decision. A sprint being planned is not a tool call.
+//! `crew_ran` is the nearest of the nineteen to a run this store would
+//! recognise, a clock-driven pass over a roster of tasks, and it is still
+//! refused on the same argument the others are: it names a sprint and a
+//! cost, never one agent's own `run_id`, so filing it under any single agent
+//! would assert a subject the event does not carry. `plan_asked` is the
+//! nearest of the nineteen to a tool call, one metered request through a
+//! gateway, and it is refused on the same ground: the request and its price
+//! are the console's own, made under the supervisor's per-task guard, and
+//! the plan it returns is priced and offered, never run, by this event
+//! alone. costcrew names the kinship itself: `decisionRequested` is written
+//! as a `sprint_planned`-style event, on purpose.
 //!
 //! Two of that console's types are NOT here, and the difference is the whole
 //! point of the split: it renames `anomaly_detected` to `spend_spike` and
@@ -304,7 +310,7 @@ use trailryx_record::{
 /// was ever let through. Anybody comparing a shadow week against an enforced
 /// one across that boundary would otherwise conclude that enforcement had
 /// stopped things nothing had ever permitted.
-pub const MAPPER_VERSION: MapperVersion = MapperVersion(109);
+pub const MAPPER_VERSION: MapperVersion = MapperVersion(110);
 
 /// The schema values this reader accepts.
 ///
