@@ -62,7 +62,7 @@ jobs:
     if: github.event.repository.private == false
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: toolchain
         run: |
@@ -82,7 +82,7 @@ jobs:
       # Free here. Actions cache is 10 GB per repository on a public one, and
       # GitHub evicts the oldest entries itself, so nothing starts metering.
       - name: cargo cache
-        uses: Swatinem/rust-cache@v2
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
 
       # `trailryx-federation-grpc` generates its wire types at build time, on
       # purpose: a checked-in copy is a second source of truth for the wire, and
@@ -225,7 +225,7 @@ jobs:
     if: github.event.repository.private == false
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: toolchain
         run: |
@@ -238,7 +238,7 @@ jobs:
       # means each half evicting the other's artifacts, which is what made the
       # single-job version recompile work it had already done.
       - name: cargo cache
-        uses: Swatinem/rust-cache@v2
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
 
       - name: protoc
         run: |
