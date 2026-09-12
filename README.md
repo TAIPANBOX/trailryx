@@ -694,6 +694,37 @@ go looking is the shape: the two ends of that field are three orders of
 magnitude apart, and what a batch buys is paid for in time rather than in
 records.
 
+## Verify a download
+
+Every release from the tag after v0.1.2 is signed keyless with Sigstore and carries
+a build-provenance attestation and an SBOM, for the checksums and for both images.
+With `cosign` and `gh` installed:
+
+```bash
+tag=<tag>
+cosign verify-blob --bundle SHA256SUMS.sigstore.json \
+  --certificate-identity "https://github.com/TAIPANBOX/trailryx/.github/workflows/release.yml@refs/tags/${tag}" \
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com SHA256SUMS
+sha256sum -c SHA256SUMS
+gh attestation verify trailryx-verify-x86_64-unknown-linux-musl -R TAIPANBOX/trailryx
+```
+
+The receiver image and the record-plane image, each checked the same way:
+
+```bash
+cosign verify ghcr.io/taipanbox/trailryx:<tag> \
+  --certificate-identity-regexp '^https://github.com/TAIPANBOX/trailryx/\.github/workflows/release\.yml@refs/tags/v' \
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com
+gh attestation verify oci://ghcr.io/taipanbox/trailryx:<tag> -R TAIPANBOX/trailryx
+
+cosign verify ghcr.io/taipanbox/trailryx-node:<tag> \
+  --certificate-identity-regexp '^https://github.com/TAIPANBOX/trailryx/\.github/workflows/release\.yml@refs/tags/v' \
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com
+gh attestation verify oci://ghcr.io/taipanbox/trailryx-node:<tag> -R TAIPANBOX/trailryx
+```
+
+Releases up to and including v0.1.2 have none of this; the tag after it does.
+
 ## Build it instead
 
 If you would rather build than download, that is fast and it is worth saying why,
