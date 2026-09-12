@@ -194,6 +194,13 @@ run_case() {
 
 py() { printf 'def edit(p, a, b):\n    s = open(p).read()\n    assert a in s, "pattern not found in " + p\n    open(p, "w").write(s.replace(a, b, 1))\n%s\n' "$1"; }
 
+# Like `py()`, but replaces every occurrence rather than the first. A binary name
+# in `components.json` is not a single occurrence: it is the component's `name`
+# and its `checked.binary`, and one of the ten repeats a third time in its own
+# `why` prose. A single-occurrence replace would leave the literal standing under
+# the second mention and report a rename gate as TOOTHLESS on its own fault.
+pyall() { printf 'def edit(p, a, b):\n    s = open(p).read()\n    assert a in s, "pattern not found in " + p\n    open(p, "w").write(s.replace(a, b))\n%s\n' "$1"; }
+
 echo "=== faults each gate must catch ==="
 
 # invariant: no unsafe anywhere in the crates. The workspace lint forbids it and
@@ -304,6 +311,93 @@ s = open(p).read()
 out = re.sub(r"(?m)^(step|say) ", r"run_\\1 ", s)
 assert out != s, "no step/say lines in the hook"
 open(p, "w").write(out)')" \
+	"measured nothing"
+
+echo
+echo "=== compat/1.0.json, the surface trailryx's 1.0 will freeze (invariant 43) ==="
+
+# A frozen name absent from every file its kind's `where` names, whether the code
+# renamed it or the manifest just outlived the code. Global replace: a binary name
+# in components.json is both a `name` and a `checked.binary`, sometimes a third
+# time in its own prose, and a rename that missed one of those would leave the
+# gate passing on exactly the drift it exists to catch.
+run_case "compat-surface: a frozen binary renamed in components.json" fail \
+	'./scripts/compat-surface.sh' \
+	"$(pyall 'edit("components.json", "trailryx-jsonl", "trailryx-jsonl-renamed")')" \
+	"'trailryx-jsonl' is promised"
+
+# An environment name the code stops reading. `TRAILRYX_S3_BUCKET` is one
+# occurrence in `components.json`, the only file this manifest names for `env`
+# that mentions it, so a single replace is the whole of the drift.
+run_case "compat-surface: an env name gone from components.json" fail \
+	'./scripts/compat-surface.sh' \
+	"$(py 'edit("components.json", "TRAILRYX_S3_BUCKET", "TRAILRYX_S3_BUCKET_RENAMED")')" \
+	"'TRAILRYX_S3_BUCKET' is promised"
+
+# A schema string the mapper stops accepting. Losing v0.2 silently would refuse
+# every producer still on it with `UnknownSchema`, which reads to an operator as a
+# malformed line rather than as a version this reader dropped.
+run_case "compat-surface: an agent-event schema string gone" fail \
+	'./scripts/compat-surface.sh' \
+	"$(py 'edit("crates/trailryx-agentevent/src/lib.rs", "\"taipanbox.dev/agent-event/v0.2\"", "\"taipanbox.dev/agent-event/v0.2-renamed\"")')" \
+	"'taipanbox.dev/agent-event/v0.2' is promised"
+
+# The human form, edited by hand rather than rendered. This is the same failure
+# invariant 16 names for the README's own numbers: a copy with no gate rots first,
+# and the rendering is the one place this promise is written for a reader rather
+# than for the check.
+run_case "compat-surface: COMPATIBILITY.md edited by hand" fail \
+	'./scripts/compat-surface.sh' \
+	"$(py 'edit("COMPATIBILITY.md", "# Compatibility", "# Compatibility (hand-edited)")')" \
+	"is not the rendering of"
+
+# An additive name is documentation for a reader and is never checked against the
+# code, by design: a detector, a dev-tool, a schema version this reader accepts
+# next are all additive rather than frozen, and adding one must not fail the gate
+# the way adding a FROZEN one must. The mutation edits the manifest and regenerates
+# the rendering as part of the same step, so the case is judged on the property it
+# names rather than on the unrelated fact that a hand-edited doc would also fail.
+run_case "compat-surface: an additive name added" pass \
+	'./scripts/compat-surface.sh' \
+	"$(cat <<'PY'
+import json
+import subprocess
+
+p = "compat/1.0.json"
+m = json.load(open(p))
+before = len(m["additive"])
+m["additive"].append("a teeth-test additive name, never checked against the code")
+assert len(m["additive"]) == before + 1, "additive list did not grow"
+json.dump(m, open(p, "w"), indent=2)
+open(p, "a").write("\n")
+r = subprocess.run(["./scripts/compat-surface.sh", "--write"], capture_output=True, text=True)
+assert r.returncode == 0, "regenerating after the additive edit failed:\n" + r.stdout + r.stderr
+PY
+)"
+
+# The manifest itself gone. Every other case above assumes compat/1.0.json is
+# there to compare against; this is the check on that assumption, and the answer
+# has to be "measured nothing" rather than a silent pass on an absent promise.
+run_case "compat-surface: the manifest is gone" fail \
+	'./scripts/compat-surface.sh' \
+	"$(cat <<'PY'
+import os
+os.remove("compat/1.0.json")
+PY
+)" \
+	"measured nothing"
+
+# A file a `where` entry names, gone. The check cannot tell "this name left the
+# code" from "the file it lived in left the repository", and it must not try:
+# both are measured nothing rather than a pass, because a literal cannot be found
+# in a file that is not there either way.
+run_case "compat-surface: a file a where entry names is gone" fail \
+	'./scripts/compat-surface.sh' \
+	"$(cat <<'PY'
+import os
+os.remove("crates/trailryx-otlp/tests/jsonenc_is_otlp_json.rs")
+PY
+)" \
 	"measured nothing"
 
 echo

@@ -206,6 +206,13 @@ jobs:
       - name: README numbers are true
         run: ./scripts/readme-numbers.sh
 
+      # The surface compat/1.0.json says this repository's 1.0 will freeze, against
+      # the code, and against COMPATIBILITY.md, which is rendered from it rather
+      # than typed by hand. Written before the tag so the promise is held from
+      # today, the same file the hook calls so the two cannot drift.
+      - name: compat surface is frozen
+        run: ./scripts/compat-surface.sh
+
       # Written when it was trivially green, because there was nothing to audit,
       # and kept for the day that stopped being true. That day was 30 July 2026,
       # when the SQL facade arrived, and 4 August 2026, when two advisories

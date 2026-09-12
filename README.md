@@ -2121,7 +2121,7 @@ use `git worktree`, `git config --worktree --get core.hooksPath` should answer w
 nothing, and `git config --worktree --unset core.hooksPath` if it does not. An
 absolute value there runs a different checkout's hook against your tree.
 
-`.githooks/pre-push` runs twenty-three checks and refuses the push if any fails:
+`.githooks/pre-push` runs twenty-four checks and refuses the push if any fails:
 formatting, clippy with warnings as errors, the tests, a standalone build of the
 substrate crate, a zero-dependency check on every crate outside the SQL facade, a
 build and test of the core with the facade absent, an `unsafe` check, every temp path
@@ -2132,10 +2132,11 @@ criterion, the published seed corpus, the two verifiers agreeing on the same pac
 reproducible build of the verifier from two different paths, the TLS build of the HTTP
 client, the FIPS 140-3 build of the cryptographic provider, every parser against
 hostile bytes, every number this README states about the
-repository, a 200-seed durability sweep, and the advisories. How long that takes,
+repository, the surface `compat/1.0.json` says this repository's 1.0 will freeze,
+a 200-seed durability sweep, and the advisories. How long that takes,
 measured rather than remembered, is in [`VALIDATION.md`](VALIDATION.md).
 
-The twenty-fourth runs in CI only: it breaks each check above on purpose and requires the failure, since a check that has quietly stopped catching anything looks exactly like a check with nothing to catch. It cannot run from the hook, because one of its cases rewrites `.githooks/pre-push` and bash reads a script as it executes it.
+The twenty-fifth runs in CI only: it breaks each check above on purpose and requires the failure, since a check that has quietly stopped catching anything looks exactly like a check with nothing to catch. It cannot run from the hook, because one of its cases rewrites `.githooks/pre-push` and bash reads a script as it executes it.
 
 The one about the FIPS build was added on 7 August 2026 and closes a gap of the same
 shape as the configuration one below. `Vault::new` refuses any cipher and key source
