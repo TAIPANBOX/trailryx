@@ -2,7 +2,7 @@
   "$comment": [
     "What this repository contributes to a running stack, and what a check may",
     "believe about it. `checked` is proved against this repository by",
-    "crates/trailryx-node/tests/manifest.rs in this repository's own CI;",
+    "crates/trailryx-demo/tests/manifest.rs in this repository's own CI;",
     "`declared` is a statement nobody can verify and carries its own `why`.",
     "",
     "AND THE TWO ROUTINE NAMES ARE COMPONENTS TOO, WHICH THIS FILE FIRST GOT WRONG.",
@@ -35,11 +35,16 @@
     "deployment is not a finding. `service` and `tool` mean the opposite, and for",
     "those the absence IS worth asking about.",
     "",
-    "THE PUBLISHED IMAGE CARRIES ONE OF THE THREE. ghcr.io/taipanbox/trailryx",
-    "ships `trailryx-ingest`, and every sealing command lives in `trailryx-node`,",
-    "which is published nowhere. stack-k8s records this in its own",
-    "images/trailryx.Dockerfile and builds the sealing image from source because",
-    "of it.",
+    "TWO IMAGES ARE PUBLISHED, ONE PER BINARY THAT NEEDS TO BE RUN RATHER THAN",
+    "READ. ghcr.io/taipanbox/trailryx ships `trailryx-ingest`. Every sealing",
+    "command lives in `trailryx-node`, and since v0.1.2 that is a second",
+    "published image, ghcr.io/taipanbox/trailryx-node",
+    "(`.github/workflows/release.yml`'s `node-image` job, decided 2026-09-01).",
+    "@claude 2026-09-12: this paragraph said `trailryx-node` was published",
+    "nowhere, which release.yml and the architecture dossier both already",
+    "disagreed with by this date. Whether stack-k8s pulls the published image",
+    "instead of building it from source is that repository's own decision and",
+    "is not measured from here.",
     "",
     "TRAILRYX_TRUST_DOMAIN IS NOT LISTED AND THAT IS DELIBERATE. stack-k8s sets it",
     "in a ConfigMap and interpolates it into `--trust-domain` in a shell argument.",
@@ -49,6 +54,7 @@
   ],
   "schema": "taipanbox.dev/components/v1",
   "repo": "TAIPANBOX/trailryx",
+  "distribution": "ghcr.io/taipanbox/trailryx (trailryx-ingest, the OTLP receiver) and ghcr.io/taipanbox/trailryx-node (trailryx-node + trailryx-verify, the record plane, since v0.1.2); per-target trailryx-verify, trailryx-ingest and, on the two linux-musl targets, trailryx-node binaries with a merged SHA256SUMS on each GitHub Release",
   "components": [
     {
       "name": "fed-probe",
@@ -111,7 +117,7 @@
         },
         "nothing_installs_it": {
           "value": "no launcher",
-          "why": "@claude 2026-08-28, and this is a reading rather than a decision anybody stated. Measured across stack-up, stack-single, stack-k8s and taipan: not one starts it. The estate's planes couple through a shared NDJSON bus on disk, so nothing here needs an OTLP receiver; it is the door for a fleet that already speaks OTLP and wants its spans in the record, which is somebody outside this estate. That is why it is the one binary the published GHCR image carries while every sealing command lives in `trailryx-node`, published nowhere.\\n\\nC15's `nothing-installs-it` check found this on the day it was written, which is what it is for: `tokenfuse-cluster` was found by hand and this one was found by a run. If the reading above is wrong and a deployment should serve it, this entry is the wrong answer and the right one is a launcher entry."
+          "why": "@claude 2026-08-28, and this is a reading rather than a decision anybody stated. Measured across stack-up, stack-single, stack-k8s and taipan: not one starts it. The estate's planes couple through a shared NDJSON bus on disk, so nothing here needs an OTLP receiver; it is the door for a fleet that already speaks OTLP and wants its spans in the record, which is somebody outside this estate. That is why it is the one binary this particular image carries; every sealing command lives in `trailryx-node`, which since v0.1.2 is published as its own image, ghcr.io/taipanbox/trailryx-node (@claude 2026-09-12, correcting 'published nowhere' above).\\n\\nC15's `nothing-installs-it` check found this on the day it was written, which is what it is for: `tokenfuse-cluster` was found by hand and this one was found by a run. If the reading above is wrong and a deployment should serve it, this entry is the wrong answer and the right one is a launcher entry."
         }
       }
     },

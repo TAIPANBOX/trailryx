@@ -152,7 +152,14 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: write
+      id-token: write
+      attestations: write
     steps:
+      # Needed for the SBOM below, which describes this source tree, not the
+      # binaries download-artifact fetches next. Nothing else in this job read
+      # the checkout before, so it did not carry one.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           pattern: dist-*
@@ -170,6 +177,47 @@ jobs:
           echo "--- SHA256SUMS ---"
           cat SHA256SUMS
 
+      # What a stranger verifies, and how (README, "Verify a download"):
+      #
+      #   cosign verify-blob --bundle SHA256SUMS.sigstore.json \
+      #     --certificate-identity https://github.com/TAIPANBOX/trailryx/.github/workflows/release.yml@refs/tags/<tag> \
+      #     --certificate-oidc-issuer https://token.actions.githubusercontent.com SHA256SUMS
+      #   sha256sum -c SHA256SUMS
+      #   gh attestation verify <asset> -R TAIPANBOX/trailryx
+      #
+      # Keyless: the certificate names this workflow at this tag, so there is no
+      # signing key to leak and nothing to rotate. The SBOMs describe the
+      # dependency graph this build was made from; the provenance bundle is also
+      # attached as an asset so a release page carries it beside the checksums.
+      - uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
+        with:
+          cosign-release: v3.1.3
+      - name: sign the checksums, keyless
+        run: cosign sign-blob --yes --bundle dist/SHA256SUMS.sigstore.json dist/SHA256SUMS
+      - name: SBOM of this build, SPDX
+        uses: anchore/sbom-action@3ad7283483fc7af8ff2b4ea19663c2d5ca935e26 # v0.24.2
+        with:
+          path: .
+          format: spdx-json
+          output-file: dist/sbom.spdx.json
+          upload-artifact: false
+          upload-release-assets: false
+      - name: SBOM of this build, CycloneDX
+        uses: anchore/sbom-action@3ad7283483fc7af8ff2b4ea19663c2d5ca935e26 # v0.24.2
+        with:
+          path: .
+          format: cyclonedx-json
+          output-file: dist/sbom.cyclonedx.json
+          upload-artifact: false
+          upload-release-assets: false
+      - name: provenance attestation for every asset
+        id: provenance
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: dist/*
+      - name: the provenance bundle as a release asset too
+        run: cp "${{ steps.provenance.outputs.bundle-path }}" dist/provenance.intoto.jsonl
+
       - uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64 # v3.0.3
         with:
           files: dist/*
@@ -184,6 +232,8 @@ jobs:
     permissions:
       contents: read
       packages: write
+      id-token: write
+      attestations: write
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
@@ -227,6 +277,7 @@ jobs:
       # picks the matching directory out of the context, which is why the layout
       # step above names them `amd64` and `arm64` rather than by rust triple.
       - name: build and push
+        id: push
         uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
         with:
           context: ctx
@@ -234,6 +285,30 @@ jobs:
           platforms: linux/amd64,linux/arm64
           push: true
           tags: ghcr.io/taipanbox/trailryx:${{ github.ref_name }}
+
+      # The image is signed by digest and its provenance attested, keyless. A
+      # stranger verifies with
+      #   cosign verify ghcr.io/taipanbox/trailryx:<tag> \
+      #     --certificate-identity-regexp '^https://github.com/TAIPANBOX/trailryx/\.github/workflows/release\.yml@refs/tags/v' \
+      #     --certificate-oidc-issuer https://token.actions.githubusercontent.com
+      #   gh attestation verify oci://ghcr.io/taipanbox/trailryx:<tag> -R TAIPANBOX/trailryx
+      #
+      # The digest signed is the one this single multi-platform push produced,
+      # which is already the manifest list's digest: this step builds and pushes
+      # both platforms in one `docker/build-push-action` call rather than a
+      # per-architecture build plus a later `imagetools create` merge, so there
+      # is no separate merge step whose digest would differ from this one.
+      - uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
+        with:
+          cosign-release: v3.1.3
+      - name: sign the image by digest, keyless
+        run: cosign sign --yes "ghcr.io/taipanbox/trailryx@${{ steps.push.outputs.digest }}"
+      - name: provenance attestation for the image
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-name: ghcr.io/taipanbox/trailryx
+          subject-digest: ${{ steps.push.outputs.digest }}
+          push-to-registry: true
 
   # The record plane, as a second image.
   #
@@ -261,6 +336,8 @@ jobs:
     permissions:
       contents: read
       packages: write
+      id-token: write
+      attestations: write
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
@@ -293,6 +370,7 @@ jobs:
           password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: build and push
+        id: push
         uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
         with:
           context: ctx-node
@@ -300,3 +378,25 @@ jobs:
           platforms: linux/amd64,linux/arm64
           push: true
           tags: ghcr.io/taipanbox/trailryx-node:${{ github.ref_name }}
+
+      # The image is signed by digest and its provenance attested, keyless. A
+      # stranger verifies with
+      #   cosign verify ghcr.io/taipanbox/trailryx-node:<tag> \
+      #     --certificate-identity-regexp '^https://github.com/TAIPANBOX/trailryx/\.github/workflows/release\.yml@refs/tags/v' \
+      #     --certificate-oidc-issuer https://token.actions.githubusercontent.com
+      #   gh attestation verify oci://ghcr.io/taipanbox/trailryx-node:<tag> -R TAIPANBOX/trailryx
+      #
+      # Same reasoning as the receiver image's job: one multi-platform push
+      # produces one digest, already the manifest list's, with no later
+      # `imagetools create` merge to re-point the signature at.
+      - uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
+        with:
+          cosign-release: v3.1.3
+      - name: sign the image by digest, keyless
+        run: cosign sign --yes "ghcr.io/taipanbox/trailryx-node@${{ steps.push.outputs.digest }}"
+      - name: provenance attestation for the image
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-name: ghcr.io/taipanbox/trailryx-node
+          subject-digest: ${{ steps.push.outputs.digest }}
+          push-to-registry: true
