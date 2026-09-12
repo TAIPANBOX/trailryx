@@ -107,9 +107,19 @@ fi
 # script refuses to start unless the tree is clean, so anything untracked
 # during a run was created by the run. `-x` is deliberately absent: ignored
 # build output is not ours to delete.
+# `.teeth-crates-parked` is the one directory this script creates by name (the
+# "no Rust left under crates/" case moves the workspace there), so it is ours
+# to delete whole, ignored contents included: `git clean` without `-x` leaves
+# an ignored file behind (a `.DS_Store` Finder writes into any directory it
+# opens), and an emptied-but-present destination made the next run's `git mv`
+# nest into it instead of renaming, then fail outright with "destination
+# already exists" once the nested path had been left behind too. That
+# happened live on 2026-09-12 with the previous destination, `crates-elsewhere`,
+# which is a real directory of this repository and was never ours to remove.
 restore() {
 	git reset -q --hard HEAD 2>/dev/null
 	git clean -fdq 2>/dev/null
+	rm -rf .teeth-crates-parked
 }
 baseline_dir="$(mktemp -d)"
 
@@ -294,10 +304,16 @@ echo "    a gate whose subject is gone must SAY so, not report OK on nothing"
 
 # THE HOLE. grep over a directory that is not there printed nothing and the
 # script exited 0. This is the case that keeps the fix in place.
+# The destination is a name only this script uses, so it cannot already exist
+# as a repository directory (`crates-elsewhere` did, and `git mv` into an
+# existing directory nests rather than renames). A leftover from an interrupted
+# run is removed first, so the move is a rename every time; `restore` removes
+# the same name afterwards, ignored contents included.
 run_case "no-unsafe: no Rust left under crates/" fail \
 	'./scripts/no-unsafe.sh' \
-	"$(py 'import subprocess
-subprocess.run(["git", "mv", "crates", "crates-elsewhere"], check=True)')" \
+	"$(py 'import shutil, subprocess
+shutil.rmtree(".teeth-crates-parked", ignore_errors=True)
+subprocess.run(["git", "mv", "crates", ".teeth-crates-parked"], check=True)')" \
 	"measured nothing"
 
 run_case "gate-count: no checks left in the hook to count" fail \
