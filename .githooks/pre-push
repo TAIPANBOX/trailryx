@@ -252,6 +252,14 @@ step "parsers survive hostile bytes" \
 # when written, which is exactly why a person cannot be the check.
 step "README numbers are true" ./scripts/readme-numbers.sh
 
+# The surface compat/1.0.json says this repository's 1.0 will freeze, against the
+# code. This repository is still 0.x, so nothing here is tagged yet, but the point
+# of writing the surface down before the tag is that the gate holds it from today:
+# a name that leaves the code before 1.0 is drift a reader of the manifest would
+# never see coming otherwise. Renders COMPATIBILITY.md; a hand edit of that file
+# fails it the same way a stale copy of any other number does.
+step "compat surface is frozen" ./scripts/compat-surface.sh
+
 # A short hunt for a durability violation, in one file this hook and CI both call.
 # Not the long run, which lives in VALIDATION.md: enough to catch a write-path
 # regression before it is pushed.
