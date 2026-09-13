@@ -310,7 +310,15 @@ use trailryx_record::{
 /// was ever let through. Anybody comparing a shadow week against an enforced
 /// one across that boundary would otherwise conclude that enforcement had
 /// stopped things nothing had ever permitted.
-pub const MAPPER_VERSION: MapperVersion = MapperVersion(110);
+///
+/// 111 is the reading that maps `breaker_shadow`. The 105 argument, one type
+/// over: a shadow finding of the Breaker written before this reading was an
+/// unknown type, refused and counted, so the trail of calls the budget would
+/// have refused and the gateway let through starts at 111. Before it, a reader
+/// comparing a shadow week against an enforced one had `breaker_tripped` on one
+/// side and nothing on the other, which is not "nothing happened" but "nothing
+/// could be written down".
+pub const MAPPER_VERSION: MapperVersion = MapperVersion(111);
 
 /// The schema values this reader accepts.
 ///
@@ -559,6 +567,23 @@ fn mapping_for(kind: &str) -> Option<Mapping> {
             EventType::PolicyDecision,
             Some(Verdict::Denied),
             Some(ErrorCode::PolicyDenied),
+            Severity::Warning,
+        ),
+        // The Breaker in shadow or warn mode: the run budget WOULD have refused
+        // this call and the gateway forwarded it, because enforcement is off
+        // (agent-passport SPEC 6.2, `breaker_shadow`, 2026-09-13). The same
+        // reading `taint_shadow` gets below and for the same reason: a policy
+        // plane was consulted and the action went through, so `Allowed` is the
+        // fact and `Denied` would tell an auditor the opposite of what
+        // happened. Same band as `breaker_tripped`, `medium`, which tokenfuse
+        // fixes for both types: the money was spent, so it is not `Info`, and
+        // the two are told apart by verdict and by the payload's `mode`, not
+        // by volume. Which budget, how far over and in which mode travel in
+        // the payload plane.
+        "breaker_shadow" => m(
+            EventType::PolicyDecision,
+            Some(Verdict::Allowed),
+            None,
             Severity::Warning,
         ),
         "dlp_block" | "taint_block" => m(
