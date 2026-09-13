@@ -2,7 +2,7 @@
   "schema": "taipanbox.dev/compat/v1",
   "repo": "TAIPANBOX/trailryx",
   "major": 1,
-  "status": "proposed: this repository is at 0.x (v0.1.2), and the surface named here is what its 1.0 will freeze; the gate holds it from today so that 1.0 is a tag and not a rewrite",
+  "status": "frozen at 1.0.0 (2026-09-13): the surface below is the promise of this major; the gate has held it since the manifest was written ahead of the tag",
   "frozen": {
     "cli.binaries": [
       "fed-probe",
@@ -16,8 +16,15 @@
       "trailryx-sim-run",
       "trailryx-verify"
     ],
-    "cli.routines": ["trailryx-seal", "record-seal"],
-    "cli.subcommands": ["run", "read", "events"],
+    "cli.routines": [
+      "trailryx-seal",
+      "record-seal"
+    ],
+    "cli.subcommands": [
+      "run",
+      "read",
+      "events"
+    ],
     "env": [
       "TRAILRYX_S3_ADDRESSING",
       "TRAILRYX_S3_BUCKET",
@@ -35,7 +42,9 @@
       "TRAILRYX_PARQUET_ORACLE",
       "TRAILRYX_FIPS_REQUIRED=1"
     ],
-    "http.routes": ["/v1/traces"],
+    "http.routes": [
+      "/v1/traces"
+    ],
     "agentevent.schemas": [
       "taipanbox.dev/agent-event/v0.1",
       "taipanbox.dev/agent-event/v0.2",
@@ -51,12 +60,21 @@
       "run_id",
       "on_behalf_of"
     ],
-    "journal.wire": ["FRAME_MAGIC: u8=0xA7", "FORMAT_VERSION: u16=1"]
+    "journal.wire": [
+      "FRAME_MAGIC: u8=0xA7",
+      "FORMAT_VERSION: u16=1"
+    ]
   },
   "where": {
-    "cli.binaries": ["components.json"],
-    "cli.routines": ["components.json"],
-    "cli.subcommands": ["crates/trailryx-node/src/main.rs"],
+    "cli.binaries": [
+      "components.json"
+    ],
+    "cli.routines": [
+      "components.json"
+    ],
+    "cli.subcommands": [
+      "crates/trailryx-node/src/main.rs"
+    ],
     "env": [
       "components.json",
       "crates/trailryx-fuzz/tests/parsers.rs",
@@ -64,10 +82,18 @@
       "crates/trailryx-projection/tests/oracle.rs",
       ".github/workflows/ci.yml"
     ],
-    "http.routes": ["crates/trailryx-ingest/src/handler.rs"],
-    "agentevent.schemas": ["crates/trailryx-agentevent/src/lib.rs"],
-    "agentevent.consumed": ["crates/trailryx-agentevent/src/lib.rs"],
-    "journal.wire": ["crates/trailryx-journal/src/wire.rs"]
+    "http.routes": [
+      "crates/trailryx-ingest/src/handler.rs"
+    ],
+    "agentevent.schemas": [
+      "crates/trailryx-agentevent/src/lib.rs"
+    ],
+    "agentevent.consumed": [
+      "crates/trailryx-agentevent/src/lib.rs"
+    ],
+    "journal.wire": [
+      "crates/trailryx-journal/src/wire.rs"
+    ]
   },
   "additive": [
     "a new dev-tool binary, or a new TRAILRYX_ environment name behind a new adapter",
