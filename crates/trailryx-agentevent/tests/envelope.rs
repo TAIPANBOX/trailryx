@@ -956,6 +956,26 @@ const TOKENFUSE_TAINT_SHADOW: &str = concat!(
     r#""labels":["web"],"requested":["exec"],"denied":["exec"],"tools":["run_shell"]}}"#,
 );
 
+/// The Breaker in shadow mode: the run budget would have refused this call and
+/// the gateway forwarded it. `data` is `breaker_tripped`'s plus `mode`.
+const TOKENFUSE_BREAKER_SHADOW: &str = concat!(
+    r#"{"schema":"taipanbox.dev/agent-event/v0.2","ts":"2026-09-13T09:24:11Z","#,
+    r#""source":"tokenfuse","type":"breaker_shadow","severity":"medium","#,
+    r#""agent_id":"agent://acme.example/sre/rca-copilot","run_id":"run-web-1","#,
+    r#""data":{"reason":"budget_exceeded","budget_usd":0.02,"spent_usd":0.021,"#,
+    r#""policy_id":"default","detail":"per-run budget exceeded","unit":null,"mode":"shadow"}}"#,
+);
+
+/// The refusal the same budget makes in enforce mode, for the test that holds
+/// the two apart.
+const TOKENFUSE_BREAKER_TRIPPED: &str = concat!(
+    r#"{"schema":"taipanbox.dev/agent-event/v0.2","ts":"2026-09-13T09:24:11Z","#,
+    r#""source":"tokenfuse","type":"breaker_tripped","severity":"medium","#,
+    r#""agent_id":"agent://acme.example/sre/rca-copilot","run_id":"run-web-1","#,
+    r#""data":{"reason":"budget_exceeded","budget_usd":0.02,"spent_usd":0.021,"#,
+    r#""policy_id":"default","detail":"per-run budget exceeded","unit":null}}"#,
+);
+
 /// The same firewall noticing that a run has become untrusted. Refused, and the
 /// test below is about why.
 const TOKENFUSE_TAINT_RAISED: &str = concat!(
@@ -995,6 +1015,39 @@ fn a_shadowed_would_block_is_a_policy_decision_that_allowed_the_action() {
     assert_eq!(unit.meta.severity, Severity::Warning, "`medium` is Warning");
     assert_eq!(unit.meta.mapper, MAPPER_VERSION);
     assert_eq!(unit.meta.run_id.as_str(), "run-web-1");
+}
+
+/// The Breaker's shadow finding maps the way the firewall's does, and for the
+/// same reason: the call went through. A record saying the run was refused
+/// would be false about the money, which was spent.
+#[test]
+fn a_shadowed_budget_refusal_is_a_policy_decision_that_allowed_the_call() {
+    let unit = map(OURS, TOKENFUSE_BREAKER_SHADOW).expect("a breaker shadow finding must map");
+    assert_eq!(unit.meta.event_type, EventType::PolicyDecision);
+    assert_eq!(
+        unit.meta.verdict,
+        Some(Verdict::Allowed),
+        "shadow forwards the call; the provider answers and the money is spent"
+    );
+    assert_eq!(unit.meta.error, None, "nothing was refused");
+    assert_eq!(unit.meta.severity, Severity::Warning, "`medium` is Warning");
+    assert_eq!(unit.meta.mapper, MAPPER_VERSION);
+    assert_eq!(unit.meta.run_id.as_str(), "run-web-1");
+}
+
+/// Same band, different verdict: `breaker_tripped` and `breaker_shadow` are
+/// both `medium` at the producer, so volume does not tell them apart here and
+/// the verdict has to. A reader counting refusals reads `Denied`; one sizing a
+/// budget before enforcing reads `Allowed` with a `breaker_shadow` payload.
+#[test]
+fn a_shadowed_budget_refusal_and_a_real_one_differ_by_verdict_not_volume() {
+    let shadowed = map(OURS, TOKENFUSE_BREAKER_SHADOW).unwrap();
+    let tripped = map(OURS, TOKENFUSE_BREAKER_TRIPPED).unwrap();
+    assert_eq!(shadowed.meta.severity, tripped.meta.severity);
+    assert_eq!(shadowed.meta.verdict, Some(Verdict::Allowed));
+    assert_eq!(tripped.meta.verdict, Some(Verdict::Denied));
+    assert_eq!(shadowed.meta.error, None);
+    assert_eq!(tripped.meta.error, Some(ErrorCode::PolicyDenied));
 }
 
 /// The band the producer set is the band the record takes, and the two differ
