@@ -511,7 +511,7 @@ Nothing here needs a Rust toolchain, a clone, or a build.
 **The receiver**, as an image:
 
 ```bash
-docker pull ghcr.io/taipanbox/trailryx:v0.1.1
+docker pull ghcr.io/taipanbox/trailryx:v1.0.0
 ```
 
 That word used to be "the server", and it was doing work no reader could check.
@@ -536,7 +536,7 @@ from the network with no authentication is refused before the socket opens, so
 ```bash
 printf 'a-long-random-shared-secret\n' > token
 docker run -p 4318:4318 -v "$PWD/token:/token:ro" \
-  ghcr.io/taipanbox/trailryx:v0.1.1 --bind 0.0.0.0:4318 --token-file /token
+  ghcr.io/taipanbox/trailryx:v1.0.0 --bind 0.0.0.0:4318 --token-file /token
 ```
 
 That answers `401` without the secret and accepts OTLP with it. There is **no TLS
@@ -570,7 +570,7 @@ that checksum worth checking rather than worth reading.
 As an image, since v0.1.2:
 
 ```bash
-docker pull ghcr.io/taipanbox/trailryx-node:v0.1.2
+docker pull ghcr.io/taipanbox/trailryx-node:v1.0.0
 ```
 
 It carries `trailryx-node` and `trailryx-verify` on busybox, and it has no
