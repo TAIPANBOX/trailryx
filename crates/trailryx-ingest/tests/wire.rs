@@ -587,6 +587,97 @@ fn the_readiness_route_takes_get_and_says_so_to_anything_else() {
 }
 
 #[test]
+fn the_readiness_path_is_exact_not_a_prefix() {
+    // `rest.starts_with(READINESS_PATH)` would also answer /healthz/ and
+    // /healthzx; the exact `==` in `inspect()` is what refuses them, and
+    // nothing here asserted it before now.
+    let h = Harness::start(quick_config());
+    for path in ["/healthz/", "/healthzx"] {
+        let response = h.exchange(format!("GET {path} HTTP/1.1\r\nHost: x\r\n\r\n").as_bytes());
+        assert_eq!(status_of(&response), 404, "{path} gave {response}");
+    }
+}
+
+#[test]
+fn a_readiness_probe_closes_the_connection_after_answering() {
+    // Before this route existed every unauthenticated answer (401, 404)
+    // closed the connection, so the longest an anonymous peer could hold a
+    // thread was the header timeout. `Response::new(Status::Ok)` alone
+    // leaves the connection open, so the same peer now gets a keep-alive
+    // slot instead: measured as two full responses read back off one
+    // connection, not merely a missing header.
+    let h = Harness::start(quick_config());
+    let mut stream = h.connect();
+    let probe = b"GET /healthz HTTP/1.1\r\nHost: x\r\n\r\n";
+
+    stream.write_all(probe).expect("the first request is sent");
+    let _ = stream.flush();
+    let mut buf = [0u8; 4096];
+    let n = stream.read(&mut buf).expect("a first response arrives");
+    let first = String::from_utf8_lossy(&buf[..n]).into_owned();
+    assert_eq!(status_of(&first), 200, "{first}");
+    assert!(
+        first.contains("Connection: close"),
+        "an unauthenticated 200 must close, the same as every other \
+         unauthenticated answer this server gives: {first}"
+    );
+
+    // If the server did not close, a second request on the same socket is
+    // answered too, which is the keep-alive slot this test measures.
+    let _ = stream.write_all(probe);
+    let _ = stream.flush();
+    let second = read_all(&mut stream);
+    assert!(
+        second.is_empty(),
+        "the connection must already be closed, not answering a second \
+         request on it: {second}"
+    );
+}
+
+#[test]
+fn a_readiness_probe_needs_no_credential() {
+    // Nothing before this used `Harness::with_secret` against `/healthz`, so
+    // a mutant that moved the route below the auth gate passed every test
+    // in this file. The control is the same harness's `POST /v1/traces`
+    // without a token, which is 401.
+    let h = Harness::with_secret(quick_config(), SECRET, "acme");
+
+    let response = h.exchange(b"GET /healthz HTTP/1.1\r\nHost: x\r\n\r\n");
+    assert_eq!(status_of(&response), 200, "{response}");
+
+    let control = h.exchange(&export(&good_batch()));
+    assert_eq!(status_of(&control), 401, "{control}");
+}
+
+#[test]
+fn a_poisoned_but_untouched_source_still_answers_the_readiness_probe_degraded() {
+    // `degraded` is set only by the NEXT `with_source` call after a panic
+    // poisons the lock; the probe itself never calls `with_source`. So a
+    // lock a panic has just poisoned, and that nothing has touched since,
+    // answered 200. Every shipped binary closes this window some other way
+    // (trailryx-ingest's own drain loop within a second, trailryx-node
+    // exiting rather than ever serving the 503), which invariant 44 now
+    // says; this test is the one that reaches the route directly.
+    let h = Harness::start(quick_config());
+    let ingest = Arc::clone(&h.ingest);
+    let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        ingest.with_source(|_source| panic!("a source panicked while holding the lock"));
+    }));
+    assert!(
+        !h.ingest.is_degraded(),
+        "the flag must not be set until something touches the lock again"
+    );
+
+    let response = h.exchange(b"GET /healthz HTTP/1.1\r\nHost: x\r\n\r\n");
+    assert_eq!(
+        status_of(&response),
+        503,
+        "a poisoned lock must answer degraded even before anything else \
+         has read it back: {response}"
+    );
+}
+
+#[test]
 fn an_encoding_or_media_type_we_do_not_have_is_415_and_never_400() {
     // 415 is non-retryable and says "we do not do that", which is diagnosable.
     // 400 would read as corrupt telemetry and send somebody hunting the wrong bug.

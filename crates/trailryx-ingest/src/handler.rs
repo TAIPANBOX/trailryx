@@ -30,14 +30,17 @@
 //! # The readiness probe answers a different question than everything else here
 //!
 //! `GET /healthz` is decided before any routing or budget check below, and it
-//! is not subject to the connection cap, the pending-queue budget or the
-//! in-flight body budget that the rest of this module enforces. Those all
-//! answer "busy, try later"; the probe answers "will this process ever
-//! accept another record again", and conflating the two would make a
-//! launcher read a merely full process as a dead one, or, the failure this
-//! route exists to end, never restart a process whose source lock poisoned
-//! and will refuse every request from now on. No body is read on this path,
-//! no counter is touched, and no bytes a client sent are echoed.
+//! is exempt from the pending-queue budget and the in-flight body budget
+//! that the rest of this module enforces. It is subject to the connection
+//! cap: that cap sheds at `accept`, before a byte of any request line has
+//! been read, so there is no request line yet for this route to be
+//! recognised against and be excused from. Those two answer "busy, try
+//! later"; the probe answers "will this process ever accept another record
+//! again", and conflating them would make a launcher read a merely full
+//! process as a dead one, or, the failure this route exists to end, never
+//! restart a process whose source lock poisoned and will refuse every
+//! request from now on. No body is read on this path, no counter is
+//! touched, and no bytes a client sent are echoed.
 
 use crate::auth::{self, Gate};
 use crate::config::Config;
@@ -162,10 +165,17 @@ impl Ingest {
         if head.method != Method::Get {
             return Response::error(Status::MethodNotAllowed, "readiness is GETted").allow("GET");
         }
-        if self.is_degraded() {
+        // Read the lock's own poison directly rather than only the flag a
+        // later `with_source` sets: `is_degraded()` alone misses a lock a
+        // panic has just poisoned and that nothing has touched since. Never
+        // blocks: `Mutex::is_poisoned` does not take the lock.
+        if self.is_degraded() || self.source.is_poisoned() {
             return self.unavailable("the ingest path is degraded");
         }
-        Response::new(Status::Ok)
+        // Closing, the same as every other unauthenticated answer this
+        // server gives: a bare 200 here would be a keep-alive slot an
+        // unauthenticated peer never had, since 401 and 404 both close.
+        Response::new(Status::Ok).closing()
     }
 
     /// Everything that can be decided without reading a body.
