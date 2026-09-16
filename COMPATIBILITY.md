@@ -84,6 +84,7 @@ Status: frozen at 1.0.0 (2026-09-13): the surface below is the promise of this m
 
 ## Additive within a major
 
+- GET /healthz on trailryx-ingest's listener, unauthenticated: 200 while the source is healthy, 503 once is_degraded() is true; exempt from the pending-queue and in-flight body budgets, subject to the connection cap, decided before the request line exists
 - a new dev-tool binary, or a new TRAILRYX_ environment name behind a new adapter
 - the agent-event schema version this reader accepts, which moves in its own release (agent-passport SPEC 6.2/6.4) rather than this repository's
 - the journal's FRAME_VERSION and OLDEST_FRAME_VERSION: invariant 7 requires a field change to be a new frame version plus a reader-side migration rather than a rewrite of what is frozen here, so those two are expected to move and are deliberately not frozen
