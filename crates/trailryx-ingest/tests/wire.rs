@@ -128,6 +128,28 @@ impl Harness {
             .with_source(|source| source.wire_report().malformed_batches)
             .expect("the lock is healthy")
     }
+
+    /// Poison the source lock the way a real panic inside a handler would,
+    /// then touch the lock once more.
+    ///
+    /// `Ingest::with_source` only flips `degraded` from the arm that finds
+    /// the lock *already* poisoned (`handler.rs`'s own doc comment on the
+    /// field says so): the call whose closure panics unwinds out through
+    /// `with_source` itself and never reaches that arm. So poisoning takes
+    /// two calls here, the same as it would take two requests on a live
+    /// process: one that panics while holding the lock, and a next one that
+    /// finds it poisoned.
+    fn poison_source(&self) {
+        let ingest = Arc::clone(&self.ingest);
+        let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            ingest.with_source(|_source| panic!("a source panicked while holding the lock"));
+        }));
+        assert!(
+            self.ingest.with_source(|_| {}).is_none(),
+            "the lock should read poisoned by now"
+        );
+        assert!(self.ingest.is_degraded(), "degraded should now be set");
+    }
 }
 
 impl Drop for Harness {
@@ -502,6 +524,66 @@ fn a_known_path_with_the_wrong_method_says_which_method() {
     let response = h.exchange(b"GET /v1/traces HTTP/1.1\r\nHost: x\r\n\r\n");
     assert_eq!(status_of(&response), 405, "{response}");
     assert!(response.contains("Allow: POST"), "{response}");
+}
+
+// ---------------------------------------------------------------------------
+// Readiness probe
+//
+// Ingest::inspect() had two route branches, traces and the other OTLP
+// signals, and answered 404 to everything else: no health or readiness path
+// existed. Separately, a poisoned source lock sets `degraded` once and
+// nothing ever clears it (deliberate: the plane refuses rather than
+// continuing on a poisoned lock), so a process that will never accept
+// another record again was indistinguishable, to a probe, from one that was
+// momentarily full behind the pending-queue or connection budgets, and
+// nothing would restart it.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn a_readiness_probe_answers_ok_while_healthy() {
+    let h = Harness::start(quick_config());
+    let response = h.exchange(b"GET /healthz HTTP/1.1\r\nHost: x\r\n\r\n");
+    assert_eq!(status_of(&response), 200, "{response}");
+}
+
+#[test]
+fn a_poisoned_source_answers_the_readiness_probe_degraded() {
+    let h = Harness::start(quick_config());
+    h.poison_source();
+    let response = h.exchange(b"GET /healthz HTTP/1.1\r\nHost: x\r\n\r\n");
+    assert_eq!(status_of(&response), 503, "{response}");
+    assert!(
+        response.contains("the ingest path is degraded"),
+        "{response}"
+    );
+}
+
+#[test]
+fn a_full_pending_queue_does_not_shed_the_readiness_probe() {
+    let h = Harness::start(Config {
+        max_pending: 1,
+        ..quick_config()
+    });
+
+    // Fill the queue the way `a_full_queue_is_told_to_come_back_not_told_to_give_up`
+    // does, then confirm the probe is answered rather than shed as load.
+    assert_eq!(status_of(&h.exchange(&export(&good_batch()))), 200);
+    assert_eq!(h.pending(), 1);
+
+    let response = h.exchange(b"GET /healthz HTTP/1.1\r\nHost: x\r\n\r\n");
+    assert_eq!(
+        status_of(&response),
+        200,
+        "a busy plane must not read as a dead one: {response}"
+    );
+}
+
+#[test]
+fn the_readiness_route_takes_get_and_says_so_to_anything_else() {
+    let h = Harness::start(quick_config());
+    let response = h.exchange(b"POST /healthz HTTP/1.1\r\nHost: x\r\nContent-Length: 0\r\n\r\n");
+    assert_eq!(status_of(&response), 405, "{response}");
+    assert!(response.contains("Allow: GET"), "{response}");
 }
 
 #[test]

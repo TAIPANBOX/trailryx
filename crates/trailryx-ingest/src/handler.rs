@@ -26,6 +26,18 @@
 //!
 //! `accept` never fails, so once bytes go in they are ours to keep. The queue
 //! check therefore happens before the lock and before the call, not after.
+//!
+//! # The readiness probe answers a different question than everything else here
+//!
+//! `GET /healthz` is decided before any routing or budget check below, and it
+//! is not subject to the connection cap, the pending-queue budget or the
+//! in-flight body budget that the rest of this module enforces. Those all
+//! answer "busy, try later"; the probe answers "will this process ever
+//! accept another record again", and conflating the two would make a
+//! launcher read a merely full process as a dead one, or, the failure this
+//! route exists to end, never restart a process whose source lock poisoned
+//! and will refuse every request from now on. No body is read on this path,
+//! no counter is touched, and no bytes a client sent are echoed.
 
 use crate::auth::{self, Gate};
 use crate::config::Config;
@@ -36,6 +48,12 @@ use std::sync::Mutex;
 use std::sync::atomic::{AtomicBool, Ordering};
 use trailryx_otlp::OtlpSource;
 use trailryx_record::Timestamp;
+
+/// The one GET route this server answers, checked before `path_prefix` and
+/// the OTLP routing below it. Not part of `compat/1.0.json`'s frozen
+/// `http.routes` (that kind freezes the OTLP surface); listed under
+/// `additive` instead, the same as a new dev-tool binary would be.
+const READINESS_PATH: &str = "/healthz";
 
 /// What the head alone decided.
 #[derive(Debug)]
@@ -137,6 +155,19 @@ impl Ingest {
             .retry_after(self.config.retry_after_seconds)
     }
 
+    /// `GET /healthz`. Unauthenticated, the same choice the rest of this
+    /// estate's health paths make: a gate that itself depends on the source
+    /// lock would make a probe fail for the reason it exists to detect.
+    fn readiness(&self, head: &Head) -> Response {
+        if head.method != Method::Get {
+            return Response::error(Status::MethodNotAllowed, "readiness is GETted").allow("GET");
+        }
+        if self.is_degraded() {
+            return self.unavailable("the ingest path is degraded");
+        }
+        Response::new(Status::Ok)
+    }
+
     /// Everything that can be decided without reading a body.
     pub fn inspect(&self, head: &Head) -> Verdict {
         let prefix = self.config.path_prefix.as_str();
@@ -146,6 +177,12 @@ impl Ingest {
                 "no endpoint is served at that path",
             ));
         };
+
+        // Ahead of every OTLP routing and budget decision below, and outside
+        // all of them: see the module doc for why.
+        if rest == READINESS_PATH {
+            return Verdict::Answer(self.readiness(head));
+        }
 
         // The traces path, and the base endpoint itself: an SDK configured with
         // OTEL_EXPORTER_OTLP_ENDPOINT rather than the traces-specific variable

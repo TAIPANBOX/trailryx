@@ -108,7 +108,8 @@
         "binary": "trailryx-ingest",
         "crate": "trailryx-ingest",
         "workspace": ".",
-        "listen_default": "127.0.0.1:4318"
+        "listen_default": "127.0.0.1:4318",
+        "health_path": "/healthz"
       },
       "declared": {
         "what_it_is": {

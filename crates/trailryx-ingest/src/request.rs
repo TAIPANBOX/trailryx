@@ -56,6 +56,8 @@ impl Reject {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Method {
     Post,
+    /// The one other method this server takes: the readiness probe.
+    Get,
     /// Anything else that is a syntactically valid token. Kept as one variant
     /// because the only thing routing does with it is answer 405.
     Other,
@@ -701,6 +703,8 @@ fn parse_head(head: &[u8], config: &Config) -> Result<Head, Reject> {
     Ok(Head {
         method: if method == b"POST" {
             Method::Post
+        } else if method == b"GET" {
+            Method::Get
         } else {
             Method::Other
         },
@@ -924,6 +928,16 @@ mod tests {
         assert_eq!(h.body_length(), 3);
         assert!(!h.close_requested);
         assert!(!h.expect_continue);
+    }
+
+    /// `GET` needs its own variant now that the readiness route answers to
+    /// it: folding it into `Other` would make routing unable to tell a
+    /// probe from a client that sent something malformed.
+    #[test]
+    fn a_get_is_its_own_method_and_not_folded_into_other() {
+        let h = head("GET /healthz HTTP/1.1\r\nHost: x\r\n\r\n").unwrap();
+        assert_eq!(h.method, Method::Get);
+        assert_ne!(h.method, Method::Other);
     }
 
     #[test]
