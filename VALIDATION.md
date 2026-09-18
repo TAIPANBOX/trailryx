@@ -1299,6 +1299,33 @@ numbers are one machine on one day; they are a floor for "is this fast enough to
 put on a timer", which is the question the deployment repos actually ask, and not
 a benchmark.
 
+### The record plane on a box behind a home router, 2026-09-17
+
+Run 2026-09-17 on a Debian 13 mini PC behind a home router, its gateway published
+only on the box's tailnet address: `trailryx-node:v1.0.0` ran as the `record-seal` service in
+stack-single v1.1.3, sealing every `*.ndjson` on the box's shared events volume under
+one trust domain, `customer.example`, every 120 seconds. The volume's four writers
+that day were two tokenfuse gateways (the customer door and a second door for the
+FinOps crew), wardryx, and costcrew itself. Detail beyond what follows is in
+`estate-gates/PROVEN.md` (rows dated 2026-09-17).
+
+- One pack sealed 34 records over 7 segments; `trailryx-verify` answered `VERIFIED`,
+  carrying its own `[weak] root-signature` and `[weak] witnesses` notes. This run
+  wired in no signing key and no witness, and the tool said so rather than reporting
+  a clean pack.
+- The plane was stopped while calls kept arriving on the bus, then started again. It
+  resumed from its own cursor and sealed 52 further records, all `VERIFIED`. Over the
+  same stretch the notifier's own journal shows every line accepted and none refused,
+  so nothing that reached the bus was lost across the stop.
+- One byte flipped in a copy of a sealed pack: `trailryx-verify` answered
+  `NOT VERIFIED`. An unmodified copy of the same pack answered `VERIFIED`.
+- NOT proven: the plane under sustained concurrent load, a signing key or a witness
+  wired in on a live box, and a machine dying rather than a process. The box was
+  rebooted twice while an agent ran through it; `record-seal` came back up clean both
+  times and nothing in that day's failure matrix was raised against it, but the chain
+  was not re-verified in the minutes right after either reboot, and power itself was
+  never cut.
+
 ---
 
 ## Not yet measured
