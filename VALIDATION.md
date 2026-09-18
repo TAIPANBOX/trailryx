@@ -1301,8 +1301,8 @@ a benchmark.
 
 ### The record plane on a box behind a home router, 2026-09-17
 
-Run 2026-09-17 on a Debian 13 mini PC behind a home router, reachable only over its
-own tailnet address: `trailryx-node:v1.0.0` ran as the `record-seal` service in
+Run 2026-09-17 on a Debian 13 mini PC behind a home router, its gateway published
+only on the box's tailnet address: `trailryx-node:v1.0.0` ran as the `record-seal` service in
 stack-single v1.1.3, sealing every `*.ndjson` on the box's shared events volume under
 one trust domain, `customer.example`, every 120 seconds. The volume's four writers
 that day were two tokenfuse gateways (the customer door and a second door for the
