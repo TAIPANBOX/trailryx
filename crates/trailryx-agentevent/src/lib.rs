@@ -72,7 +72,8 @@
 //!
 //! Refused today, each because the record vocabulary has no honest home for it
 //! rather than because nobody got to it: `mcp_drift`, `sustained_loop`,
-//! `fanout_explosion`, `crypto_finding`, `crypto_drift`, `policy_violation`,
+//! `fanout_explosion`, `run_stalled`, `crypto_finding`, `crypto_drift`,
+//! `policy_violation`,
 //! `evidence_signed`, `eval_run`, `quality_score`, `quality_drift`, `slo_burn`,
 //! `sim_run`, `sim_finding`, `blast_radius_measured`, `console_command`,
 //! `policy_updated`, `taint_raised`, `delegation_issued`, `delegation_denied`,
@@ -85,7 +86,9 @@
 //!
 //! They are four kinds and the sentence that used to cover them named one.
 //! Most are a finding or an observation about infrastructure rather than a
-//! decision an agent took. The last three are the other kind: an operator acting
+//! decision an agent took (`run_stalled`, the control plane's finding that a
+//! run stopped calling, registered 2026-09-18, is the newest of those: the
+//! silence is the Cloud's observation, not something the agent did). The last three are the other kind: an operator acting
 //! ON the stack, a console command, a policy rewritten through the
 //! policy-as-code API, or a console's generated estate replaced with real
 //! charges by a person (`generated_estate_replaced`, costcrew), each a decision
