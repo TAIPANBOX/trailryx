@@ -82,9 +82,11 @@
 //! `explainer_published`, `sprint_planned`, `agent_hired`, `agent_rebriefed`,
 //! `agent_state_changed`, `agent_removed`, `agent_transferred`,
 //! `generated_estate_replaced`, `option_refused`, `option_applied`,
-//! `decision_requested`, `cadence_set`, `crew_ran` and `plan_asked`.
+//! `decision_requested`, `cadence_set`, `crew_ran`, `plan_asked`,
+//! `typed_answer`, `typed_unanswered`, `typed_refused` and
+//! `calibration_drift`.
 //!
-//! They are four kinds and the sentence that used to cover them named one.
+//! They are five kinds and the sentence that used to cover them named one.
 //! Most are a finding or an observation about infrastructure rather than a
 //! decision an agent took (`run_stalled`, the control plane's finding that a
 //! run stopped calling, registered 2026-09-18, is the newest of those: the
@@ -117,7 +119,7 @@
 //! now compares the registry against these two lists and reports a registered
 //! type that appears on neither.
 //!
-//! The last nineteen are the fourth kind. Thirteen arrived when costcrew was
+//! The nineteen from costcrew are the fourth kind. Thirteen arrived when costcrew was
 //! registered in SPEC 6.2 on 28 August 2026, three more, `option_refused`,
 //! `option_applied` and `decision_requested`, followed it from
 //! TAIPANBOX/costcrew#23, two more, `cadence_set` and `crew_ran`, followed it
@@ -182,6 +184,20 @@
 //! Naming them costs a reading. They were unnamed until 26 August 2026 and were
 //! therefore refused as `UnknownType` and counted with every other unknown,
 //! which is the omission this passage above describes rather than a decision.
+//!
+//! The four from typryx are the fifth kind, registered in SPEC 6.2 on 25
+//! September 2026 when that service joined the estate. Three are a service's
+//! answer to a question an agent asked, a probability over named options, or
+//! its refusal to give one; none is a decision the agent took. The decision,
+//! if there is one, is made later by whatever reads the probability, and it
+//! reaches this store as that reader's own event. They also fail the rule the
+//! delegation paragraph above rests on, that a record names a run: a typed
+//! question carries a run only when its caller passed one, so most would
+//! arrive with no honest run to file them under. When the question travels
+//! through the gateway's MCP broker the call is already recorded there as a
+//! tool call against the agent that made it, and mapping the answer as well
+//! would record one act twice. The fourth, `calibration_drift`, is a finding
+//! about a template and a model over many answers, the first kind above.
 //!
 //! # The two that got types of their own, and what that cost
 //!
