@@ -1326,6 +1326,23 @@ FinOps crew), wardryx, and costcrew itself. Detail beyond what follows is in
   was not re-verified in the minutes right after either reboot, and power itself was
   never cut.
 
+### The record plane against a governed Hermes team, forge lab, 2026-09-27
+
+Run 2026-09-27 on a three-node k3d cluster (1 server, 2 agents, Calico), stack-k8s
+v1.1.13 with TokenFuse v1.3.0: `record-seal` (`trailryx-node` from the stack's own
+pinned image) ran as a Job after three Hermes agents, each with its own identity and
+run id, had gone through a lab TokenFuse gateway, including one run held for a
+human approval and resubmitted with a single-use approval token.
+
+- One pack sealed 34 records over 3 segments: a `policy_decision` per agent and per
+  run, the held-then-approved run's own decision among them. `trailryx-verify`
+  answered `VERIFIED`, carrying the same `[weak] root-signature` and `[weak]
+  witnesses` notes as the run above; no signing key and no witness were wired in
+  here either.
+- NOT proven: everything the run above already names, plus anything about this
+  cluster shape specifically, since this was one Job run once, not a plane left
+  running under load or across a restart.
+
 ---
 
 ## Not yet measured
