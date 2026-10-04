@@ -83,10 +83,10 @@
 //! `agent_state_changed`, `agent_removed`, `agent_transferred`,
 //! `generated_estate_replaced`, `option_refused`, `option_applied`,
 //! `decision_requested`, `cadence_set`, `crew_ran`, `plan_asked`,
-//! `typed_answer`, `typed_unanswered`, `typed_refused` and
-//! `calibration_drift`.
+//! `typed_answer`, `typed_unanswered`, `typed_refused`,
+//! `calibration_drift`, `chain_broken` and `chain_unchained`.
 //!
-//! They are five kinds and the sentence that used to cover them named one.
+//! They are six kinds and the sentence that used to cover them named one.
 //! Most are a finding or an observation about infrastructure rather than a
 //! decision an agent took (`run_stalled`, the control plane's finding that a
 //! run stopped calling, registered 2026-09-18, is the newest of those: the
@@ -198,6 +198,19 @@
 //! tool call against the agent that made it, and mapping the answer as well
 //! would record one act twice. The fourth, `calibration_drift`, is a finding
 //! about a template and a model over many answers, the first kind above.
+//!
+//! The two from `agent-conform` are the sixth kind, registered in SPEC 6.2 when
+//! `agent-conform watch-dir` was added. A verifier's finding about a stream is
+//! not a decision an agent took: `chain_broken` says a `prev_hash` in somebody's
+//! event file does not match the line before it, and `chain_unchained` says a
+//! file carries events and not one `prev_hash`, so nobody can verify it. Both
+//! are about a file on a box. Neither names a run, and each carries the
+//! synthetic identity of the verifier rather than an agent, which is the
+//! subject-axis problem the paragraph on `policy_updated` describes. This store
+//! seals what agents decided, and a chain the verifier could not follow is a
+//! reason to look at the stream, not an entry in anyone's history. The event is
+//! not lost: it is on the shared bus with its own hash chain, where the notifier
+//! and the console already read it.
 //!
 //! # The two that got types of their own, and what that cost
 //!
