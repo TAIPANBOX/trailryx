@@ -99,6 +99,11 @@ struct Budget {
 
 impl Budget {
     /// `None` when the reservation would cross the ceiling.
+    // rustc 1.99 deprecates `fetch_update` in favour of `try_update`, and CI
+    // floats on stable with warnings denied. `try_update` does not exist at
+    // this crate's MSRV (1.85), so the call stays and the lint is allowed here
+    // alone; switch when the MSRV reaches the release that has `try_update`.
+    #[allow(deprecated)]
     fn reserve(total: &Arc<AtomicUsize>, want: usize, ceiling: usize) -> Option<Self> {
         total
             .fetch_update(Ordering::AcqRel, Ordering::Acquire, |current| {
