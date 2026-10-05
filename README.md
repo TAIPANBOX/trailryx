@@ -539,7 +539,8 @@ docker run -p 4318:4318 -v "$PWD/token:/token:ro" \
   ghcr.io/taipanbox/trailryx:v1.1.0 --bind 0.0.0.0:4318 --token-file /token
 ```
 
-That answers `401` without the secret and accepts OTLP with it. There is **no TLS
+That answers `401` without the secret and accepts OTLP with it. The one path that
+needs no secret is `GET /healthz`, described below. There is **no TLS
 in this image**, so the secret is readable on the wire and the process says so at
 startup: terminate TLS in front of it. To try it without any of that, keep the port
 private with `--bind 127.0.0.1:4318` and no token, which is refused by nothing
@@ -1387,6 +1388,13 @@ function, which is where it looks equally correct, makes an unauthenticated call
 get a **200** on an empty export, because the declared-zero-length arm answers on
 its own. There is a test whose whole job is that one line of ordering.
 
+The one exception is `GET /healthz`, for a launcher or an orchestrator to poll. It
+needs no credential, and it answers 200 while the ingest path is healthy and 503
+("the ingest path is degraded") once it is not. It is decided before the queue
+and body budgets, so a busy plane reads as busy and not as broken, and it
+closes the connection after answering. Any other method on it is 405. It sits
+under "Additive within a major" in `COMPATIBILITY.md`, since it arrived in 1.1.0.
+
 Dropping `--token-file` leaves the port open to anything that can reach it. That
 is tolerated on loopback, where the port is the trust boundary, and on a routable
 bind the server **refuses to start** rather than opening an unauthenticated write
@@ -2214,9 +2222,11 @@ in both directions.
 
 ## Next
 
-Federation's transport. The completeness rule exists and the wires do not: composing
-an answer across environments is decided and tested, and the gRPC-with-mutual-TLS
-transport that would carry it is specified and unbuilt.
+Federation as a service. The completeness rule and its wire both exist: composing
+an answer across environments is decided and tested, and `trailryx-federation-grpc`
+carries it over gRPC with mutual TLS, naming a peer by its certificate. What is
+missing is a way to use it: no shipped binary exposes a federation query, only the
+library and the `fed-probe` dev tool.
 
 The SQL facade shipped: the Postgres wire protocol over a `TableProvider` that pushes
 predicates on the provable dimensions into the authenticated index, so an answer
@@ -2238,8 +2248,9 @@ which contradicted `docs/planning/trailryx-architecture.md` §3.1 and §3.2 in b
 halves: SQL **is** the first-class interface, and nothing replaces it. Provability is
 not a different language, it is where the predicate is evaluated.
 
-Four things are deliberately unfinished behind us. Stage 6 has no gRPC transport,
-because gRPC is HTTP/2, which is HPACK and frames and flow control. (This
+Four things are deliberately unfinished behind us. Stage 6 has no OTLP/gRPC ingest
+transport, because gRPC is HTTP/2, which is HPACK and frames and flow control; the
+federation transport is gRPC and does exist, in its own crate. (This
 paragraph claimed there was no HTTP transport either, for as long as it took to
 notice that the crate table two sections above lists the OTLP/HTTP server. It then
 went on claiming there was no authentication for one commit after the gate landed.
