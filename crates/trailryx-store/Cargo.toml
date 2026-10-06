@@ -19,11 +19,11 @@ trailryx-sim = { path = "../trailryx-sim" }
 
 [dev-dependencies]
 trailryx-verify = { path = "../trailryx-verify" }
-# For `tests/anchored.rs`, which pins the two independent token readers together.
+# For `tests/it/anchored.rs`, which pins the two independent token readers together.
 # A dev-dependency, so the store itself still does not depend on the anchor: when
 # a store anchors is an operational decision and the seam is `Anchor`.
 trailryx-anchor = { path = "../trailryx-anchor" }
-# For the coverage assertions in `tests/anchored.rs`: the mapping is derived from a
+# For the coverage assertions in `tests/it/anchored.rs`: the mapping is derived from a
 # verifier report, so a real pack is the only honest input to it.
 trailryx-compliance = { path = "../trailryx-compliance" }
 

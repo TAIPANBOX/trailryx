@@ -114,7 +114,7 @@ pub struct RecordTable {
     /// first version gave each table its own and the proof of a table function's
     /// answer was unreachable, which a test caught. The version after that shared one
     /// across every connection in the process, which is worse in the other direction
-    /// and which two tests in `tests/wire.rs` now catch.
+    /// and which two tests in `tests/it/wire.rs` now catch.
     last_proof: ProofSlot,
 }
 

@@ -20,7 +20,7 @@
 # a GitHub ubuntu-latest runner they DISAGREE. Neither is wrong. A recursive descent
 # parser's verdict on a hundred-thousand-deep document is decided by how much stack
 # the process was given, so a row for it would pin the machine rather than the
-# parser, and tests/oracle.rs skips it in the equality and asserts instead the thing
+# parser, and tests/it/oracle.rs skips it in the equality and asserts instead the thing
 # that holds everywhere: we refuse it as a Limit, never as a syntax error.
 # Measured 2026-07-30, laptop CPython 3.14.6 / node v22.23.1 both accept; the first
 # public CI run on 91f1733 measured a disagreement and failed the build, which is

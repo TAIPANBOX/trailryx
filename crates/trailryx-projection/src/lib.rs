@@ -16,7 +16,7 @@
 //! group, data pages of version one. Hand-writing it would be a poor trade if
 //! the result were only Parquet-shaped, so correctness is delegated to somebody
 //! else's reader: the test suite writes a file and has pyarrow read every value
-//! back. See `tests/oracle.rs` for how to run it.
+//! back. See `tests/it/oracle.rs` for how to run it.
 
 pub mod parquet;
 pub mod projection;

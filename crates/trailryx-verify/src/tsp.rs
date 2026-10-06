@@ -26,7 +26,7 @@
 //! lines duplicated is the price of that property, and it is a price worth
 //! naming rather than quietly avoiding by adding the dependency.
 //!
-//! The two are pinned to agree by `trailryx-store/tests/anchored.rs`, which puts
+//! The two are pinned to agree by `trailryx-store/tests/it/anchored.rs`, which puts
 //! a token from a real authority through both and compares what each read out of
 //! it.
 
@@ -104,7 +104,7 @@ impl Stamped {
     ///
     /// The imprint is SHA-384 of the root's bytes, which is the rule
     /// `trailryx-anchor` uses when it builds the request. Both sides computing it
-    /// the same way is what `trailryx-store/tests/anchored.rs` pins.
+    /// the same way is what `trailryx-store/tests/it/anchored.rs` pins.
     pub fn covers(&self, root: &Hash) -> bool {
         self.imprint == Sha384::digest(root)
     }

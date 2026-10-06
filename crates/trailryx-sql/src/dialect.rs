@@ -216,7 +216,7 @@ impl TableFunctionImpl for CausalClosure {
 /// ([`crate::Session::for_connection`]), so nothing another client does can move this
 /// answer. That was not true until 5 August 2026: one slot served the whole process
 /// and a reader could be told an answer was proved because somebody else's had been.
-/// Two tests in `crates/trailryx-sql/tests/wire.rs` hold it now, and both of them
+/// Two tests in `crates/trailryx-sql/tests/it/wire.rs` hold it now, and both of them
 /// failed against the code that shared it.
 ///
 /// What remains is one session's own race, and it is smaller but real: a second

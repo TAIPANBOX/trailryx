@@ -2,7 +2,7 @@
 
 Four scripts and two tables. The scripts generate a conformance corpus and ask
 two parsers with no shared ancestry what they make of it. The tables are the
-answers, checked in, so `tests/oracle.rs` can pin our behaviour against them
+answers, checked in, so `tests/it/oracle.rs` can pin our behaviour against them
 without needing python or node on the machine that runs `cargo test`.
 
 Nothing here is part of the crate. The crate depends on nothing, and that
@@ -121,6 +121,6 @@ comparison suite is very good at producing the feeling of correctness.
   say nothing at all about whether the literal is legal.
 - **One bound is absent.** `max_line_bytes` is 16 MiB, and a case that reached it
   would make this corpus a 33 MB file of hex. It belongs to the framer rather
-  than to the grammar and is measured in `tests/frame.rs` and `tests/hostile.rs`.
+  than to the grammar and is measured in `tests/frame.rs` and `tests/it/hostile.rs`.
   The other three bounds (depth 25, number 1024 bytes, 256 members per object)
   are exercised here from both sides.

@@ -245,6 +245,16 @@ s = open(p).read()
 open(p, "w").write(s + "\n#[allow(dead_code)]\nfn _teeth_tmp() -> std::path::PathBuf { let p = std::env::temp_dir().join(\"trailryx-fixture\"); p }\n")')" \
 	"temp path"
 
+# invariant 45: one integration-test binary per crate. A second top-level file
+# in a crate that already has `tests/it` is a second binary linking DataFusion.
+run_case "one-test-binary: a second tests/*.rs beside tests/it" fail \
+	'./scripts/one-test-binary-per-crate.sh' \
+	"$(py 'import os
+p = "crates/trailryx-store/tests/teeth_planted.rs"
+assert os.path.isdir("crates/trailryx-store/tests/it"), "no tests/it to plant beside"
+open(p, "w").write("#[test]\nfn teeth_planted() {}\n")')" \
+	"integration-test binaries"
+
 echo
 echo "=== and what they must NOT catch ==="
 
@@ -298,6 +308,14 @@ p = f[0]
 s = open(p).read()
 open(p, "w").write(s + "\n#[allow(dead_code)]\nfn _teeth_ok() -> std::path::PathBuf { let p = std::env::temp_dir().join(format!(\"trailryx-{}\", std::process::id())); p }\n")')"
 
+# The way a test is meant to be added: a module of the one binary. A gate that
+# refused this would refuse the fix for the thing it checks.
+run_case "one-test-binary: a new module under tests/it" pass \
+	'./scripts/one-test-binary-per-crate.sh' \
+	"$(py 'p = "crates/trailryx-store/tests/it/teeth_planted.rs"
+open(p, "w").write("#[test]\nfn teeth_planted() {}\n")
+edit("crates/trailryx-store/tests/it/main.rs", "mod two_verifiers;\n", "mod two_verifiers;\nmod teeth_planted;\n")')"
+
 echo
 echo "=== and the one this estate learned the hard way ==="
 echo "    a gate whose subject is gone must SAY so, not report OK on nothing"
@@ -327,6 +345,15 @@ s = open(p).read()
 out = re.sub(r"(?m)^(step|say) ", r"run_\\1 ", s)
 assert out != s, "no step/say lines in the hook"
 open(p, "w").write(out)')" \
+	"measured nothing"
+
+# A loop over a glob that matches nothing finds no crate with two binaries, and
+# that must read as nothing measured, not as one binary each.
+run_case "one-test-binary: no crates left to count" fail \
+	'./scripts/one-test-binary-per-crate.sh' \
+	"$(py 'import shutil, subprocess
+shutil.rmtree(".teeth-crates-parked", ignore_errors=True)
+subprocess.run(["git", "mv", "crates", ".teeth-crates-parked"], check=True)')" \
 	"measured nothing"
 
 echo
@@ -411,7 +438,7 @@ run_case "compat-surface: a file a where entry names is gone" fail \
 	'./scripts/compat-surface.sh' \
 	"$(cat <<'PY'
 import os
-os.remove("crates/trailryx-otlp/tests/jsonenc_is_otlp_json.rs")
+os.remove("crates/trailryx-otlp/tests/it/jsonenc_is_otlp_json.rs")
 PY
 )" \
 	"measured nothing"

@@ -872,7 +872,7 @@ ran a query the index could not prove and then asked for its proof could be hand
 stranger's `full`. A reader who believed it would take an unproved answer as proved,
 through the one function whose whole purpose is to stop that. Each accepted socket now
 gets a session of its own over the same sealed segments, which costs a pointer rather
-than a copy of the trail, and two tests in `crates/trailryx-sql/tests/wire.rs` drive
+than a copy of the trail, and two tests in `crates/trailryx-sql/tests/it/wire.rs` drive
 two real connections and hold it. Both failed against the code that shared the slot,
 each reporting `full` where the answer was `partial` and `none`.
 
@@ -1063,7 +1063,7 @@ architecture's sentence. In **governance** mode a user holding
 header by default. Only **compliance** mode refuses everybody including the root
 account.
 
-`crates/trailryx-contracts/tests/object_lock.rs` runs the attack rather than describing
+`crates/trailryx-contracts/tests/it/object_lock.rs` runs the attack rather than describing
 it, against a fake that models S3's documented behaviour: the conditional write refuses
 a second publisher, an administrator writes a new version anyway, a plain read returns
 the forgery, and the published version still reads back by token.
@@ -2160,11 +2160,12 @@ use `git worktree`, `git config --worktree --get core.hooksPath` should answer w
 nothing, and `git config --worktree --unset core.hooksPath` if it does not. An
 absolute value there runs a different checkout's hook against your tree.
 
-`.githooks/pre-push` runs twenty-four checks and refuses the push if any fails:
+`.githooks/pre-push` runs twenty-five checks and refuses the push if any fails:
 formatting, clippy with warnings as errors, the tests, a standalone build of the
 substrate crate, a zero-dependency check on every crate outside the SQL facade, a
 build and test of the core with the facade absent, an `unsafe` check, every temp path
-a test builds, whether anything removes them again, whether a test can wait without a bound, the
+a test builds, whether anything removes them again, whether a test can wait without a bound, whether any crate
+builds more than one integration-test binary, the
 shortcut that lets a push of nothing but deletions run no check at all, the count of these checks against what CI runs,  every field of
 every configuration struct against the code meant to read it, the determinism
 criterion, the published seed corpus, the two verifiers agreeing on the same packs, a
@@ -2175,7 +2176,7 @@ repository, the surface `compat/1.0.json` says this repository's 1.0 will freeze
 a 200-seed durability sweep, and the advisories. How long that takes,
 measured rather than remembered, is in [`VALIDATION.md`](VALIDATION.md).
 
-The twenty-fifth runs in CI only: it breaks each check above on purpose and requires the failure, since a check that has quietly stopped catching anything looks exactly like a check with nothing to catch. It cannot run from the hook, because one of its cases rewrites `.githooks/pre-push` and bash reads a script as it executes it.
+The twenty-sixth runs in CI only: it breaks each check above on purpose and requires the failure, since a check that has quietly stopped catching anything looks exactly like a check with nothing to catch. It cannot run from the hook, because one of its cases rewrites `.githooks/pre-push` and bash reads a script as it executes it.
 
 The one about the FIPS build was added on 7 August 2026 and closes a gap of the same
 shape as the configuration one below. `Vault::new` refuses any cipher and key source

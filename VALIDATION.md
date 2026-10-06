@@ -59,7 +59,7 @@ violation, the exact opposite of the 0 standing beside it.
 | Determinism: same seed, twice | two runs of one seed, identical byte for byte. The digest is printed by the check, not recorded here; the recorded ones are the corpus's | `./scripts/determinism.sh` |
 | Published seed corpus | 16 rows, 0 digest mismatches | `./scripts/seed-corpus.sh` |
 | Durability sweep | 200 seeds, 0 violations | `./scripts/durability-sweep.sh` |
-| Two verifiers, one verdict | agree on every pack | `cargo test -p trailryx-store --test two_verifiers` |
+| Two verifiers, one verdict | agree on every pack | `cargo test -p trailryx-store --test it two_verifiers::` |
 | Verifier build reproducibility | same binary from two paths | `./scripts/reproduce.sh` |
 | Parsers under hostile bytes | 13 targets, 300 cases each, 0 panics | `cargo test -p trailryx-fuzz` |
 | The durability check can fail | a lying `fsync` is caught | `cargo test -p trailryx-core --test determinism` |
@@ -326,7 +326,7 @@ docker run -d --name trailryx-minio -p 9000:9000 \
   -e MINIO_ROOT_USER=... -e MINIO_ROOT_PASSWORD=... minio/minio server /data
 TRAILRYX_S3_ENDPOINT=http://127.0.0.1:9000 TRAILRYX_S3_BUCKET=trailryx \
 TRAILRYX_S3_KEY=... TRAILRYX_S3_SECRET=... \
-  cargo test -p trailryx-s3 --test live -- --nocapture
+  cargo test -p trailryx-s3 --test it live:: -- --nocapture
 ```
 
 **It failed on the first request, and the reason is the point of the exercise.** The
@@ -372,7 +372,7 @@ docker run -d -p 10000:10000 mcr.microsoft.com/azure-storage/azurite \
   azurite-blob --blobHost 0.0.0.0
 TRAILRYX_AZURE_ENDPOINT=http://devstoreaccount1.blob.localhost:10000 \
 TRAILRYX_AZURE_CONTAINER=trailryx TRAILRYX_AZURE_ACCOUNT=devstoreaccount1 \
-TRAILRYX_AZURE_KEY=... cargo test -p trailryx-azure --test live -- --nocapture
+TRAILRYX_AZURE_KEY=... cargo test -p trailryx-azure --test it live:: -- --nocapture
 ```
 
 Put, get and list pass, and so does the one that matters: **Azurite refuses the
@@ -599,7 +599,7 @@ three bugs would leave the fourth. So:
   test into a run that never ended: no failure, no name, no output. The fake's socket
   now has a timeout and every wait for a request is bounded, so the answer is always
   a test result. Finding that cost more than the bug it hid.
-- **`tests/live.rs` in both adapter crates**, run against any endpoint given in the
+- **`tests/it/live.rs` in both adapter crates**, run against any endpoint given in the
   environment and printing `skipped` with a reason when there is none.
 
 ### Oracles
@@ -696,7 +696,7 @@ fail, including the impersonation one.
 ### The SQL facade, read on 5 August 2026: one real defect and one false claim
 
 ```
-cargo test -p trailryx-sql --test wire
+cargo test -p trailryx-sql --test it wire::
 ```
 
 **The proof slot was process-wide while the function that reads it says "session".**
@@ -752,7 +752,7 @@ and `Action::Ingest` in `trailryx-ingest/src/auth.rs:180`. **No path asks for
 
 What exists instead is `raw: bool` on `Session::with_raw_access`, decided once for the
 whole server, and `grep -rn with_raw_access` finds two definitions and five callers,
-all five of them tests in `crates/trailryx-sql/tests/sql.rs`. Both documents now
+all five of them tests in `crates/trailryx-sql/tests/it/sql.rs`. Both documents now
 describe the flag that exists. Implementing the grant is a second `authorize` call
 somewhere the principal is known, which is not where the flag is: the catalog is fixed
 when the session is built and the principal arrives at connect time.
