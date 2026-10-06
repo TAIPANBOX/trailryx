@@ -34,7 +34,7 @@
 //!   differently from the first. That decoder now exists: `trailryx_otlp::jsonl`
 //!   reads a collector's exported file. What has not changed is the decision to
 //!   keep it off *this* surface, which is the one exposed to the network, and the
-//!   two decoders are pinned to agree by `trailryx-otlp/tests/differential.rs`
+//!   two decoders are pinned to agree by `trailryx-otlp/tests/it/differential.rs`
 //!   rather than by hoping. A file an operator hands over is a different
 //!   transport, not a wider network surface.
 //! - **No metrics and no logs.** `/v1/metrics` and `/v1/logs` are 404. This

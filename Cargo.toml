@@ -13,6 +13,18 @@ rust-version = "1.85"
 # exhaustive bit sweep over a signature is seven minutes unoptimised and half a
 # minute optimised. The checks that catch bugs are kept on explicitly, so this
 # buys speed and gives up nothing: overflow still panics, assertions still fire.
+#
+# Debug info is the other half of what a test build writes. Full debug info in
+# every linked test binary was most of the bytes a rebuild put on disk, and the
+# dependencies' share of it (DataFusion and everything under it) is read by no
+# panic message here. Line tables are kept for the workspace's own crates, so a
+# panic and a backtrace still name file and line. `test` inherits both from `dev`.
+[profile.dev]
+debug = "line-tables-only"
+
+[profile.dev.package."*"]
+debug = false
+
 [profile.test]
 opt-level = 2
 debug-assertions = true

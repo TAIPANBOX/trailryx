@@ -78,8 +78,8 @@
     "env": [
       "components.json",
       "crates/trailryx-fuzz/tests/parsers.rs",
-      "crates/trailryx-otlp/tests/jsonenc_is_otlp_json.rs",
-      "crates/trailryx-projection/tests/oracle.rs",
+      "crates/trailryx-otlp/tests/it/jsonenc_is_otlp_json.rs",
+      "crates/trailryx-projection/tests/it/oracle.rs",
       ".github/workflows/ci.yml"
     ],
     "http.routes": [

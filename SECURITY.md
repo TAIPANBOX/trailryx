@@ -72,11 +72,11 @@ The guarantees are stated out loud, so a report can name the one it breaks:
   asked. A path by which one connection's verdict reaches another is a report, because
   a reader who trusts it takes an unproved answer as proved. That was live until 5
   August 2026, when one proof slot served every connection in the process;
-  `crates/trailryx-sql/tests/wire.rs` is where a new case belongs.
+  `crates/trailryx-sql/tests/it/wire.rs` is where a new case belongs.
 - **The ingest gate**: an unauthenticated request that gets past
   `crates/trailryx-ingest/src/auth.rs`, or one that makes the server read a body
   before the gate has answered. The second is the subtler of the two and
-  `crates/trailryx-ingest/tests/wire.rs` is where its cases live.
+  `crates/trailryx-ingest/tests/it/wire.rs` is where its cases live.
 - **Denial of service on the ingest surface**: an input under a megabyte that costs
   disproportionate memory or time. The bounds are all in
   `crates/trailryx-ingest/src/config.rs` and `crates/trailryx-json/src/lib.rs`, each

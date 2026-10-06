@@ -156,6 +156,11 @@ jobs:
       - name: waits in tests are bounded
         run: ./scripts/bounded-waits.sh
 
+      # Every `tests/*.rs` is a binary that links the whole dependency tree again,
+      # and on a laptop that is the SSD's write budget rather than the clock.
+      - name: one test binary per crate
+        run: ./scripts/one-test-binary-per-crate.sh
+
       # The hook's deletion shortcut, against the cases it must and must not take.
       # CI has no hooks, so this is the only side that ever runs it here; it reads the
       # hook as a file, which is a thing a runner can do as well as a laptop.
@@ -182,7 +187,10 @@ jobs:
       # Two verifiers, one pack: the Rust one and `verifier-py/trailryx_verify.py`.
       # Two implementations that agree prove the format rather than the author.
       - name: two verifiers agree
-        run: cargo test -p trailryx-store --test two_verifiers --quiet
+        # A block scalar because the filter ends in `::` and `:: ` on a plain line is
+        # read as a YAML mapping. Not quoted: gate-count.sh counts unquoted commands.
+        run: |
+          cargo test -p trailryx-store --test it two_verifiers:: --quiet
 
       # A feature nobody builds is a feature that rots, and this one only shows up
       # in a deployment when it breaks.

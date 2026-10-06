@@ -17,7 +17,7 @@ an hour*. This answers a different question:
 
 Every root, chain link and index key in a pack is recomputed here from the bytes,
 independently, by a program that shares no code with the Rust one.
-`crates/trailryx-store/tests/two_verifiers.rs` runs both on the same packs, good and
+`crates/trailryx-store/tests/it/two_verifiers.rs` runs both on the same packs, good and
 tampered, and requires the same verdict and the same record count from each.
 
 ## What it does not prove

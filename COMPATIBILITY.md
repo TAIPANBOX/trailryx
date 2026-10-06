@@ -69,7 +69,7 @@ Status: frozen at 1.0.0 (2026-09-13): the surface below is the promise of this m
 - `TRAILRYX_PYTHON`
 - `TRAILRYX_PARQUET_ORACLE`
 - `TRAILRYX_FIPS_REQUIRED=1`
-- held in: `components.json`, `crates/trailryx-fuzz/tests/parsers.rs`, `crates/trailryx-otlp/tests/jsonenc_is_otlp_json.rs`, `crates/trailryx-projection/tests/oracle.rs`, `.github/workflows/ci.yml`
+- held in: `components.json`, `crates/trailryx-fuzz/tests/parsers.rs`, `crates/trailryx-otlp/tests/it/jsonenc_is_otlp_json.rs`, `crates/trailryx-projection/tests/it/oracle.rs`, `.github/workflows/ci.yml`
 
 ### http.routes (1)
 

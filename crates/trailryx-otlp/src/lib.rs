@@ -43,7 +43,7 @@
 //! `application/x-protobuf`. Mapping is hard and worth doing once; decoding is
 //! mechanical and worth doing twice.
 //!
-//! `tests/differential.rs` is what holds the claim up: one fixture, two
+//! `tests/it/differential.rs` is what holds the claim up: one fixture, two
 //! independent encoders, and an assertion that the two decoders return equal
 //! structs. It also pins the two depth limits against each other, because
 //! `trailryx_json::Limits::max_depth` and [`protobuf::MAX_DEPTH`] are different

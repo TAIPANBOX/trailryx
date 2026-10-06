@@ -42,17 +42,17 @@
 # itself.
 #
 # The two are halves of one failure and the fix for either alone is not enough, which
-# is why both are here. `crates/trailryx-azure/tests/blob.rs` had neither: its fake
+# is why both are here. `crates/trailryx-azure/tests/it/blob.rs` had neither: its fake
 # server blocked in `serve` on a client that had connected and said nothing, so the
 # thread stayed alive, so the channel never closed, so the test's `recv()` waited for a
-# message from a thread that was never going to send one. `crates/trailryx-s3/tests/
+# message from a thread that was never going to send one. `crates/trailryx-s3/tests/it/
 # store.rs` is the same fake with both bounds, and it is the file to copy.
 #
 # WHAT IT DOES NOT CHECK, said out loud because a check that hides its own limit is
 # worse than one that states it:
 #
-#   - **Async waits.** `crates/trailryx-sql/tests/wire.rs` and
-#     `crates/trailryx-federation-grpc/tests/across_two_environments.rs` hand their
+#   - **Async waits.** `crates/trailryx-sql/tests/it/wire.rs` and
+#     `crates/trailryx-federation-grpc/tests/it/across_two_environments.rs` hand their
 #     listener to a server library and then wait as a CLIENT, where the bound would be
 #     `tokio::time::timeout` around the client call rather than a socket option. That
 #     is a real gap and it is not flagged here, because a grep cannot tell an await
@@ -119,7 +119,7 @@ for f in $tests; do
 done
 
 if [ "$problems" -gt 0 ]; then
-  printf 'crates/trailryx-s3/tests/store.rs is the fake with both bounds, and is the one to copy\n'
+  printf 'crates/trailryx-s3/tests/it/store.rs is the fake with both bounds, and is the one to copy\n'
   exit 1
 fi
 

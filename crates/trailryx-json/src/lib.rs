@@ -40,7 +40,7 @@
 //!   says it as the string `"Infinity"`, which is a value and not a literal.)
 //!
 //! Every other divergence between a strict reader and a lenient one goes our
-//! way: `tests/oracle.rs` compares us against two independent parsers with no
+//! way: `tests/it/oracle.rs` compares us against two independent parsers with no
 //! shared ancestry and fails the build if the disagreement set grows.
 //!
 //! # Nothing is converted until asked
@@ -192,7 +192,7 @@ pub enum Kind {
 /// The position is maintained incrementally as the reader advances, never
 /// recovered afterwards by rescanning. A hundred thousand bad lines in a row
 /// must cost a hundred thousand times one line, not a hundred thousand times the
-/// file, and `tests/hostile.rs` measures the ratio rather than trusting it.
+/// file, and `tests/it/hostile.rs` measures the ratio rather than trusting it.
 ///
 /// `AdapterError` in the contracts crate carries `&'static str` only, so a
 /// source cannot hand a line number back through `poll`. That is why this type

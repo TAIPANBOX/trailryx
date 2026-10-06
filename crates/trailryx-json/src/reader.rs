@@ -19,7 +19,7 @@
 //!   of the same word are two different keys, and a reader that folded them would
 //!   be making a linguistic decision about evidence.
 //! - **Position.** Maintained as it advances. Recovering it afterwards by
-//!   rescanning would make a file of bad lines quadratic, and `tests/hostile.rs`
+//!   rescanning would make a file of bad lines quadratic, and `tests/it/hostile.rs`
 //!   measures the ratio.
 //!
 //! # The shape of a walk

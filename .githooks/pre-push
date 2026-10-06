@@ -188,6 +188,12 @@ say "scratch paths are cleaned up" ./scripts/scratch-cleanup.sh
 # live one the first time it ran.
 say "waits in tests are bounded" ./scripts/bounded-waits.sh
 
+# One integration-test binary per crate. Every `tests/*.rs` is a target that links the
+# crate's whole dependency tree again, so a crate with seven of them wrote seven
+# copies of DataFusion on every rebuild. The cost is disk writes rather than time,
+# which is why it went unseen; invariant 45 says what merging them had to audit.
+say "one test binary per crate" ./scripts/one-test-binary-per-crate.sh
+
 # The shortcut at the top of this file, against the cases it must and must not take.
 # It is the one check here whose subject is the gate rather than the code, and it is
 # here rather than earlier because it is not a precondition: by the time it runs the
@@ -218,7 +224,7 @@ say "determinism (same seed, twice)" ./scripts/determinism.sh
 # cannot arrive quietly.
 say "seed corpus reproduces" ./scripts/seed-corpus.sh
 
-step "two verifiers agree" cargo test -p trailryx-store --test two_verifiers --quiet
+step "two verifiers agree" cargo test -p trailryx-store --test it two_verifiers:: --quiet
 
 # The same source must produce the same verifier binary from any directory, or an
 # auditor cannot check the binary they run against the source they read. Stage 8's
