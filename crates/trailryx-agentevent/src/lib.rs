@@ -83,7 +83,7 @@
 //! `agent_state_changed`, `agent_removed`, `agent_transferred`,
 //! `generated_estate_replaced`, `option_refused`, `option_applied`,
 //! `decision_requested`, `cadence_set`, `crew_ran`, `plan_asked`,
-//! `typed_answer`, `typed_unanswered`, `typed_refused`,
+//! `anomaly_hinted`, `typed_answer`, `typed_unanswered`, `typed_refused`,
 //! `calibration_drift`, `chain_broken` and `chain_unchained`.
 //!
 //! They are six kinds and the sentence that used to cover them named one.
@@ -119,12 +119,13 @@
 //! now compares the registry against these two lists and reports a registered
 //! type that appears on neither.
 //!
-//! The nineteen from costcrew are the fourth kind. Thirteen arrived when costcrew was
+//! The twenty from costcrew are the fourth kind. Thirteen arrived when costcrew was
 //! registered in SPEC 6.2 on 28 August 2026, three more, `option_refused`,
 //! `option_applied` and `decision_requested`, followed it from
 //! TAIPANBOX/costcrew#23, two more, `cadence_set` and `crew_ran`, followed it
-//! from TAIPANBOX/costcrew#28, and one more, `plan_asked`, followed it from
-//! TAIPANBOX/costcrew#37. All are about a PRACTICE rather than a run: a
+//! from TAIPANBOX/costcrew#28, one more, `plan_asked`, followed it from
+//! TAIPANBOX/costcrew#37, and one more, `anomaly_hinted`, followed it from
+//! TAIPANBOX/costcrew#108. All are about a PRACTICE rather than a run: a
 //! finding was triaged, an agent was hired, a sprint was planned, an option
 //! was stamped, a cadence switch was flipped, a supervisor was asked to plan
 //! with a model. That producer argues the refusal itself, in
@@ -135,17 +136,28 @@
 //! false claim in a record somebody audits, a console-internal workflow step
 //! with no AI Act record-keeping meaning of its own. An agent being hired is
 //! not a policy decision. A sprint being planned is not a tool call.
-//! `crew_ran` is the nearest of the nineteen to a run this store would
+//! `crew_ran` is the nearest of the twenty to a run this store would
 //! recognise, a clock-driven pass over a roster of tasks, and it is still
 //! refused on the same argument the others are: it names a sprint and a
 //! cost, never one agent's own `run_id`, so filing it under any single agent
 //! would assert a subject the event does not carry. `plan_asked` is the
-//! nearest of the nineteen to a tool call, one metered request through a
+//! nearest of the twenty to a tool call, one metered request through a
 //! gateway, and it is refused on the same ground: the request and its price
 //! are the console's own, made under the supervisor's per-task guard, and
 //! the plan it returns is priced and offered, never run, by this event
 //! alone. costcrew names the kinship itself: `decisionRequested` is written
 //! as a `sprint_planned`-style event, on purpose.
+//!
+//! `anomaly_hinted` is the newest of the twenty, and it sits between this
+//! kind and the fifth below. It is the console recording that it asked
+//! typryx for a typed hint about an anomaly before an analyst works it, and
+//! what came back: a class and its probability, or the reason there is none.
+//! A hint decides nothing, moves no anomaly and is no agent's act. It is
+//! written under the console's own detector identity with no `run_id`, so
+//! there is no run to file it under, and whatever decision it might inform
+//! reaches the bus later as the stamp that applies an option. It is the
+//! fifth kind's argument seen from the asking side: an answer to a question
+//! is not the decision, and the decision is recorded by whoever makes it.
 //!
 //! Two of that console's types are NOT here, and the difference is the whole
 //! point of the split: it renames `anomaly_detected` to `spend_spike` and
