@@ -1156,7 +1156,7 @@ fn base64_bytes(text: &[u8]) -> Option<Vec<u8>> {
     if body.last() == Some(&b'=') {
         return None;
     }
-    if pad > 0 && (body.len() + pad) % 4 != 0 {
+    if pad > 0 && !(body.len() + pad).is_multiple_of(4) {
         return None;
     }
 

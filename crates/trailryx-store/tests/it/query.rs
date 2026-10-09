@@ -18,7 +18,7 @@ fn rec(seq: u64, at: u64, sev: Severity, verdict: Option<Verdict>) -> (Record, H
         id: RecordId(u128::from(seq)),
         tenant: TenantId::parse("acme").unwrap(),
         shard: ShardIx(0),
-        agent_id: AgentId::parse(if seq % 2 == 0 {
+        agent_id: AgentId::parse(if seq.is_multiple_of(2) {
             "agent://acme.example/support"
         } else {
             "agent://acme.example/billing"
@@ -56,12 +56,12 @@ fn rec(seq: u64, at: u64, sev: Severity, verdict: Option<Verdict>) -> (Record, H
 fn segment() -> Segment {
     let pairs: Vec<(Record, Hash)> = (1..=12u64)
         .map(|i| {
-            let sev = if i % 4 == 0 {
+            let sev = if i.is_multiple_of(4) {
                 Severity::Critical
             } else {
                 Severity::Info
             };
-            let verdict = if i % 3 == 0 {
+            let verdict = if i.is_multiple_of(3) {
                 Some(Verdict::Denied)
             } else {
                 Some(Verdict::Allowed)

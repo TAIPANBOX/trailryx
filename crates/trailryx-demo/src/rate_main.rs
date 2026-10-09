@@ -136,7 +136,7 @@ fn one(sync_every: u64, seconds: f64, dir: &std::path::Path) -> Result<Run, Stri
         // The clock is read every 64 records rather than every one. At the fast end
         // the read itself would otherwise be a measurable share of the loop, which
         // would make the number smaller in exactly the case it is being trusted in.
-        if n % 64 == 0 && start.elapsed().as_secs_f64() >= seconds {
+        if n.is_multiple_of(64) && start.elapsed().as_secs_f64() >= seconds {
             break;
         }
     }

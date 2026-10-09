@@ -222,10 +222,10 @@ impl DedupWindow {
     fn remember(&mut self, id: RecordId, seq: u64) {
         if self.seen.insert(id, seq).is_none() {
             self.order.push_back(id);
-            if self.order.len() > self.capacity {
-                if let Some(old) = self.order.pop_front() {
-                    self.seen.remove(&old);
-                }
+            if self.order.len() > self.capacity
+                && let Some(old) = self.order.pop_front()
+            {
+                self.seen.remove(&old);
             }
         }
     }
@@ -488,12 +488,11 @@ impl Journal {
     fn next_parsable_frame(bytes: &[u8], from: usize) -> Option<usize> {
         let mut at = from;
         while at < bytes.len() {
-            if bytes[at] == wire::FRAME_MAGIC {
-                if let Ok(frame) = decode_frame(&bytes[at..]) {
-                    if decode_record_at(frame.body, frame.version).is_ok() {
-                        return Some(at);
-                    }
-                }
+            if bytes[at] == wire::FRAME_MAGIC
+                && let Ok(frame) = decode_frame(&bytes[at..])
+                && decode_record_at(frame.body, frame.version).is_ok()
+            {
+                return Some(at);
             }
             at += 1;
         }

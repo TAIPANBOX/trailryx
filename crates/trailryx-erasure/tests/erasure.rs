@@ -148,7 +148,11 @@ fn the_chain_still_verifies_after_an_erasure() {
             .seal(
                 RecordId(i),
                 &parts(),
-                if i % 2 == 0 { Some(&subject) } else { None },
+                if i.is_multiple_of(2) {
+                    Some(&subject)
+                } else {
+                    None
+                },
             )
             .unwrap();
         sealed.push(record(i, reference));

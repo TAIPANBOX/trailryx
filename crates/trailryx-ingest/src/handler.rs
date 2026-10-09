@@ -225,10 +225,10 @@ impl Ingest {
         // export. Before the media type, the size test and the queue look too,
         // so an unauthorised caller learns nothing about this server's limits
         // and reserves none of its budget.
-        if let Some(gate) = &self.auth {
-            if let auth::Outcome::Refuse(response) = gate.decide(head.authorization.as_deref()) {
-                return Verdict::Answer(response);
-            }
+        if let Some(gate) = &self.auth
+            && let auth::Outcome::Refuse(response) = gate.decide(head.authorization.as_deref())
+        {
+            return Verdict::Answer(response);
         }
 
         // Three cases, and they are three because collapsing the first two
