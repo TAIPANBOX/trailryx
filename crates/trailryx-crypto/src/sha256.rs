@@ -94,6 +94,12 @@ impl Sha256 {
             self.compress(&block);
             self.buffered = 0;
         }
+        // `as_chunks::<64>()` is what clippy asks for once the floor reached 1.88,
+        // and it is the same loop without the copy. It is left for a change that
+        // is about this function: the commit that raised the floor did not rewrite
+        // a hash, and the byte-at-a-time vectors above are what any rewrite of
+        // this block has to pass first.
+        #[allow(clippy::chunks_exact_to_as_chunks)]
         let mut chunks = data.chunks_exact(64);
         for block in &mut chunks {
             let mut fixed = [0u8; 64];
