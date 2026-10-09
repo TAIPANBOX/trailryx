@@ -7,7 +7,12 @@ version = "1.1.0"
 edition = "2024"
 license = "Apache-2.0"
 repository = "https://github.com/TAIPANBOX/trailryx"
-rust-version = "1.85"
+# The oldest toolchain the workspace builds on, which is a claim about the code and
+# has to follow it. It said 1.85 until 2026-10-09 while `trailryx-otlp` and
+# `trailryx-node` used let chains (`if let ... && let ...`), which Rust stabilised
+# in 1.88, so no 1.85 to 1.87 compiler could build either. `trailryx-sql` declares
+# its own, higher floor for its dependencies; its manifest says why.
+rust-version = "1.88"
 
 # Tests run optimised. The P-384 verifier is real modular arithmetic and an
 # exhaustive bit sweep over a signature is seven minutes unoptimised and half a

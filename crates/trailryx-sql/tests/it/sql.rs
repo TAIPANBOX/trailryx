@@ -41,7 +41,7 @@ fn record(seq: u64, run: &str, event: EventType, agent: &str) -> Record {
         knowledge_as_of: None,
         clock_skew_nanos: None,
         event_type: event,
-        severity: if seq % 2 == 0 {
+        severity: if seq.is_multiple_of(2) {
             Severity::Error
         } else {
             Severity::Info

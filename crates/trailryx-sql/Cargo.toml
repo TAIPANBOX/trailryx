@@ -5,7 +5,13 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 repository.workspace = true
-rust-version.workspace = true
+# Not the workspace's floor, and this is the one crate where the two differ. It is
+# set by the dependencies, not by our code: pgwire 0.40, datafusion-postgres 0.18,
+# arrow-pg 0.15 and datafusion-pg-catalog 0.18 declare 1.89 and DataFusion 54
+# declares 1.88, each read from the crates.io index for the version in Cargo.lock
+# on 2026-10-09. Nothing depends on this crate, so the higher floor stops here:
+# every other crate has no third-party dependency or only ones that ask for less.
+rust-version = "1.89"
 
 # THE ONLY CRATE IN THIS WORKSPACE WITH THIRD-PARTY DEPENDENCIES.
 #

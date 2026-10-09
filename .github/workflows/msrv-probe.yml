@@ -1,0 +1,47 @@
+name: msrv-probe
+
+# TEMPORARY, removed before this pull request merges. It measures once that the
+# declared floors hold (1.88 for the workspace, 1.89 for trailryx-sql) and lists
+# every clippy lint the new floors turn on in one pass, with --keep-going.
+
+on:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  msrv:
+    if: github.event.repository.private == false
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: toolchains and protoc
+        run: |
+          rustup toolchain install 1.88 1.89 --profile minimal
+          sudo apt-get update && sudo apt-get install -y protobuf-compiler
+      - name: workspace without the facade on 1.88
+        run: cargo +1.88 check --workspace --exclude trailryx-sql --all-targets --locked
+      - name: the facade on 1.89
+        run: cargo +1.89 check -p trailryx-sql --all-targets --locked
+      - name: the facade refuses 1.88
+        run: |
+          if cargo +1.88 check -p trailryx-sql --locked 2>err.txt; then
+            echo "trailryx-sql built on 1.88, so its 1.89 floor is higher than it needs"; exit 1
+          fi
+          grep -E 'requires rustc|rust-version' err.txt
+
+  clippy-all:
+    if: github.event.repository.private == false
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: toolchain and protoc
+        run: |
+          rustup toolchain install stable --profile minimal --component clippy
+          rustup default stable
+          rustc --version
+          sudo apt-get update && sudo apt-get install -y protobuf-compiler
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      - name: every lint, every crate
+        run: cargo clippy --all-targets --keep-going -- -D warnings
