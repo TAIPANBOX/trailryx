@@ -64,12 +64,6 @@ REASONS = {
     # (`rkyv = ["dep:rkyv"]`) that nothing in this graph turns on. rust_decimal
     # 1.42.1 is the latest published version, so no upgrade removes the entry.
     "RUSTSEC-2026-0235": ("rkyv", "never-built"),
-    # time reaches us only through rcgen, the dev-dependency that generates the
-    # certificates the federation transport's tests use. The fix is time 0.3.47,
-    # which requires Rust 1.88 while this workspace declares 1.85, so taking it
-    # would trade a stated portability floor for a stack-exhaustion bug in code
-    # that only ever parses certificates this repository generated itself.
-    "RUSTSEC-2026-0009": ("time", "dev-only"),
 }
 
 def tree(crate, edges=None):

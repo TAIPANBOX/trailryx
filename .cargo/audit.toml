@@ -13,7 +13,4 @@ ignore = [
   # rkyv 0.7.46, out-of-bounds reads on archives containing Rc/Arc.
   # In the lockfile, in no build graph. Reason checked as: never-built.
   "RUSTSEC-2026-0235",
-  # time 0.3.45, denial of service via stack exhaustion.
-  # Test certificates only, through rcgen. Reason checked as: dev-only.
-  "RUSTSEC-2026-0009",
 ]
