@@ -55,7 +55,7 @@ fn corpus() -> Vec<(Record, Hash)> {
                 i,
                 agents[(i as usize - 1) % 3],
                 1_000 + i * 10,
-                if i % 2 == 0 {
+                if i.is_multiple_of(2) {
                     EventType::ModelCall
                 } else {
                     EventType::ToolCall

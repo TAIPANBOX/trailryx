@@ -68,10 +68,10 @@ impl Correlation {
         }
         self.seen.insert(key, id);
         self.order.push_back(key);
-        if self.order.len() > self.capacity {
-            if let Some(oldest) = self.order.pop_front() {
-                self.seen.remove(&oldest);
-            }
+        if self.order.len() > self.capacity
+            && let Some(oldest) = self.order.pop_front()
+        {
+            self.seen.remove(&oldest);
         }
     }
 

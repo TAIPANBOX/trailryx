@@ -933,15 +933,14 @@ pub fn map_line(cfg: &EnvelopeConfig, line: &[u8], cursor: Cursor) -> Result<Ing
     // The wire form is pinned here verbatim rather than through a shared
     // validator, because the producer's is Go and this is Rust and nothing
     // crosses that boundary. The tests carry the same literal for that reason.
-    if let Some(raw) = parsed.agent_id.as_deref() {
-        if let Some(inner) = raw.strip_prefix("claimed:") {
-            if AgentId::parse_strict(inner).is_ok() {
-                return Err(Rejection::ClaimedSubject);
-            }
-            // A `claimed:` wrapper around something that is not an identifier at
-            // all is not a claim this door has to reason about; it is garbage,
-            // and `NoAgent` is true of it.
-        }
+    // A `claimed:` wrapper around something that is not an identifier at all
+    // is not a claim this door has to reason about; it is garbage, and
+    // `NoAgent` is true of it.
+    if let Some(raw) = parsed.agent_id.as_deref()
+        && let Some(inner) = raw.strip_prefix("claimed:")
+        && AgentId::parse_strict(inner).is_ok()
+    {
+        return Err(Rejection::ClaimedSubject);
     }
 
     // Strict, because this is the ingest door and not the journal reading back

@@ -234,7 +234,7 @@ impl Shard {
             }
         }
 
-        if !peers.is_empty() && p.rng.next_u64() % 4 == 0 {
+        if !peers.is_empty() && p.rng.next_u64().is_multiple_of(4) {
             let idx = (p.rng.next_u64() % peers.len() as u64) as usize;
             let to = peers[idx];
             let nonce = self.written;

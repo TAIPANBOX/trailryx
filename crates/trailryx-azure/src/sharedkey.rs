@@ -210,7 +210,7 @@ pub fn base64_encode(bytes: &[u8]) -> String {
 /// Strict: one spelling of the bytes, padding required, nothing else accepted.
 pub fn base64_decode(text: &str) -> Option<Vec<u8>> {
     let bytes = text.as_bytes();
-    if bytes.is_empty() || bytes.len() % 4 != 0 {
+    if bytes.is_empty() || !bytes.len().is_multiple_of(4) {
         return None;
     }
     let value = |c: u8| -> Option<u32> {

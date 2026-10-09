@@ -200,7 +200,7 @@ impl RsaPublicKey {
         // An even exponent is not coprime with an even part of phi(n) and is not
         // a real key. An exponent of one makes s^e == s, so the "signature" is
         // the padded digest itself and anybody can write one.
-        if e < 3 || e % 2 == 0 {
+        if e < 3 || e.is_multiple_of(2) {
             return Err(RsaError::BadExponent);
         }
         Ok(Self {

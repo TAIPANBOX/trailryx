@@ -46,10 +46,10 @@ fn arg(args: &[String], flag: &str) -> Option<String> {
 fn arg_all(args: &[String], flag: &str) -> Vec<String> {
     let mut out = Vec::new();
     for (i, a) in args.iter().enumerate() {
-        if a == flag {
-            if let Some(v) = args.get(i + 1) {
-                out.push(v.clone());
-            }
+        if a == flag
+            && let Some(v) = args.get(i + 1)
+        {
+            out.push(v.clone());
         }
     }
     out

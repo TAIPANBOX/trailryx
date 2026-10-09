@@ -133,7 +133,7 @@ fn custody_keys(dir: &Path, base: u64) {
             let _ = writeln!(out, "wrapped {n}");
             let _ = out.flush();
         }
-        if n % 3 != 0 {
+        if !n.is_multiple_of(3) {
             if provider.destroy(kek(n)).is_err() {
                 return;
             }
@@ -206,7 +206,7 @@ fn custody(rounds: usize) {
         }
         let mut gone = 0;
         for n in &wrapped {
-            if n % 3 == 0 && !provider.exists(kek(*n)) {
+            if n.is_multiple_of(3) && !provider.exists(kek(*n)) {
                 gone += 1;
             }
         }

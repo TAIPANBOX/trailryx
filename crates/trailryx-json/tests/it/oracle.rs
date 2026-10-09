@@ -577,7 +577,7 @@ fn corpus(python: &str) -> Option<(Vec<Case>, String)> {
 
 fn from_hex(name: &str, hex: &str) -> Vec<u8> {
     assert!(
-        hex.len() % 2 == 0,
+        hex.len().is_multiple_of(2),
         "{name}: {} hex digits is not a whole number of bytes",
         hex.len()
     );
