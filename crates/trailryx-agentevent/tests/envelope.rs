@@ -11,7 +11,7 @@
 use trailryx_agentevent::{EnvelopeConfig, MAPPER_VERSION, Rejection, map_line};
 use trailryx_contracts::ingest::Cursor;
 use trailryx_record::{
-    AgentId, ErrorCode, EventType, PrincipalId, Severity, TenantId, Timestamp, Verdict,
+    AgentId, Basis, ErrorCode, EventType, PrincipalId, Severity, TenantId, Timestamp, Verdict,
 };
 
 /// The trust domain the specification's own examples are written in.
@@ -1387,4 +1387,612 @@ fn a_partial_proof_is_not_typed() {
     )
     .expect("the envelope is still an envelope");
     assert!(ing.meta.basis.delegation_proof.is_none());
+}
+
+// ---------------------------------------------------------------------------
+// Money held for a person (tokenfuse), SPEC 6.2, added 12 October 2026
+// ---------------------------------------------------------------------------
+
+/// tokenfuse's line for a call whose outcome became unknown, with the members the
+/// producer writes.
+///
+/// The call was handed to the provider and ended before any answer came back, so
+/// it is neither settled nor released: the run and unit reservations stay
+/// outstanding until a person closes them with evidence. `severity` is fixed at
+/// `medium` by the producer. The envelope carries the call's own `on_behalf_of`,
+/// and `data` carries the reservation, the amount held, the unit (absent when the
+/// call charged none), the model, and whether the reservation reached the
+/// gateway's journal and the list a closure is made from.
+const TOKENFUSE_CALL_RETAINED: &str = concat!(
+    r#"{"schema":"taipanbox.dev/agent-event/v0.2","ts":"2026-10-12T08:14:03Z","#,
+    r#""source":"tokenfuse","type":"call_retained","severity":"medium","#,
+    r#""agent_id":"agent://acme.example/support/tier1-bot","run_id":"run-8842","#,
+    r#""on_behalf_of":["user://acme.example/j.doe"],"#,
+    r#""data":{"reservation_id":"res-01J9Z","amount_microusd":184000,"unit":"tickets","#,
+    r#""model":"vendor-model-large","journaled":true,"listed":true}}"#,
+);
+
+/// A person closing that reservation in the operator console, after a passkey
+/// assertion, with the evidence they had: here an observed cost.
+///
+/// `evidence_ref` is the member this section is mostly about. It is written by a
+/// person, it is not a contract, and the one here names a person, which is the
+/// realistic case: "checked by" is how people write a reference to evidence. Who
+/// closed it is NOT in the event at all, by the producer's design: the gateway
+/// verifies a token and not a person, and the person's principal lives in the
+/// console's own `console_command`.
+const TOKENFUSE_RETAINED_CLOSED: &str = concat!(
+    r#"{"schema":"taipanbox.dev/agent-event/v0.2","ts":"2026-10-12T09:02:41Z","#,
+    r#""source":"tokenfuse","type":"retained_closed","severity":"high","#,
+    r#""agent_id":"agent://acme.example/support/tier1-bot","run_id":"run-8842","#,
+    r#""data":{"reservation_id":"res-01J9Z","revision":3,"operation_id":"op-7f1c","#,
+    r#""evidence_kind":"observed","settled_microusd":161250,"#,
+    r#""evidence_ref":"vendor invoice INV-2026-1012 line 4, checked by Olena Kovalenko","#,
+    r#""unit":"tickets"}}"#,
+);
+
+/// Money held for a person is a budget check whose outcome nobody has decided
+/// yet, and that is the whole claim.
+///
+/// `BudgetCheck` because the run and unit budgets were consulted and an amount
+/// reserved against them, the event type every other tokenfuse money line maps
+/// to. `Held` because the vocabulary already means exactly this by it, decided by
+/// nobody yet, and the producer's own sentence is that the money stays reserved
+/// until a person closes it. No error code: the call ended because the caller
+/// left or the connection broke, nobody knows which, so `UpstreamError` or
+/// `Timeout` would each name a cause this store cannot stand behind.
+#[test]
+fn a_retained_call_is_a_budget_check_held_for_a_person() {
+    let unit = map(OURS, TOKENFUSE_CALL_RETAINED).expect("a retained call must map");
+    assert_eq!(unit.meta.event_type, EventType::BudgetCheck);
+    assert_eq!(
+        unit.meta.verdict,
+        Some(Verdict::Held),
+        "the money stays reserved until a person closes it; nothing is decided yet"
+    );
+    assert_eq!(
+        unit.meta.error, None,
+        "the outcome is unknown, so no cause is named"
+    );
+    assert_eq!(unit.meta.severity, Severity::Warning, "`medium` is Warning");
+    assert_eq!(unit.meta.mapper, MAPPER_VERSION);
+    assert_eq!(
+        unit.meta.agent_id.as_str(),
+        "agent://acme.example/support/tier1-bot"
+    );
+    assert_eq!(unit.meta.run_id.as_str(), "run-8842");
+    assert_eq!(
+        unit.meta.on_behalf_of,
+        vec![
+            PrincipalId::parse_strict("user://acme.example/j.doe")
+                .expect("a constant principal parses")
+        ],
+        "the call's own delegation chain is typed, the way every other event carries it"
+    );
+}
+
+/// A person settling or releasing held money is the same budget check with the
+/// hold lifted, and `NotApplicable` is the verdict that says so.
+///
+/// It is the money-plane twin of `taint_cleared` and reads the same way for the
+/// same reason: `Allowed` would assert that an action was permitted, and none
+/// was, because the call is already over; `Denied` inverts it. What happened is
+/// that a control holding an amount stopped applying, on a person's word. `high`,
+/// so `Error`, the band `taint_cleared` takes: an estate that records a hold
+/// loudly and its release quietly has its weights backwards.
+#[test]
+fn a_closed_reservation_is_a_budget_check_that_no_longer_applies() {
+    let unit = map(OURS, TOKENFUSE_RETAINED_CLOSED).expect("a closure must map");
+    assert_eq!(unit.meta.event_type, EventType::BudgetCheck);
+    assert_eq!(
+        unit.meta.verdict,
+        Some(Verdict::NotApplicable),
+        "a hold was lifted; nothing was allowed and nothing refused"
+    );
+    assert_eq!(unit.meta.error, None);
+    assert_eq!(unit.meta.severity, Severity::Error, "`high` is Error");
+    assert_eq!(unit.meta.mapper, MAPPER_VERSION);
+    assert_eq!(
+        unit.meta.agent_id.as_str(),
+        "agent://acme.example/support/tier1-bot",
+        "the subject is the agent whose call held the money, never the person who closed it"
+    );
+    assert_eq!(unit.meta.run_id.as_str(), "run-8842");
+    assert!(
+        unit.meta.on_behalf_of.is_empty(),
+        "the envelope carries no chain, and the person who closed it is not invented into one"
+    );
+}
+
+/// The band each arm falls back to is the band tokenfuse fixes for the type, so a
+/// line without the optional member and a line with it produce one record shape.
+#[test]
+fn the_fallback_band_of_both_retained_types_is_the_one_tokenfuse_fixes() {
+    for (line, stamped, band) in [
+        (
+            TOKENFUSE_CALL_RETAINED,
+            r#""severity":"medium","#,
+            Severity::Warning,
+        ),
+        (
+            TOKENFUSE_RETAINED_CLOSED,
+            r#""severity":"high","#,
+            Severity::Error,
+        ),
+    ] {
+        assert!(line.contains(stamped), "the fixture carries {stamped}");
+        let bare = line.replace(stamped, "");
+        let unit = map(OURS, &bare).expect("a line with no severity must map");
+        assert_eq!(unit.meta.severity, band, "{bare}");
+        let with = map(OURS, line).expect("a line with its severity must map");
+        assert_eq!(unit.meta.severity, with.meta.severity, "{line}");
+    }
+}
+
+/// `observed` and `no_charge` are two kinds of evidence and one typed reading.
+///
+/// The kind is in `data`, which this mapper does not read, so it could not tell
+/// them apart even if it wanted to, and that is the design: whether money was
+/// charged, and how much, is the producer's member, in the payload plane, where a
+/// reader sees it and this store claims nothing about it.
+#[test]
+fn both_kinds_of_evidence_read_the_same_in_the_typed_fields() {
+    let observed = map(OURS, TOKENFUSE_RETAINED_CLOSED).expect("a closure must map");
+    let no_charge_line = TOKENFUSE_RETAINED_CLOSED.replace(
+        r#""evidence_kind":"observed","settled_microusd":161250"#,
+        r#""evidence_kind":"no_charge","settled_microusd":0"#,
+    );
+    assert!(
+        no_charge_line.contains("no_charge"),
+        "the fixture changed, so this test would compare a line with itself"
+    );
+    let no_charge = map(OURS, &no_charge_line).expect("a closure must map");
+    let typed = |u: &trailryx_contracts::ingest::Ingest| {
+        (
+            u.meta.event_type,
+            u.meta.verdict,
+            u.meta.error,
+            u.meta.severity,
+            u.meta.cost_micros,
+        )
+    };
+    assert_eq!(typed(&observed), typed(&no_charge));
+    assert!(payload_text(&no_charge).contains("no_charge"));
+}
+
+/// A person's evidence, the amounts and the model stay in the payload plane, and
+/// no typed field takes any of them.
+///
+/// `evidence_ref` is a person's free text, which is invariant 5 exactly, and the
+/// one in the fixture names a person. The amounts are the tempting half:
+/// `cost_micros` and `basis.budget_remaining_micros` are right there, and
+/// `basis.model` is one word from `data.model`. Filling any of them would be this
+/// store asserting a producer's free-form member as a fact it stands behind, and
+/// an amount held is not a cost while a settled amount is a person's word.
+#[test]
+fn a_persons_evidence_and_the_amounts_stay_in_the_payload_plane() {
+    for (line, from_data, names) in [
+        (
+            TOKENFUSE_CALL_RETAINED,
+            &["res-01J9Z", "184000", "tickets", "vendor-model-large"][..],
+            &[
+                "reservation_id",
+                "amount_microusd",
+                "unit",
+                "model",
+                "journaled",
+                "listed",
+            ][..],
+        ),
+        (
+            TOKENFUSE_RETAINED_CLOSED,
+            &[
+                "res-01J9Z",
+                "op-7f1c",
+                "observed",
+                "161250",
+                "INV-2026-1012",
+                "Olena Kovalenko",
+                "tickets",
+            ][..],
+            &[
+                "reservation_id",
+                "revision",
+                "operation_id",
+                "evidence_kind",
+                "settled_microusd",
+                "evidence_ref",
+                "unit",
+            ][..],
+        ),
+    ] {
+        let unit = map(OURS, line).expect("must map");
+        assert_eq!(
+            unit.meta.cost_micros, None,
+            "an amount in `data` reached a typed field: {line}"
+        );
+        assert_eq!(
+            unit.meta.basis,
+            Basis::default(),
+            "a member of `data` reached the basis: {line}"
+        );
+        assert_eq!(
+            (
+                unit.meta.tokens_in,
+                unit.meta.tokens_out,
+                unit.meta.latency_micros
+            ),
+            (None, None, None),
+            "{line}"
+        );
+
+        let payload = payload_text(&unit);
+        let metadata = format!("{:?}", unit.meta);
+        for value in from_data {
+            assert!(
+                payload.contains(value),
+                "{value} reached neither plane:\n{payload}"
+            );
+            // Digits are left out of the metadata half: a timestamp could carry
+            // any short run of them by coincidence.
+            if !value.chars().all(|c| c.is_ascii_digit()) {
+                assert!(
+                    !metadata.contains(value),
+                    "{value} came out of `data` and reached the metadata plane:\n{metadata}"
+                );
+            }
+        }
+        for name in names {
+            assert!(
+                payload.contains(name),
+                "{name} reached neither plane:\n{payload}"
+            );
+            assert!(
+                !trailryx_agentevent::consumed_members().contains(name),
+                "{name} is read into a typed field, which is this store asserting a \
+                 producer's free-form member as a fact it stands behind"
+            );
+        }
+    }
+}
+
+/// One reservation, one subject, one kind of record, and the verdict is what
+/// tells the hold from its release.
+///
+/// And the release reads as `taint_cleared`'s twin rather than as a copy of it:
+/// the same verdict and the same band, because both are a control lifted on a
+/// person's word, and a different event type, because what was lifted is money
+/// rather than a policy constraint.
+#[test]
+fn a_hold_and_its_release_name_one_subject_and_differ_by_verdict() {
+    let held = map(OURS, TOKENFUSE_CALL_RETAINED).expect("a retained call must map");
+    let closed = map(OURS, TOKENFUSE_RETAINED_CLOSED).expect("a closure must map");
+    assert_eq!(held.meta.event_type, closed.meta.event_type);
+    assert_eq!(held.meta.agent_id, closed.meta.agent_id);
+    assert_eq!(held.meta.run_id, closed.meta.run_id);
+    assert_eq!(held.meta.verdict, Some(Verdict::Held));
+    assert_eq!(closed.meta.verdict, Some(Verdict::NotApplicable));
+
+    let cleared = map(OURS, TOKENFUSE_TAINT_CLEARED).expect("a clearance must map");
+    assert_eq!(closed.meta.verdict, cleared.meta.verdict);
+    assert_eq!(closed.meta.severity, cleared.meta.severity);
+    assert_ne!(
+        closed.meta.event_type, cleared.meta.event_type,
+        "money and a policy constraint are two different things to lift"
+    );
+}
+
+/// How many lines the sweep below writes. Each is one call to a pure function, so
+/// the whole sweep costs milliseconds and runs on every push.
+const SWEEP_CASES: u64 = 400;
+
+/// The sweep's only source of variety, so a failing case is a number anybody can
+/// rerun rather than a file on somebody's disk. xorshift64, seeded from the case
+/// number, with the low bit set because zero is the one state it never leaves.
+#[derive(Debug)]
+struct Seeded(u64);
+
+impl Seeded {
+    fn new(case: u64) -> Self {
+        Self(case.wrapping_mul(0x9E37_79B9_7F4A_7C15) | 1)
+    }
+
+    fn step(&mut self) -> u64 {
+        let mut x = self.0;
+        x ^= x << 13;
+        x ^= x >> 7;
+        x ^= x << 17;
+        self.0 = x;
+        x
+    }
+
+    fn below(&mut self, n: usize) -> usize {
+        (self.step() % n as u64) as usize
+    }
+
+    fn chance(&mut self) -> bool {
+        self.step() & 1 == 1
+    }
+
+    fn pick<'a>(&mut self, from: &[&'a str]) -> &'a str {
+        from[self.below(from.len())]
+    }
+}
+
+/// What a hostile writer reaches for: every byte that separates something
+/// downstream, escapes that already look escaped, envelope members spelled inside
+/// a string, and text that is simply not ASCII.
+const HOSTILE: &[&str] = &[
+    "\t",
+    "\n",
+    "\r",
+    "\r\n",
+    "\"",
+    "\\",
+    "\u{0}",
+    "\u{1b}[31m",
+    "\u{1f}",
+    "\u{7f}",
+    "\u{85}",
+    "\u{2028}",
+    "\u{2029}",
+    "\u{feff}",
+    "\u{202e}",
+    "é",
+    "日本語",
+    "🦀",
+    "\\n",
+    "\\t",
+    "data\t{}",
+    "\nagent_id\tagent://other.example/decoy",
+    "\nseverity\tcritical",
+    "{\"type\":\"budget_exhausted\"}",
+    "[",
+    "}",
+    ":",
+    ",",
+    " ",
+    "null",
+    "1e309",
+    "%s%n",
+    "'; DROP TABLE records; --",
+    "<script>",
+    "Olena Kovalenko",
+];
+
+/// An amount as a producer might get it wrong: too big, negative, not a number.
+const AMOUNTS: &[&str] = &[
+    "0",
+    "184000",
+    "-1",
+    "18446744073709551616",
+    "1e309",
+    "-0.0",
+    "\"184000\"",
+    "null",
+    "true",
+    "[]",
+    "{}",
+];
+
+const FLAGS: &[&str] = &["true", "false", "\"yes\"", "null", "0"];
+
+/// Members of the envelope, spelled again INSIDE `data`. Only the top level is
+/// the envelope; any of these reaching a typed field would mean a producer's
+/// payload could rewrite the record it rides in.
+const DECOYS: &[&str] = &[
+    r#""agent_id":"agent://other.example/decoy""#,
+    r#""run_id":"run-decoy""#,
+    r#""severity":"critical""#,
+    r#""type":"budget_exhausted""#,
+    r#""schema":"taipanbox.dev/agent-event/v0.1""#,
+    r#""ts":"1999-01-01T00:00:00Z""#,
+    r#""on_behalf_of":["user://acme.example/decoy"]"#,
+    r#""delegation_proof":{"jti":"decoy","jkt":"decoy","iss":"https://decoy.example","exp":1}"#,
+    r#""cost_micros":42"#,
+];
+
+/// A string as a JSON literal, so the sweep sends only what the grammar allows and
+/// a refusal can only ever mean the mapper refused.
+fn json_string(text: &str) -> String {
+    let mut out = String::from("\"");
+    for ch in text.chars() {
+        match ch {
+            '"' => out.push_str("\\\""),
+            '\\' => out.push_str("\\\\"),
+            c if (c as u32) < 0x20 => out.push_str(&format!("\\u{:04x}", c as u32)),
+            c => out.push(c),
+        }
+    }
+    out.push('"');
+    out
+}
+
+/// Free text with a marker at its head, up to a little past the 512 bytes the
+/// producer caps `evidence_ref` at, because the cap is the producer's and this
+/// reader must not depend on it.
+fn hostile_text(rng: &mut Seeded, case: u64) -> String {
+    let mut text = format!("SENTINEL-{case}-");
+    let target = rng.below(700);
+    while text.len() < target {
+        text.push_str(rng.pick(HOSTILE));
+    }
+    text
+}
+
+/// One `data` member for either type: its own members with hostile values, a
+/// random subset of the decoys, sometimes a nested copy of the text, in the
+/// writer's order rather than ours.
+fn hostile_data(rng: &mut Seeded, case: u64, closed: bool) -> String {
+    let text = json_string(&hostile_text(rng, case));
+    // One case in four is not an object at all: `data` is free-form by
+    // specification, and a producer is allowed to be wrong about its shape.
+    match rng.below(8) {
+        0 => return text,
+        1 => return format!("[{text},{},null]", rng.pick(AMOUNTS)),
+        _ => {}
+    }
+    let mut members: Vec<String> = vec![format!(
+        r#""reservation_id":{}"#,
+        json_string(&format!("res-{case}"))
+    )];
+    if closed {
+        members.push(format!(r#""revision":{}"#, rng.pick(AMOUNTS)));
+        members.push(format!(
+            r#""operation_id":{}"#,
+            json_string(&format!("op-{case}"))
+        ));
+        members.push(format!(
+            r#""evidence_kind":{}"#,
+            rng.pick(&["\"observed\"", "\"no_charge\"", "\"\"", "null", "7"])
+        ));
+        members.push(format!(r#""settled_microusd":{}"#, rng.pick(AMOUNTS)));
+        members.push(format!(r#""evidence_ref":{text}"#));
+    } else {
+        members.push(format!(r#""amount_microusd":{}"#, rng.pick(AMOUNTS)));
+        members.push(format!(r#""model":{text}"#));
+        members.push(format!(r#""journaled":{}"#, rng.pick(FLAGS)));
+        members.push(format!(r#""listed":{}"#, rng.pick(FLAGS)));
+    }
+    match rng.below(4) {
+        0 => {}
+        1 => members.push(String::from(r#""unit":null"#)),
+        2 => members.push(String::from(r#""unit":"tickets""#)),
+        _ => members.push(format!(r#""unit":{text}"#)),
+    }
+    for decoy in DECOYS {
+        if rng.chance() {
+            members.push(String::from(*decoy));
+        }
+    }
+    if rng.chance() {
+        members.push(format!(r#""nested":{{"deeper":[{{"still":{text}}}]}}"#));
+    }
+    for i in (1..members.len()).rev() {
+        let j = rng.below(i + 1);
+        members.swap(i, j);
+    }
+    format!("{{{}}}", members.join(","))
+}
+
+/// The envelope around a `data` member, with the optional members switched on or
+/// off. The same switches with `data` set to `{}` give the line a case is held
+/// against.
+fn retained_line(
+    closed: bool,
+    chain: bool,
+    stamped: bool,
+    prev: bool,
+    data_first: bool,
+    data: &str,
+) -> String {
+    let (kind, band) = if closed {
+        ("retained_closed", "high")
+    } else {
+        ("call_retained", "medium")
+    };
+    let mut members = vec![
+        String::from(r#""schema":"taipanbox.dev/agent-event/v0.2""#),
+        String::from(r#""ts":"2026-10-12T08:14:03Z""#),
+        String::from(r#""source":"tokenfuse""#),
+        format!(r#""type":"{kind}""#),
+        String::from(r#""agent_id":"agent://acme.example/support/tier1-bot""#),
+        String::from(r#""run_id":"run-8842""#),
+    ];
+    if stamped {
+        members.push(format!(r#""severity":"{band}""#));
+    }
+    if chain {
+        members.push(String::from(
+            r#""on_behalf_of":["user://acme.example/j.doe"]"#,
+        ));
+    }
+    if prev {
+        members.push(String::from(
+            r#""prev_hash":"sha256:2e81d20e76391693864bc8b7c0963b6aa87ef867c36bc80a0678166dcfb3168e""#,
+        ));
+    }
+    let data = format!(r#""data":{data}"#);
+    if data_first {
+        members.insert(0, data);
+    } else {
+        members.push(data);
+    }
+    format!("{{{}}}", members.join(","))
+}
+
+/// Hostile `data` on either type moves no typed field, not by one bit, and every
+/// byte of it still lands in the payload plane without forging a line.
+///
+/// Each case is held against the same envelope with `data` set to `{}`, so the
+/// assertion is not that some field was left alone but that the metadata plane
+/// is IDENTICAL: the decoys spelled inside `data` (an `agent_id` in another trust
+/// domain, a `run_id`, a `severity`, a `type`, a `ts`, an `on_behalf_of`, a whole
+/// `delegation_proof`) never reach a typed field, and neither does an amount
+/// that is negative, past `u64`, or not a number at all. Rerun one case by
+/// narrowing the range to it.
+#[test]
+fn hostile_data_on_either_retained_type_never_reaches_a_typed_field() {
+    for case in 0..SWEEP_CASES {
+        let mut rng = Seeded::new(case);
+        let closed = case % 2 == 1;
+        let (chain, stamped, prev, data_first) =
+            (rng.chance(), rng.chance(), rng.chance(), rng.chance());
+        let data = hostile_data(&mut rng, case, closed);
+        let line = retained_line(closed, chain, stamped, prev, data_first, &data);
+        let reference = retained_line(closed, chain, stamped, prev, data_first, "{}");
+
+        let clean = map(OURS, &reference).unwrap_or_else(|e| {
+            panic!("case {case}: the clean line was refused, {e:?}\n{reference}")
+        });
+        let (want_verdict, want_band) = if closed {
+            (Verdict::NotApplicable, Severity::Error)
+        } else {
+            (Verdict::Held, Severity::Warning)
+        };
+        assert_eq!(clean.meta.event_type, EventType::BudgetCheck, "case {case}");
+        assert_eq!(clean.meta.verdict, Some(want_verdict), "case {case}");
+        assert_eq!(clean.meta.severity, want_band, "case {case}");
+
+        let unit =
+            map(OURS, &line).unwrap_or_else(|e| panic!("case {case}: refused, {e:?}\n{line}"));
+        assert_eq!(
+            unit.meta, clean.meta,
+            "case {case}: `data` moved the metadata plane\n{line}"
+        );
+
+        let metadata = format!("{:?}", unit.meta);
+        for leaked in ["SENTINEL", "decoy", "other.example"] {
+            assert!(
+                !metadata.contains(leaked),
+                "case {case}: {leaked} reached the metadata plane\n{metadata}"
+            );
+        }
+
+        let payload = payload_text(&unit);
+        assert!(
+            payload.contains(&format!("SENTINEL-{case}-")),
+            "case {case}: the hostile text reached neither plane\n{line}"
+        );
+        let lines: Vec<&str> = payload.lines().collect();
+        assert_eq!(
+            lines.len(),
+            if prev { 3 } else { 2 },
+            "case {case}: `data`, `source` and `prev_hash` are the payload, one line each\n{payload}"
+        );
+        for rendered in &lines {
+            assert_eq!(
+                rendered.matches('\t').count(),
+                1,
+                "case {case}: a member forged a field: {rendered:?}"
+            );
+        }
+
+        let again = map(OURS, &line).expect("it mapped a moment ago");
+        assert_eq!(
+            payload_text(&again),
+            payload,
+            "case {case}: one line, two payloads"
+        );
+    }
 }
