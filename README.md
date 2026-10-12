@@ -7,7 +7,7 @@
 ![Stage](https://img.shields.io/badge/stage-13%20of%2013-blue.svg)
 ![Core](https://img.shields.io/badge/core-frozen-success.svg)
 ![Rust](https://img.shields.io/badge/rust-1.88%2B%2C%20SQL%20facade%201.89%2B-orange.svg)
-![Tests](https://img.shields.io/badge/tests-1220-success.svg)
+![Tests](https://img.shields.io/badge/tests-1227-success.svg)
 ![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)
 ![Dependencies](https://img.shields.io/badge/deps-0%20in%20the%20verifier-success.svg)
 ![Unsafe](https://img.shields.io/badge/unsafe-forbidden-success.svg)
@@ -271,7 +271,8 @@ harmonised standards that would say *how* are still not cited in the Official Jo
 ### It is the estate's record, not only its own
 
 Every governance plane in this stack writes the same agent-event envelope: the money
-plane when a budget is checked or a breaker trips, the policy plane when it allows,
+plane when a budget is checked, a breaker trips, or a call's money is held until a
+person releases it, the policy plane when it allows,
 denies or holds, the egress plane when a fetch is decided, the memory plane when
 something is written or forgotten, the identity plane when a detector speaks, the
 notifier when a person is told. They share one `agent://` identifier, one run, one
@@ -334,7 +335,7 @@ migration. What stage 13 still wants is measured absence rather than a guess, an
 | `trailryx-ingest` | the OTLP/HTTP server: HTTP/1.1, gzip, bearer auth, all hand-written | 128 |
 | `trailryx-compliance` | a versioned map from what is proved to what a framework asks, and what it does not | 12 |
 | `trailryx-sql` | the SQL facade: DataFusion and the Postgres wire protocol, predicates pushed into the index, statements gated, reads authorised, connections bounded, four dialect extensions | 64 |
-| `trailryx-agentevent` | the estate's shared agent-event envelope, mapped into records: the same `agent://` grammar, the same run and delegation chain | 43 |
+| `trailryx-agentevent` | the estate's shared agent-event envelope, mapped into records: the same `agent://` grammar, the same run and delegation chain | 50 |
 | `trailryx-node` | the record plane as one process: ingest, journal, sealing on a schedule, a reader that rebuilds a segment from the journal, and a cursor that moves with every seal so an import is safe to repeat | 35 |
 | `trailryx-demo` | the eight acceptance steps, and a reader for a collector's file | 5 |
 
@@ -749,7 +750,7 @@ not repeated here: a number written twice is a number that will disagree with it
 ## Try it
 
 ```bash
-cargo test                                    # 1220 tests
+cargo test                                    # 1227 tests
 cargo run --bin trailryx-sim-run -- --help
 ```
 

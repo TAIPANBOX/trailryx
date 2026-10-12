@@ -300,6 +300,36 @@
 //! run of this stream that turns away N lines of this type turned away N budgets
 //! already gone or going fast rather than N windows computed, and a quiet
 //! `unknown_type` counter is not the same fact as a healthy fleet.
+//!
+//! # Money held for a person, and released by one
+//!
+//! `call_retained` and `retained_closed` joined SPEC 6.2 on 12 October 2026 and
+//! are mapped rather than refused (`@decided 2026-10-12`: both go on the bus, and
+//! this store seals both). They are a pair. The gateway reports that a call's
+//! answer never came back, so its run and unit reservations stay outstanding
+//! until a person closes them; later a person closes one with evidence, an
+//! observed cost or no charge, after a passkey assertion in the operator console.
+//!
+//! Both read as `BudgetCheck`, with every other money line tokenfuse writes, and
+//! the verdict is what tells them apart: `Held` while nobody has decided what the
+//! money was, `NotApplicable` once the hold is lifted, which is the verdict and
+//! the band `taint_cleared` takes for lifting a policy constraint. Neither names
+//! an error code, because nobody knows why the answer never came.
+//!
+//! What makes them mappable where `console_command` and `slo_burn` are not is the
+//! subject axis. Both carry the real `agent_id` and `run_id` of the call that held
+//! the money, so the record is filed under the agent whose run it is and nothing
+//! is invented. The person who closed it is absent from the event by the
+//! producer's design: the gateway verifies a token, not a person, and the
+//! person's principal is in the console's own `console_command`, which this store
+//! refuses. A reader who wants both joins them on the bus by `reservation_id`.
+//!
+//! Everything about the money stays in the payload plane: the reservation, the
+//! amount held, the amount settled, the evidence kind, the model and above all
+//! `evidence_ref`, a person's free text that can name anyone. `cost_micros` and
+//! the basis stay empty on purpose, by the same rule as every other `data`
+//! member: a reservation is not a cost, and a settled amount is a person's word
+//! rather than a figure this store can stand behind.
 
 pub mod time;
 
@@ -626,8 +656,7 @@ fn mapping_for(kind: &str) -> Option<Mapping> {
         // stands behind. `medium` is `Warning`, the band tokenfuse fixes.
         "call_retained" => m(
             EventType::BudgetCheck,
-            // MUTANT M1, planted to prove a test catches it: Held read as Allowed.
-            Some(Verdict::Allowed),
+            Some(Verdict::Held),
             None,
             Severity::Warning,
         ),
@@ -655,12 +684,10 @@ fn mapping_for(kind: &str) -> Option<Mapping> {
         // amount, the evidence kind, the revision and the operation, none of
         // which this mapper reads. `high` is `Error`, `taint_cleared`'s band.
         "retained_closed" => m(
-            // MUTANT M2, planted: the closure filed as a policy decision.
-            EventType::PolicyDecision,
+            EventType::BudgetCheck,
             Some(Verdict::NotApplicable),
             None,
-            // MUTANT M3, planted: the fallback band one step quieter.
-            Severity::Warning,
+            Severity::Error,
         ),
         // Policy. `policy_allow` may assert `Allowed`, which the OTLP mapper
         // refuses to do, and the difference is the source: a span says a call
@@ -1112,8 +1139,7 @@ pub fn map_line(cfg: &EnvelopeConfig, line: &[u8], cursor: Cursor) -> Result<Ing
         latency_micros: None,
         tokens_in: None,
         tokens_out: None,
-        // MUTANT M4, planted: a settled amount promoted into a typed field.
-        cost_micros: (kind == "retained_closed").then_some(161_250),
+        cost_micros: None,
     };
 
     Ok(Ingest {
