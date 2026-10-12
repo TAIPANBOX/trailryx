@@ -362,7 +362,15 @@ use trailryx_record::{
 /// comparing a shadow week against an enforced one had `breaker_tripped` on one
 /// side and nothing on the other, which is not "nothing happened" but "nothing
 /// could be written down".
-pub const MAPPER_VERSION: MapperVersion = MapperVersion(111);
+///
+/// 112 is the reading that maps `call_retained` and `retained_closed`, the
+/// gateway's money held for a person and a person releasing it. The same
+/// argument, about money this time: a retained call or a closure written before
+/// this reading was an unknown type, refused and counted, and the cursor moved
+/// past it, so the trail of money waiting on a person starts at 112. A reader
+/// who finds no hold before it is looking at a reader that could not write one
+/// down, not at a gateway that never lost an answer.
+pub const MAPPER_VERSION: MapperVersion = MapperVersion(112);
 
 /// The schema values this reader accepts.
 ///
@@ -592,6 +600,68 @@ fn mapping_for(kind: &str) -> Option<Mapping> {
         ),
         "budget_threshold" => m(EventType::BudgetCheck, None, None, Severity::Warning),
         "spend_spike" => m(EventType::BudgetCheck, None, None, Severity::Warning),
+        // A call whose outcome became unknown: handed to the provider and
+        // ended before any answer came back, so neither settled nor released
+        // (agent-passport SPEC 6.2, `call_retained`, 2026-10-12). The gateway
+        // keeps the run and unit reservations outstanding until a person
+        // closes them with evidence.
+        //
+        // `BudgetCheck`, with every other money line from this producer: the
+        // budgets were consulted and an amount reserved against them, which
+        // is what that type says and nothing more. `Held` is the verdict the
+        // vocabulary already keeps for an outcome decided by nobody yet, and
+        // the producer's own sentence is that the money waits for a person.
+        //
+        // No `ErrorCode`, because both candidates name a cause nobody knows.
+        // The call ended because the caller left while the provider held the
+        // request, or because the connection broke after it was sent, and the
+        // gateway cannot tell which: `UpstreamError` would blame the provider
+        // and `Timeout` would assert that a bound was hit. The fact is that
+        // money is held, and the verdict says exactly that.
+        //
+        // The amount, the reservation, the unit and the model stay in `data`,
+        // by the rule at the top of this file. `cost_micros` is the tempting
+        // field and wrong twice over: a reservation is not a cost, and filling
+        // it would be this store asserting a producer's member as a fact it
+        // stands behind. `medium` is `Warning`, the band tokenfuse fixes.
+        "call_retained" => m(
+            EventType::BudgetCheck,
+            // MUTANT M1, planted to prove a test catches it: Held read as Allowed.
+            Some(Verdict::Allowed),
+            None,
+            Severity::Warning,
+        ),
+        // A person closed a retained reservation with evidence, an observed
+        // cost or no charge, after a passkey assertion in the operator console
+        // (SPEC 6.2, `retained_closed`, 2026-10-12). The money-plane twin of
+        // `taint_cleared` below, and read the same way for the same reason: a
+        // control that was holding an amount stopped applying, on a person's
+        // word. `NotApplicable`, because `Allowed` would assert that an action
+        // was permitted when the call is long over, and `Denied` inverts it.
+        // `BudgetCheck` beside the hold it releases, so a reader following one
+        // reservation finds one kind of record and two verdicts.
+        //
+        // It maps where `console_command` is refused, and the line between the
+        // two is the subject. The console's command carries the operator and a
+        // console's synthetic identity; this carries the REAL `agent_id` of the
+        // call that held the money and its real `run_id`, both from the
+        // gateway's journal. Who closed it is not in this event at all, by the
+        // producer's design: the gateway verifies a token, not a person.
+        //
+        // `evidence_ref` is a person's free text, at most 512 bytes and no
+        // contract, and it is why the rule at the top of this file is not
+        // negotiable here: it can name anyone, and the metadata plane is the
+        // one erasure cannot reach. It travels in `data` with the settled
+        // amount, the evidence kind, the revision and the operation, none of
+        // which this mapper reads. `high` is `Error`, `taint_cleared`'s band.
+        "retained_closed" => m(
+            // MUTANT M2, planted: the closure filed as a policy decision.
+            EventType::PolicyDecision,
+            Some(Verdict::NotApplicable),
+            None,
+            // MUTANT M3, planted: the fallback band one step quieter.
+            Severity::Warning,
+        ),
         // Policy. `policy_allow` may assert `Allowed`, which the OTLP mapper
         // refuses to do, and the difference is the source: a span says a call
         // happened, while this event is a policy engine saying it allowed one.
@@ -1042,7 +1112,8 @@ pub fn map_line(cfg: &EnvelopeConfig, line: &[u8], cursor: Cursor) -> Result<Ing
         latency_micros: None,
         tokens_in: None,
         tokens_out: None,
-        cost_micros: None,
+        // MUTANT M4, planted: a settled amount promoted into a typed field.
+        cost_micros: (kind == "retained_closed").then_some(161_250),
     };
 
     Ok(Ingest {
