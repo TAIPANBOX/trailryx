@@ -300,6 +300,36 @@
 //! run of this stream that turns away N lines of this type turned away N budgets
 //! already gone or going fast rather than N windows computed, and a quiet
 //! `unknown_type` counter is not the same fact as a healthy fleet.
+//!
+//! # Money held for a person, and released by one
+//!
+//! `call_retained` and `retained_closed` joined SPEC 6.2 on 12 October 2026 and
+//! are mapped rather than refused (`@decided 2026-10-12`: both go on the bus, and
+//! this store seals both). They are a pair. The gateway reports that a call's
+//! answer never came back, so its run and unit reservations stay outstanding
+//! until a person closes them; later a person closes one with evidence, an
+//! observed cost or no charge, after a passkey assertion in the operator console.
+//!
+//! Both read as `BudgetCheck`, with every other money line tokenfuse writes, and
+//! the verdict is what tells them apart: `Held` while nobody has decided what the
+//! money was, `NotApplicable` once the hold is lifted, which is the verdict and
+//! the band `taint_cleared` takes for lifting a policy constraint. Neither names
+//! an error code, because nobody knows why the answer never came.
+//!
+//! What makes them mappable where `console_command` and `slo_burn` are not is the
+//! subject axis. Both carry the real `agent_id` and `run_id` of the call that held
+//! the money, so the record is filed under the agent whose run it is and nothing
+//! is invented. The person who closed it is absent from the event by the
+//! producer's design: the gateway verifies a token, not a person, and the
+//! person's principal is in the console's own `console_command`, which this store
+//! refuses. A reader who wants both joins them on the bus by `reservation_id`.
+//!
+//! Everything about the money stays in the payload plane: the reservation, the
+//! amount held, the amount settled, the evidence kind, the model and above all
+//! `evidence_ref`, a person's free text that can name anyone. `cost_micros` and
+//! the basis stay empty on purpose, by the same rule as every other `data`
+//! member: a reservation is not a cost, and a settled amount is a person's word
+//! rather than a figure this store can stand behind.
 
 pub mod time;
 
@@ -362,7 +392,15 @@ use trailryx_record::{
 /// comparing a shadow week against an enforced one had `breaker_tripped` on one
 /// side and nothing on the other, which is not "nothing happened" but "nothing
 /// could be written down".
-pub const MAPPER_VERSION: MapperVersion = MapperVersion(111);
+///
+/// 112 is the reading that maps `call_retained` and `retained_closed`, the
+/// gateway's money held for a person and a person releasing it. The same
+/// argument, about money this time: a retained call or a closure written before
+/// this reading was an unknown type, refused and counted, and the cursor moved
+/// past it, so the trail of money waiting on a person starts at 112. A reader
+/// who finds no hold before it is looking at a reader that could not write one
+/// down, not at a gateway that never lost an answer.
+pub const MAPPER_VERSION: MapperVersion = MapperVersion(112);
 
 /// The schema values this reader accepts.
 ///
@@ -592,6 +630,65 @@ fn mapping_for(kind: &str) -> Option<Mapping> {
         ),
         "budget_threshold" => m(EventType::BudgetCheck, None, None, Severity::Warning),
         "spend_spike" => m(EventType::BudgetCheck, None, None, Severity::Warning),
+        // A call whose outcome became unknown: handed to the provider and
+        // ended before any answer came back, so neither settled nor released
+        // (agent-passport SPEC 6.2, `call_retained`, 2026-10-12). The gateway
+        // keeps the run and unit reservations outstanding until a person
+        // closes them with evidence.
+        //
+        // `BudgetCheck`, with every other money line from this producer: the
+        // budgets were consulted and an amount reserved against them, which
+        // is what that type says and nothing more. `Held` is the verdict the
+        // vocabulary already keeps for an outcome decided by nobody yet, and
+        // the producer's own sentence is that the money waits for a person.
+        //
+        // No `ErrorCode`, because both candidates name a cause nobody knows.
+        // The call ended because the caller left while the provider held the
+        // request, or because the connection broke after it was sent, and the
+        // gateway cannot tell which: `UpstreamError` would blame the provider
+        // and `Timeout` would assert that a bound was hit. The fact is that
+        // money is held, and the verdict says exactly that.
+        //
+        // The amount, the reservation, the unit and the model stay in `data`,
+        // by the rule at the top of this file. `cost_micros` is the tempting
+        // field and wrong twice over: a reservation is not a cost, and filling
+        // it would be this store asserting a producer's member as a fact it
+        // stands behind. `medium` is `Warning`, the band tokenfuse fixes.
+        "call_retained" => m(
+            EventType::BudgetCheck,
+            Some(Verdict::Held),
+            None,
+            Severity::Warning,
+        ),
+        // A person closed a retained reservation with evidence, an observed
+        // cost or no charge, after a passkey assertion in the operator console
+        // (SPEC 6.2, `retained_closed`, 2026-10-12). The money-plane twin of
+        // `taint_cleared` below, and read the same way for the same reason: a
+        // control that was holding an amount stopped applying, on a person's
+        // word. `NotApplicable`, because `Allowed` would assert that an action
+        // was permitted when the call is long over, and `Denied` inverts it.
+        // `BudgetCheck` beside the hold it releases, so a reader following one
+        // reservation finds one kind of record and two verdicts.
+        //
+        // It maps where `console_command` is refused, and the line between the
+        // two is the subject. The console's command carries the operator and a
+        // console's synthetic identity; this carries the REAL `agent_id` of the
+        // call that held the money and its real `run_id`, both from the
+        // gateway's journal. Who closed it is not in this event at all, by the
+        // producer's design: the gateway verifies a token, not a person.
+        //
+        // `evidence_ref` is a person's free text, at most 512 bytes and no
+        // contract, and it is why the rule at the top of this file is not
+        // negotiable here: it can name anyone, and the metadata plane is the
+        // one erasure cannot reach. It travels in `data` with the settled
+        // amount, the evidence kind, the revision and the operation, none of
+        // which this mapper reads. `high` is `Error`, `taint_cleared`'s band.
+        "retained_closed" => m(
+            EventType::BudgetCheck,
+            Some(Verdict::NotApplicable),
+            None,
+            Severity::Error,
+        ),
         // Policy. `policy_allow` may assert `Allowed`, which the OTLP mapper
         // refuses to do, and the difference is the source: a span says a call
         // happened, while this event is a policy engine saying it allowed one.
