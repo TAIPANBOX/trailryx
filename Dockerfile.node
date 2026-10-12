@@ -44,6 +44,6 @@ USER 10001:10001
 
 # No EXPOSE and no CMD. This image is run as a job that is told what to do, and
 # a default that started a server would be a port opened by whoever forgot to
-# pass arguments. `serve`, `events`, `read` and the verifier are all reached by
+# pass arguments. `run`, `events`, `read` and the verifier are all reached by
 # naming them.
 ENTRYPOINT []
