@@ -319,7 +319,7 @@ migration. What stage 13 still wants is measured absence rather than a guess, an
 | `trailryx-otlp` | two OTLP transports, one mapper: protobuf and JSON, the GenAI semconv, the file source | 140 |
 | `trailryx-assemble` | what a source handed over, made into records | 29 |
 | `trailryx-erasure` | payload envelopes, the key hierarchy, erasure | 44 |
-| `trailryx-verify` | the offline verifier, including its own ECDSA and a 215-line RFC 3161 token reader. Depends on nothing | 33 |
+| `trailryx-verify` | the offline verifier, including its own ECDSA and an RFC 3161 token reader. Depends on nothing | 33 |
 | `trailryx-projection` | Thrift, a Parquet writer with real lists, and columnar projections | 19 |
 | `trailryx-sign` | what gets signed, and what a witness attests to | 4 |
 | `trailryx-http` | the workspace's one HTTP/1.1 client. No TLS, no redirects, no reuse | 14 |
@@ -731,8 +731,9 @@ Releases up to and including v0.1.2 have none of this; the tag after it does.
 
 If you would rather build than download, that is fast and it is worth saying why,
 because the number people expect is wrong. A cold release build of both shipped
-binaries, from an empty target directory, is **2.3 seconds**: every crate that
-reaches a binary here has zero third-party dependencies.
+binaries, from an empty target and build directory, takes **about 3 seconds**
+(three runs, 2.9 to 3.3 seconds, measured 2026-10-13; see VALIDATION.md): every
+crate that reaches a binary here has zero third-party dependencies.
 
 ```bash
 cargo build --release --locked --bin trailryx-verify --bin trailryx-ingest
@@ -895,7 +896,8 @@ client, written for RFC 3161, and both hash functions the signature is made of. 
 `trailryx-s3` has **no third-party dependencies**, and the storage adapter stays the
 size of the rest of the store. Not out of principle: the pieces already existed, so
 taking a cloud SDK would have added several hundred crates to avoid writing a
-signature that is four chained HMACs.
+signature that takes five HMAC operations: four chained to derive the signing key,
+and one to sign.
 
 That trade is only defensible if the signature is right, and a signature checked
 against itself is one that gets rejected in production with `SignatureDoesNotMatch`
@@ -1222,9 +1224,9 @@ limits live.
 
 **The measurement that keeps it honest** is how many inputs each target *accepts*. A
 suite whose inputs all die at byte one runs fast and proves nothing, and that is
-exactly what the first version did: five of the thirteen accepted nothing, because
-their corpora were made of zero bytes. With real corpora built from the project's own
-encoders, eleven of thirteen now reach past the first check. The two that do not are
+exactly what the first version did: several targets accepted nothing, because their
+corpora were made of zero bytes. With real corpora built from the project's own
+encoders, most of the thirteen now reach past the first check. The two that do not are
 the timestamp token and the evidence pack, whose valid inputs need an authority and a
 sealing run respectively; they are exercised for rejection only, and the number is
 printed so that stays visible.
@@ -1439,12 +1441,15 @@ permanent, fleet-wide holes in the evidence. A batch that could not be decoded i
 happens before the handoff, because `accept` never fails and once bytes go in
 they are ours.
 
-Thirty-four of the tests are written from the sender's side: a bare line feed, a
+Several of the tests are written from the sender's side: a bare line feed, a
 second request smuggled into the same TCP write, a body that trickles in below
 the rate floor, a kilobyte that inflates to four megabytes, more connections than
 the cap, a full queue, a truncated body that must never become half a record.
 
 ## What an adversarial review found in it
+
+The counts in this part describe the review as it was run. No record of that review is
+kept in this repository, so they cannot be re-derived here.
 
 Six independent lenses over this crate, every finding handed to three skeptics
 told to refute it, ninety-six agents and eleven million tokens. Twelve findings
@@ -1459,8 +1464,8 @@ case it can inflate to, and the default ceiling says out loud that dividing it b
 `max_body` gives the number of concurrent gzip requests allowed.
 
 **The ratio cap could not fire.** It opened after 32 KiB of *consumed input*, and
-a 16 MiB bomb is 16 KiB of input. Measured: 16 MiB of zeros compresses to 16,328
-bytes and returned `Ok` at a ratio of 1027. The absolute output cap still bound,
+a 16 MiB bomb is 16 KiB of input. Measured: 16 MiB of zeros was returned as `Ok`,
+and the ratio check did not fire. The absolute output cap still bound,
 so nothing was unbounded, but the check whose entire purpose is to make an
 attacker's cost proportional was decoration with a comment claiming otherwise,
 which is worse than no check. It gates on produced *output* now, and the test
@@ -1491,7 +1496,8 @@ them these.
 
 ## What the same review found in the core
 
-The transport got that treatment because it was the newest and most exposed code.
+The counts in this part describe the review as it was run, and no record of it is kept in
+this repository. The transport got that treatment because it was the newest and most exposed code.
 The core had never had it: nine lenses this time, one per claim the store makes
 out loud, every finding handed to three skeptics told to refute it. A hundred and
 forty agents, sixteen million tokens, forty-seven candidates, twenty-five refuted.
@@ -1501,7 +1507,7 @@ promising the opposite.
 **One flipped bit in a twenty-byte header deleted an entire journal.** Recovery
 treated a header that failed its CRC the same as one cut short by a crash, and then
 truncated the file to zero. Measured: five acked records, one bit flipped in the
-last CRC byte, and the file went from 1,095 bytes to 20 while the report said
+last CRC byte, and the file was cut down to a stub while the report said
 `records: 0, discarded_bytes: 0, durability_violation: None` and
 `is_suspicious()` was false. Nothing said a record had ever existed. Fifteen of the
 twenty header bytes did it. The distinction the code was missing is that a crash
@@ -1653,8 +1659,8 @@ at a trust boundary is a liability unless it is measured against parsers that
 have no shared ancestry with it, so `trailryx-json` is checked against three:
 node's V8, CPython and Ruby. Two hundred and twenty-two conformance cases,
 generated by a script that is checked in, classified by each oracle, and pinned:
-the set of cases where we differ from CPython is exactly 26 and from node exactly
-23, and a twenty-seventh fails the build.
+the sets of cases where we differ from CPython and from node are each pinned, and a
+new divergence fails the build.
 
 CPython and node disagree with *each other* on five of the 222, and the five are
 worth naming because they are the whole map of where the JSON world is still
@@ -1700,7 +1706,7 @@ bound went back to being what it should always have been, a backstop against
 hostile nesting rather than a parity device. The deepest container nesting a
 wire-legal OTLP value can reach is 27, measured, so the backstop sits at 32. And
 the test that missed this is now a grid: three positions an `AnyValue` can occupy
-by every mix of the two shapes, 144 cases, and the two decoders must agree on
+by every mix of the two shapes, and the two decoders must agree on
 every one.
 
 Numbers never pass through a float on the way in. An OTLP timestamp is routinely
@@ -1728,6 +1734,9 @@ already marked delivered; and the anomaly record is stamped `UNMAPPED`, because
 no mapper touched a record the store wrote about itself.
 
 ### What the review of it found, and what it did not get to
+
+The counts in this part describe the review as it was run, and no record of it is kept in
+this repository.
 
 Six lenses over the new surface. Four ran; every one of the fifty skeptics that
 should have tried to refute their findings died on a server error, so the script's
@@ -1857,7 +1866,7 @@ $ trailryx-verify sample.trxevid
 VERIFIED
 ```
 
-One letter changed in one agent id, in one record, out of 2,790 bytes:
+One letter changed in one agent id, in one record. The report, abbreviated:
 
 ```
 [BROKEN] chain-within-segment: segment 1 ends at cf535f9ad9e774a3 and its records give 390f2d0d24342a46
@@ -2033,9 +2042,10 @@ an enum name or a hash, and a test walks every cell to confirm no value could be
 a sentence. `payload_hash` and `payload_key_id` connect a row to its payload;
 the payload stays behind its key, where erasure can still find it.
 
-Timestamps are nanoseconds, in columns named `_nanos`. No Parquet converted type
-carries nanosecond precision, and an export that rounds a timestamp on the way
-out is not the lossless export the roadmap asked for.
+Timestamps are nanoseconds, in columns named `_nanos`. They are plain 64-bit
+integers with no Parquet timestamp annotation, so a reader sees a count, not a
+time. No Parquet converted type carries nanosecond precision, and an export that
+rounds a timestamp on the way out is not the lossless export the roadmap asked for.
 
 ## What a review found
 
@@ -2146,7 +2156,7 @@ one, which is the operation the whole design rests on.
 All three are the same defect: the fakes were written from the same reading of the
 same documentation as the client, so they agreed with its mistakes. All three are
 fixed, and so is the class: the fake now refuses what a compliant server refuses, and
-putting the first bug back fails eleven of twelve tests. The suite then runs against
+putting the first bug back fails the new tests. The suite then runs against
 AWS and Google for real, over TLS, and both refuse a second conditional write.
 
 **Eight hundred million shard ticks across 400,000 seeded runs, roughly twelve million
@@ -2262,8 +2272,8 @@ paragraph claimed there was no HTTP transport either, for as long as it took to
 notice that the crate table two sections above lists the OTLP/HTTP server. It then
 went on claiming there was no authentication for one commit after the gate landed.
 A status sentence outlives the work it described unless somebody sweeps for it,
-which is what this note is.) The file
-source has no persisted checkpoint, so a restart re-reads from the last
+which is what this note is.) The OTLP file source (`trailryx-otlp`, the
+`jsonl` path) has no persisted checkpoint, so a restart re-reads from the last
 acknowledged line and the assembler mints a fresh identity, which is why it
 declares at-least-once delivery; it does not follow a rotation, and it refuses a
 gzipped, zstd-compressed or length-prefixed export by naming the collector setting
@@ -2307,15 +2317,12 @@ audit store that is the right way round: the previous behaviour started cleanly
 and had deleted the evidence.
 
 Two known costs, both deferred deliberately. A range answer currently carries an
-inclusion proof per entry, so a full range is O(n²) hashing; the fix is a
+inclusion proof per entry, and each proof is rebuilt from the leaves, so a full
+range is O(n²) hashing; the fix is a
 multiproof over the contiguous range, and it waits for a benchmark to measure it
 against. And index sortedness is assumed rather than proved; the offline
 verifier discharges it once per segment, and segments are immutable, so one
 audit lasts forever.
-
-## Licence
-
-Apache-2.0.
 
 ## Status
 
