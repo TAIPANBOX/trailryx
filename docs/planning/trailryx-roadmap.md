@@ -661,7 +661,7 @@ crash, while the absence of dependencies is a third or fourth concern.
 
 | | before | after |
 |---|---|---|
-| third-party crates in the facade tree | 0 | **243** |
+| third-party crates in the facade tree (2026-07-30) | 0 | **243** |
 | clean facade build | - | **2:19** |
 | gate on a warm cache | ~40 s | **1:28** |
 | third-party crates in the verifier | 0 | **0** |

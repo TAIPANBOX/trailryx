@@ -166,7 +166,8 @@ else
   # as well, so a sentence that stops saying when it was true stops being exempt.
   # This is invariant 24's rule, applied to a second kind of silence. An entry whose
   # reason is not re-derivable fails the gate, and so does a number with no entry.
-  exceptions="crates/trailryx-sql/src/lib.rs 243 history"
+  exceptions="crates/trailryx-sql/src/lib.rs 243 history
+docs/planning/trailryx-roadmap.md 243 history"
 
   while IFS= read -r f; do
     [ "$f" = "$readme" ] && continue
