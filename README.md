@@ -2107,7 +2107,7 @@ that implements them: the durability contract is
 [`docs/identifiers.md`](docs/identifiers.md).
 
 [`docs/planning/`](docs/planning/) is the project's own working record, in
-Ukrainian, and nothing here depends on reading it. It is kept in the open rather
+English (translated from Ukrainian on 2026-10-13), and nothing here depends on reading it. It is kept in the open rather
 than tidied away because it is where each stage says what it did **not** do, and
 where the six review findings still unverified are written down. A repository whose
 history only records its successes is a repository whose claims cannot be checked.

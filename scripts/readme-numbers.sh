@@ -302,7 +302,7 @@ fi
 
 # The stage badge, against the roadmap that owns the order of work.
 stage=$(grep -o 'badge/stage-[0-9]*%20of%20[0-9]*' "$readme" | grep -o '[0-9]*' | head -1)
-closed=$(grep -oE 'Етап [0-9]+ закритий' docs/planning/trailryx-roadmap.md |
+closed=$(grep -oE 'Stage [0-9]+ closed' docs/planning/trailryx-roadmap.md |
   grep -oE '[0-9]+' | sort -n | tail -1)
 if [ -n "$closed" ] && [ "$stage" -lt "$closed" ]; then
   note "the badge says stage $stage and the roadmap records stage $closed closed"

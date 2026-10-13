@@ -21,8 +21,8 @@
 //!
 //! A query is fully provable only when every predicate landed in the first row.
 //! One in either of the others and the answer says `partial` and names what did not
-//! fall, which is what §3.2 requires in those words: "SQL не стає діркою в моделі
-//! доказів: він або доводить, або чесно каже, що ні."
+//! fall, which is what §3.2 requires in those words: "So SQL does not become a gap
+//! in the proof model: it either proves, or honestly says that it does not."
 //!
 //! # Why only one dimension can be the sorted one
 //!

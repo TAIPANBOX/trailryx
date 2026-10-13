@@ -149,9 +149,9 @@ step "sim crate builds standalone" cargo test -p trailryx-sim --quiet
 # crate somebody has to trust. That was never a property of the workspace. It is a
 # property of the thing an auditor reads.
 # Crates allowed to carry third-party dependencies, and the reason each one may.
-# A declared list rather than a single name, because the standing decision (Yurii,
-# 30 July 2026) is that this project takes the best available implementation of a
-# thing rather than writing its own by default. The list is the whole policy: a
+# A declared list rather than a single name, because the standing decision
+# (@decided 2026-07-30) is that this project takes the best available implementation
+# of a thing rather than writing its own by default. The list is the whole policy: a
 # crate not on it must have none, and adding a crate to it is a decision somebody
 # writes down here, not a dependency that appears in a manifest.
 #
