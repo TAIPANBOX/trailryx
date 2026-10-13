@@ -110,6 +110,20 @@ doing something else at the time. An earlier attempt at this measurement, taken 
 another process was compiling, produced a run of 6 minutes 19 and would have been
 quoted as fact if the contention had not been visible.
 
+**A cold release build of the two shipped binaries, measured 2026-10-13 on demand**
+(not re-derived by any gate). Command, run three times, each time with empty build and
+target directories:
+
+    CARGO_BUILD_BUILD_DIR=<empty dir>/build CARGO_TARGET_DIR=<empty dir>/target \
+      cargo build --release --locked --bin trailryx-verify --bin trailryx-ingest
+
+Results: 3.03 s, 3.01 s and 3.38 s of wall time, and cargo's own timer reported 2.95 s,
+2.93 s and 3.29 s. Seven crates compiled on each run. Machine: Apple M1 Pro, rustc and
+cargo 1.96.1. The directory override matters: the machine's global cargo configuration
+points every checkout at one shared build directory, so without it a "cold" build reuses
+cached artifacts and finishes in about 0.2 seconds. The README had said 2.3 seconds for
+this build; that figure was not reproduced, so the README now says about 3 seconds.
+
 ### The kill run: a real process, a real disk, a real `SIGKILL`
 
 The simulator crashes the store at every point in a write. It is the reason to
