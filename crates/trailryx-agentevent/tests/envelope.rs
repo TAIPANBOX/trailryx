@@ -787,9 +787,9 @@ const TOKENFUSE_POLICY_PLANE_UNREACHABLE: &str = concat!(
 ///
 /// This is the first type in the registry that is not about the agent at all.
 /// Every other one here is an agent misbehaving or a plane refusing it; this one
-/// is the gateway saying its own provider was unreachable, which until now left a
-/// `502` on the wire and nothing in any store, in the owner's words: "коли лягає
-/// апстрім, шлюз чисто вертає 502, і жоден план цього не записує".
+/// is the gateway saying its own provider was unreachable. Until now that left a
+/// `502` on the wire and nothing in any store: the gateway returned the error
+/// cleanly, and no plane recorded that the upstream had failed.
 ///
 /// `ModelCall` + `Failed` + `UpstreamError` is what
 /// `trailryx_otlp::semconv` already writes for the same real-world fact, so the

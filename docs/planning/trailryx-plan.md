@@ -1,545 +1,545 @@
 # Trailryx
 
-> Незмінний, доказовий, бітемпоральний запис поведінки AI-агентів.
-> Власне ядро, чистий старт, нульова залежність від решти стеку.
+> An immutable, provable, bitemporal record of AI agent behavior.
+> Own core, clean start, zero dependency on the rest of the stack.
 >
-> Статус: план. Дата: 2026-07-29. Замінює `chronyx-plan.md`.
+> Status: plan. Date: 2026-07-29. Replaces `chronyx-plan.md`.
 
 ---
 
-## 0. Назва і термінологія
+## 0. Name and terminology
 
-**Trailryx** = `audit trail` + родинний суфікс `-ryx` (Wardryx, Verdryx, Mockryx, Genaryx).
+**Trailryx** = `audit trail` + the family suffix `-ryx` (Wardryx, Verdryx, Mockryx, Genaryx).
 
-Корінь обрано свідомо: **audit trail це термін, яким говорить покупець** (ризик, комплаєнс,
-регулятор), а не `trace`, яким говорить інженер про продуктивність.
+The root was chosen deliberately: **audit trail is the term the buyer speaks in** (risk, compliance,
+the regulator), not `trace`, which an engineer uses when talking about performance.
 
-> **Trail** = зафіксований ланцюг рішень агента: що він зробив, на якій підставі,
-> що система знала в той момент, і чим це закінчилось.
+> **Trail** = the recorded chain of an agent's decisions: what it did, on what basis,
+> what the system knew at that moment, and how it ended.
 
-Різниця з trace принципова, не косметична. Спан OpenTelemetry це вимір продуктивності:
-скільки тривало і хто кого викликав. Наш trail це **запис вчиненого з підставою**,
-і він має структуру, якої спан не має: кілька батьків, чотири часові осі, блок підстави
-рішення і доказ цілісності.
+The difference from a trace is fundamental, not cosmetic. An OpenTelemetry span is a performance measurement:
+how long it took and who called whom. Our trail is **a record of what was done, with its basis**,
+and it has a structure a span does not have: several parents, four time axes, a decision-basis block
+and an integrity proof.
 
-OTel-спани ми **приймаємо на вході** і перетворюємо на записи. Назад без втрат
-не конвертуємо і не претендуємо на це.
+We **accept** OTel spans **on input** and turn them into records. We do not convert back without loss
+and do not claim to.
 
-Стан назви на 2026-07-29: вільні `.com`, `.io`, `.dev`, `.app`, `.ai`, `.org`, `.net`,
-GitHub-організація, PyPI, npm, crates.io. Компанії чи продукту з такою назвою не знайдено.
+Name status as of 2026-07-29: `.com`, `.io`, `.dev`, `.app`, `.ai`, `.org`, `.net` are free,
+as are the GitHub organization, PyPI, npm and crates.io. No company or product with this name was found.
 
 ---
 
-## 1. Що це, в одному реченні
+## 1. What it is, in one sentence
 
-> Trailryx це база даних, яка зберігає, що робили AI-агенти, і вміє це **довести**:
-> показати повний ланцюг рішення, підтвердити, що запис не змінювався, довести,
-> що показані записи це **всі** записи, і при цьому стерти конкретну людину на вимогу.
+> Trailryx is a database that stores what AI agents did and can **prove** it:
+> show the full chain of a decision, confirm that a record has not been changed, prove
+> that the records shown are **all** the records, and at the same time erase a specific person on request.
 
-Чотири слова, які його визначають: **доказовий**, **повний**, **бітемпоральний**, **стираний**.
+Four words define it: **provable**, **complete**, **bitemporal**, **erasable**.
 
-## 2. Кого обслуговує
+## 2. Whom it serves
 
-| Роль | Питання, на яке відповідає |
+| Role | The question it answers |
 |---|---|
-| Комплаєнс / ризик | «Покажи регулятору, що агент робив у березні, і доведи, що це все» |
-| Безпека | «Чому агент виконав цей виклик і хто його уповноважив» |
-| Інженер | «Що саме зламалось у run 4471» |
-| DPO / юрист | «Видали цю людину так, щоб аудит лишився дійсним» |
+| Compliance / risk | "Show the regulator what the agent did in March, and prove that this is everything" |
+| Security | "Why did the agent make this call and who authorised it" |
+| Engineer | "What exactly broke in run 4471" |
+| DPO / lawyer | "Delete this person in a way that leaves the audit valid" |
 
-## 3. Чим це не є
+## 3. What it is not
 
-- Не бекенд трасування продуктивності (Jaeger, Tempo, VictoriaTraces).
-- Не заміна Prometheus: числові метрики експортуються **туди**.
-- Не дашборд, не eval-платформа, не політичний рушій.
-- Не векторна БД: вектори з'являються після пілоту і як **проєкція**, не як суть.
-- Не блокчейн: жодного консенсусу, жодних вузлів, жодного токена.
+- Not a performance tracing backend (Jaeger, Tempo, VictoriaTraces).
+- Not a replacement for Prometheus: numeric metrics are exported **there**.
+- Not a dashboard, not an eval platform, not a policy engine.
+- Not a vector DB: vectors appear after the pilot and as a **projection**, not as the essence.
+- Not a blockchain: no consensus, no nodes, no token.
 
-## 4. Нульова зв'язність
+## 4. Zero coupling
 
-Trailryx корисний **сам по собі**, без жодного іншого сервісу. Це відрізняє продукт
-від фічі, і це рішення архітектурне, а не декларативне:
+Trailryx is useful **on its own**, without any other service. This is what separates a product
+from a feature, and it is an architectural decision, not a declarative one:
 
-- **первинний вхід це OTLP** (будь-який агент з OTel-інструментацією);
-- власні формати (NDJSON, JSON-конверти) це **адаптери на вході**, нарівні з чужими;
-- нічого зі стеку не є залежністю: ні в збірці, ні в рантаймі, ні в конфігурації;
-- інтеграції односторонні: Trailryx віддає дані назовні, а не ходить по них.
+- **the primary input is OTLP** (any agent with OTel instrumentation);
+- native formats (NDJSON, JSON envelopes) are **adapters on input**, on a par with third-party ones;
+- nothing from the stack is a dependency: not in the build, not in the runtime, not in configuration;
+- integrations are one-way: Trailryx pushes data out, it does not go and fetch it.
 
 ---
 
-## 5. Модель запису
+## 5. Record model
 
-### 5.1. Одиниця
+### 5.1. The unit
 
 ```
 record {
-  # ідентичність
-  id                 # ULID, монотонний у межах сегмента
+  # identity
+  id                 # ULID, monotonic within a segment
   agent_id, run_id, parent_run_id, on_behalf_of[]
 
-  # чотири часи, не один
-  occurred_at        # коли подія сталась у світі (від емітента, НЕдовірений)
-  decided_at         # коли ухвалено рішення
-  recorded_at        # коли ми записали (наш годинник, довірений)
-  knowledge_as_of    # станом на яке знання ухвалювалось рішення
+  # four times, not one
+  occurred_at        # when the event happened in the world (from the emitter, NOT trusted)
+  decided_at         # when the decision was made
+  recorded_at        # when we recorded it (our clock, trusted)
+  knowledge_as_of    # as of which knowledge the decision was made
 
-  # підстава: «що система знала»
+  # basis: "what the system knew"
   basis {
-    policy_version   # яка політика діяла
-    budget_state     # який був залишок
-    memory_ref       # що агент пам'ятав (посилання, не копія)
-    model, params    # чим викликали
-    prompt_hash      # хеш промпта, не промпт
-    tool_manifest    # які інструменти були доступні
-    identity_chain   # делегування, root-first
+    policy_version   # which policy was in force
+    budget_state     # what the remaining balance was
+    memory_ref       # what the agent remembered (a reference, not a copy)
+    model, params    # what it was invoked with
+    prompt_hash      # hash of the prompt, not the prompt
+    tool_manifest    # which tools were available
+    identity_chain   # delegation, root-first
   }
 
-  # причинність: DAG, не дерево
-  caused_by[]        # кілька батьків: запит + політика + пам'ять + бюджет
+  # causality: a DAG, not a tree
+  caused_by[]        # several parents: request + policy + memory + budget
 
-  # результат
+  # outcome
   outcome { verdict, error, latency_ms, tokens_in, tokens_out, cost }
 
-  # пейлоад тут НЕ лежить
+  # the payload does NOT live here
   payload_ref { hash, size, class, key_id }
 
-  # цілісність і гнучкість алгоритмів
+  # integrity and algorithm agility
   seq, prev_hash, segment_id
   hash_alg, sig_alg, kem_alg
 }
 ```
 
-**`ext` у метаданих немає.** Усе, що прийшло від мапера і не лягло на типізовані
-поля канону, іде в **шифровану пейлоад-площину**, не сюди. Причина в §5.2 (г).
+**There is no `ext` in the metadata.** Everything that came from the mapper and did not fit the typed
+fields of the canon goes into the **encrypted payload plane**, not here. The reason is in §5.2 (d).
 
-### 5.2. Чотири рішення, на яких тримається все
+### 5.2. Four decisions everything rests on
 
-**(а) Гарячі метадані окремо від холодного пейлоада.** Промпти й відповіді це кілобайти
-і мегабайти. У записі лише `payload_ref`. Вміст лежить у content-addressed сховищі,
-зашифрований. Це одразу дає: малий індекс, дедуплікацію однакових системних промптів
-і можливість стирання (§7).
+**(a) Hot metadata separate from cold payload.** Prompts and responses are kilobytes
+and megabytes. The record holds only `payload_ref`. The content lives in a content-addressed store,
+encrypted. This immediately gives: a small index, deduplication of identical system prompts
+and the possibility of erasure (§7).
 
-**(б) Причинність це DAG.** У агента рішення має кілька батьків одночасно: запит
-користувача, вердикт політики, стан пам'яті, залишок бюджету. `parent_span_id` цього
-не виражає. Ребра явні.
+**(b) Causality is a DAG.** For an agent, a decision has several parents at the same time: the user's
+request, the policy verdict, the memory state, the remaining budget. `parent_span_id` does not
+express this. Edges are explicit.
 
-**(в) Бітемпоральність не опція.** Дві осі завжди: коли це було правдою і коли ми
-дізнались. Інтервал закривається, рядок ніколи не перезаписується, будь-який `as_of`
-влучає рівно в один рядок.
+**(c) Bitemporality is not an option.** Two axes, always: when it was true and when we
+found out. The interval is closed, a row is never overwritten, any `as_of`
+hits exactly one row.
 
-**(г) Межа площин це інваріант схеми, а не домовленість.** Найважливіше з чотирьох,
-і воно юридичне.
+**(d) The plane boundary is a schema invariant, not an agreement.** The most important of the four,
+and it is a legal one.
 
-> **Метадана площина містить тільки типізовані поля**: ідентифікатори, enum'и, хеші,
-> числа, таймстемпи. **Будь-який вільний текст живе виключно в шифрованій
-> пейлоад-площині**, під ключем суб'єкта.
+> **The metadata plane contains only typed fields**: identifiers, enums, hashes,
+> numbers, timestamps. **Any free text lives exclusively in the encrypted
+> payload plane**, under the subject's key.
 
-Чому це критично. Атрибути OTel GenAI можуть нести **повні промпти, адреси, імена**:
-семконв прямо передбачає захоплення вмісту. Якщо мапер кладе нерозпізнані атрибути
-в метадані «дослівно», то `forget` стирає пейлоад, **а PII лишається в метаданих**,
-і обіцянка права на забуття стає фальшивою. Те саме стосується текстових полів
-усередині `basis`: там дозволені версія політики, хеш промпта і посилання на пам'ять,
-але не сам промпт і не сама пам'ять.
+Why this is critical. OTel GenAI attributes can carry **full prompts, addresses, names**:
+the semconv explicitly provides for capturing content. If a mapper puts unrecognised attributes
+into the metadata "verbatim", then `forget` erases the payload, **while PII stays in the metadata**,
+and the promise of the right to be forgotten becomes false. The same applies to text fields
+inside `basis`: the policy version, the prompt hash and the memory reference are allowed there,
+but not the prompt itself and not the memory itself.
 
-Наслідки, обов'язкові на етапі 1:
+Consequences, mandatory at stage 1:
 
-- конформанс-тест **«жодного поля вільного тексту в метаданій площині»**, який
-  провалює збірку;
-- прохід у стилі DPIA по **кожному полю канону**: що це за дані, чи можуть вони
-  бути персональними, у якій площині лежать;
-- мапер, який не знає, куди покласти атрибут, кладе його **в шифровану площину**,
-  ніколи не в метадані.
+- a conformance test **"no free-text field in the metadata plane"** that fails
+  the build;
+- a DPIA-style pass over **every canon field**: what data it is, whether it can be
+  personal, which plane it lives in;
+- a mapper that does not know where to put an attribute puts it **into the encrypted plane**,
+  never into the metadata.
 
 ---
 
-## 6. Архітектура: що своє, що запозичене
+## 6. Architecture: what is ours, what is borrowed
 
-Розділення проходить по одній лінії: **своє те, що дає гарантії; запозичене те, що дає швидкість**.
+The split runs along one line: **ours is what gives guarantees; borrowed is what gives speed**.
 
-| Шар | Рішення |
+| Layer | Decision |
 |---|---|
-| 1. Журнал (істина) | **своє** |
-| 2. Автентифікований індекс | **своє, і це головне** |
-| 3. Обхід причинності, бітемпоральна резолюція | **своє** |
-| 4. Механіка стирання | **своє** |
-| 5. Колонкова проєкція | Parquet |
-| 6. Виконання ad-hoc SQL | DataFusion / Arrow |
-| 7. Кодеки, ANN-індекс | готові бібліотеки |
+| 1. Journal (the truth) | **ours** |
+| 2. Authenticated index | **ours, and this is the main thing** |
+| 3. Causality traversal, bitemporal resolution | **ours** |
+| 4. Erasure mechanics | **ours** |
+| 5. Columnar projection | Parquet |
+| 6. Ad-hoc SQL execution | DataFusion / Arrow |
+| 7. Codecs, ANN index | ready-made libraries |
 
-### 6.1. Журнал це істина, колонки це проєкція
+### 6.1. The journal is the truth, columns are a projection
 
 ```
-             OTLP  |  NDJSON  |  інші адаптери
+             OTLP  |  NDJSON  |  other adapters
                         v
                 +---------------+
-                |    мапери     |  -> канонічний запис
+                |    mappers    |  -> canonical record
                 +-------+-------+
                         v
-        ЖУРНАЛ: append-only, записо-орієнтований,
-        кожен запис перевіряється В ІЗОЛЯЦІЇ
+        JOURNAL: append-only, write-oriented,
+        every record is verified IN ISOLATION
                         v
-        закриття сегмента: Merkle + маніфест + підпис
+        segment close: Merkle + manifest + signature
                         v
         +---------------+----------------+
         v                                v
-  АВТЕНТИФІКОВАНИЙ ІНДЕКС          ПРОЄКЦІЇ (похідні)
-  (доказ включення і                Parquet | текст | вектори
-   доказ ПОВНОТИ)                   можна викинути й перебудувати
+  AUTHENTICATED INDEX              PROJECTIONS (derived)
+  (inclusion proof and              Parquet | text | vectors
+   COMPLETENESS proof)              can be thrown away and rebuilt
 ```
 
-Це принципово для доказовості: якщо індекс і істина це один файл, то будь-яке ущільнення
-чи міграція формату стає подією, яку треба доводити регулятору. З розділенням мердж це
-просто перебудова кешу, а істина лежить недоторкана.
+This is fundamental for provability: if the index and the truth are one file, any compaction
+or format migration becomes an event that has to be proven to the regulator. With the separation, a merge is
+simply a cache rebuild, while the truth lies untouched.
 
-### 6.2. Доказ повноти: заради чого пишеться власний індекс
+### 6.2. Completeness proof: what the custom index is written for
 
-Жодна наявна БД не відповідає на це питання:
+No existing database answers this question:
 
-> «Ось рядки, і ось доказ, що це **всі** рядки, які підпадають під предикат
-> у цьому проміжку, і що жоден з них не змінювався.»
+> "Here are the rows, and here is the proof that these are **all** the rows matching the predicate
+> in this interval, and that none of them has been changed."
 
-Регулятору цікаво не те, що ти показав, а **чого не показав**. Технічно це потребує
-структури, яка вміє і доказ включення, і **доказ відсутності** (що між двома сусідніми
-ключами нічого немає): відсортований Merkle-індекс на сегмент, корені якого підписані.
+The regulator is interested not in what you showed, but in **what you did not show**. Technically this requires
+a structure that can do both an inclusion proof and a **proof of absence** (that between two adjacent
+keys there is nothing): a sorted Merkle index per segment, whose roots are signed.
 
-Прикрутити це зверху до Parquet неможливо. Або воно в індексі з першого дня, або
-його немає ніколи. Саме це виправдовує власний рушій, а не швидкість. Швидкість
-не виправдовує його ніколи.
+Bolting this onto Parquet from above is impossible. Either it is in the index from day one, or
+it never will be. This is precisely what justifies a custom engine, not speed. Speed
+never justifies it.
 
-### 6.3. Відкритий експорт як обов'язок
+### 6.3. Open export as an obligation
 
-Власний формат це борг довіри: аудитору доведеться вірити нашому рідеру. Закривається
-одним обов'язковим рішенням: **гарантований експорт без втрат у Parquet + JSON**, сам
-по собі верифіковний. Свій рушій дає докази і швидкість, відкритий експорт знімає
-питання «а раптом ваш рідер бреше».
+A custom format is a debt of trust: the auditor will have to believe our reader. It is closed
+by one mandatory decision: **a guaranteed lossless export to Parquet + JSON**, itself
+verifiable. Our own engine gives proofs and speed, and the open export removes
+the question "what if your reader is lying".
 
-Це не поступка, це аргумент продажу.
+This is not a concession, it is a selling point.
 
 ---
 
-## 7. Криптографія, стирання, постквантова ера
+## 7. Cryptography, erasure, the post-quantum era
 
-### 7.1. Доказовість
+### 7.1. Provability
 
-- **Ланцюг на записах**: `prev_hash`, один потік = один ланцюг, продовжується після рестарту.
-- **Merkle на сегмент**: перевірка одного запису коштує log(n).
-- **Підпис на сегмент**, не на запис (див. 7.4).
-- **Якорювання епох** назовні: після пілоту, але формат маніфеста готується одразу.
+- **A chain on records**: `prev_hash`, one stream = one chain, continues after a restart.
+- **Merkle per segment**: verifying one record costs log(n).
+- **A signature per segment**, not per record (see 7.4).
+- **Epoch anchoring** outward: after the pilot, but the manifest format is prepared immediately.
 
-Формулювання лишається чесним: **tamper-evident, не tamper-proof**.
+The wording stays honest: **tamper-evident, not tamper-proof**.
 
-### 7.2. Стирання проти незмінності
+### 7.2. Erasure versus immutability
 
-GDPR вимагає видалити, AI Act вимагає незмінний лог. Розв'язується криптостиранням:
+GDPR requires deletion, the AI Act requires an immutable log. Crypto-erasure resolves this:
 
-1. Пейлоад шифрується ключем, виданим **на суб'єкта даних**.
-2. Видалення = знищення ключа + запис `erasure` у той самий ланцюг.
-3. Ланцюг лишається верифіковним, зміст зникає назавжди, **факт стирання сам стає доказом**.
+1. The payload is encrypted with a key issued **per data subject**.
+2. Deletion = destroying the key + an `erasure` record in the same chain.
+3. The chain remains verifiable, the content disappears forever, **the fact of erasure itself becomes proof**.
 
-**Проблема, яку це формулювання приховує: у момент запису суб'єкт зазвичай невідомий.**
-OTLP-спан приходить без ідентифікованої особи, а те, що в промпті були чиїсь дані,
-з'ясовується пізніше, іноді через місяці, іноді лише за запитом самої людини.
+**The problem this wording hides: at the time of writing, the subject is usually unknown.**
+An OTLP span arrives without an identified person, and the fact that somebody's data was in the prompt
+is established later, sometimes months later, sometimes only at the request of the person themselves.
 
-Тому дворівнева схема, а не «ключ на суб'єкта» напряму:
+Hence a two-level scheme, not a "key per subject" directly:
 
-| Рівень | Що це | Коли створюється |
+| Level | What it is | When it is created |
 |---|---|---|
-| **DEK** | випадковий ключ на **кожен пейлоад** | у момент запису, завжди |
-| **KEK** | ключ, під яким загорнуто DEK | суб'єктний, якщо суб'єкт відомий; інакше **тенантний** |
+| **DEK** | a random key **per payload** | at write time, always |
+| **KEK** | the key under which the DEK is wrapped | the subject's, if the subject is known; otherwise the **tenant's** |
 
-**Пізніша атрибуція** (з'ясували, що пейлоад стосується конкретної людини) це
-**re-wrap**: DEK перегортається під суб'єктний KEK, стара обгортка знищується.
-Обидві дії, і атрибуція, і знищення обгортки, **є подіями в ланцюгу**, а не тихою
-операцією над сховищем ключів.
+**Later attribution** (it was found out that the payload concerns a specific person) is a
+**re-wrap**: the DEK is re-wrapped under the subject's KEK, the old wrapped key is destroyed.
+Both actions, the attribution and the destruction of the wrapped key, **are events in the chain**, not a quiet
+operation on the key store.
 
-Наслідок для `forget`: він знищує суб'єктний KEK, і разом з ним стають непіднімними
-всі DEK'и, коли-небудь під нього загорнуті. Пейлоади, які так і лишились під тенантним
-KEK, стираються окремою операцією за списком, і цей список теж запис.
+The consequence for `forget`: it destroys the subject's KEK, and with it all the DEKs ever wrapped
+under it become unrecoverable. Payloads that remained under the tenant
+KEK are erased by a separate operation, by list, and that list is also a record.
 
-### 7.3. Постквантова ера це питання коректності, а не відповідності
+### 7.3. The post-quantum era is a question of correctness, not of compliance
 
-Зовнішня рамка: CNSA 2.0 (нові системи 2027, легасі 2030, повністю 2035),
-NCSC (2028 / 2031 / 2035), NIST IR 8547 (зняття RSA-2048 і P-256 з 2030, заборона з 2035),
-роадмап ЄС (критична інфраструктура кінець 2030, решта кінець 2035).
+The external frame: CNSA 2.0 (new systems 2027, legacy 2030, fully 2035),
+NCSC (2028 / 2031 / 2035), NIST IR 8547 (deprecation of RSA-2048 and P-256 from 2030, disallowed from 2035),
+the EU roadmap (critical infrastructure end of 2030, the rest end of 2035).
 
-Але причина не в стандартах:
+But the reason is not the standards:
 
-**Криптостирання живе рівно стільки, скільки живе KEM.** Якщо ключ суб'єкта загорнуто
-RSA або ECDH, а шифротекст уже зібрано, то знищення ключа **не стирає нічого**: його
-розгорнуть у 2032. «Harvest now, decrypt later» б'є не по транспорту, а по нашій
-центральній обіцянці.
+**Crypto-erasure lives exactly as long as the KEM lives.** If the subject's key is wrapped with
+RSA or ECDH, and the ciphertext has already been collected, then destroying the key **erases nothing**: it
+will be unwrapped in 2032. "Harvest now, decrypt later" hits not the transport, but our
+central promise.
 
-Отже: **гібридний ML-KEM (X25519 + ML-KEM-768) з першого дня**. Перезгорнути вкрадений
-шифротекст неможливо в принципі.
+Therefore: **hybrid ML-KEM (X25519 + ML-KEM-768) from day one**. Re-wrapping a stolen
+ciphertext after the fact is impossible in principle.
 
-**Доказ переживає криптографію, якою його підписали.** Життя запису це роки: шість
-місяців мінімум за AI Act, але відповідальність за шкоду від моделі це 5-10 років.
+**A proof outlives the cryptography it was signed with.** A record's life is years: six
+months minimum under the AI Act, but liability for harm caused by a model is 5-10 years.
 
-| Загроза | Засіб |
+| Threat | Remedy |
 |---|---|
-| Підробка заднім числом (CRQC створює «старі» записи) | зовнішнє якорювання в часі + **вбудований цикл перепідписання** |
-| Harvest now, decrypt later | гібридний ML-KEM |
+| Backdated forgery (a CRQC creates "old" records) | external time anchoring + **a built-in re-signing cycle** |
+| Harvest now, decrypt later | hybrid ML-KEM |
 
-Перепідписання це не опція конфігурації. Продукт, який не вміє переякорити власний
-архів, у 2030 стає купою недоказових файлів.
+Re-signing is not a configuration option. A product that cannot re-anchor its own
+archive becomes a pile of unprovable files in 2030.
 
-### 7.4. Три рівні підпису (розмір диктує архітектуру)
+### 7.4. Three signature levels (size dictates the architecture)
 
-ML-DSA-65 це ~3.3 КБ проти 64 байтів у ES256. Підписувати кожен запис постквантово
-неможливо. Тому:
+ML-DSA-65 is ~3.3 KB versus 64 bytes for ES256. Signing every record post-quantum
+is infeasible. Therefore:
 
-| Рівень | Механізм | Чому | Стан на 2026-07-29 |
+| Level | Mechanism | Why | State as of 2026-07-29 |
 |---|---|---|---|
-| Запис | хеш-ланцюг на **SHA-384** | нуль підписів, нуль накладних витрат | готово |
-| Сегмент | Merkle + **ML-DSA-65** (гібридно з ES256) | один підпис на мільйони записів | aws-lc-rs, за unstable-прапорцем |
-| Епоха | зовнішній якір + **SLH-DSA** | безпека спирається **лише на хеші**, найконсервативніше на 10+ років | **перенесено за межі v1** |
+| Record | hash chain on **SHA-384** | zero signatures, zero overhead | done |
+| Segment | Merkle + **ML-DSA-65** (hybrid with ES256) | one signature per millions of records | aws-lc-rs, behind an unstable flag |
+| Epoch | external anchor + **SLH-DSA** | security rests **on hashes alone**, the most conservative for 10+ years | **moved beyond v1** |
 
-**Чому SLH-DSA не входить у v1.** Аудитованої Rust-бібліотеки, яка покриває всі три
-алгоритми, сьогодні не існує: `aws-lc-rs` не має SLH-DSA взагалі, а чистий
-RustCrypto `slh-dsa` не проходив аудиту. Ставити **найдовговічніший** рубіж
-доказовості на неаудитовану реалізацію означає обіцяти надійність, якої немає.
-Формат маніфеста готується під нього одразу, вмикається з появою валідованої
-реалізації. Деталі й таблиця бібліотек: §14.2 архітектури.
+**Why SLH-DSA is not in v1.** There is no audited Rust library that covers all three
+algorithms today: `aws-lc-rs` has no SLH-DSA at all, and the pure
+RustCrypto `slh-dsa` has not been audited. Putting the **longest-lived** tier of
+provability on an unaudited implementation means promising a reliability that does not exist.
+The manifest format is prepared for it from the start and is switched on when a validated
+implementation appears. Details and the library table: §14.2 of the architecture.
 
-SHA-384, а не SHA-256, свідомо: CNSA 2.0 вимагає 384+, і **продукт має проходити
-власний сканер** (`qryx scan --policy cnsa` без порушень).
+SHA-384, not SHA-256, is deliberate: CNSA 2.0 requires 384+, and **the product must pass
+its own scanner** (`qryx scan --policy cnsa` with no violations).
 
-### 7.5. Гнучкість алгоритмів це поле схеми
+### 7.5. Algorithm agility is a schema field
 
-Кожен запис і маніфест везуть: чим підписано, яким ключем, якою хеш-функцією, яким KEM.
-Без цього міграція 2030 неможлива технічно: не буде як перелічити, що перепідписувати.
+Every record and manifest carries: what it is signed with, with which key, which hash function, which KEM.
+Without this, the 2030 migration is technically impossible: there would be no way to enumerate what to re-sign.
 
-**Перепідписання записується як подія, ніколи як тихе перезаписування.** Тихе
-перепідписання аудиторського журналу неможливо відрізнити від підробки.
+**Re-signing is recorded as an event, never as a silent overwrite.** A silent
+re-signing of an audit journal cannot be told apart from forgery.
 
-**Верифікатор ніколи не видаляє підтримку старого алгоритму**, лише позначає його слабким.
-Викинути ES256 означає знищити доказовість усього, що ним підписано.
+**The verifier never removes support for an old algorithm**, it only marks it weak.
+Dropping ES256 would destroy the provability of everything signed with it.
 
 ---
 
-## 8. Поверхня запиту
+## 8. The query surface
 
-| Шлях | Пілот |
+| Path | Pilot |
 |---|---|
-| Структурний + часовий фільтр (з доказом повноти) | так |
-| Реконструкція run з причинністю | так |
-| Evidence pack | так |
-| Ad-hoc SQL по експортованій проєкції | так |
-| Full-text по пейлоаду | ні (конфлікт із шифруванням, §11.7) |
-| Векторна схожість | ні, після пілоту |
+| Structural + time filter (with completeness proof) | yes |
+| Run reconstruction with causality | yes |
+| Evidence pack | yes |
+| Ad-hoc SQL over the exported projection | yes |
+| Full-text over the payload | no (conflicts with encryption, §11.7) |
+| Vector similarity | no, after the pilot |
 
-**Споживач цих даних це агент, а не лише людина.** Тому поверхня одразу проєктується
-під нього: MCP-нативна, економна до токенів (зведення і посилання, не дамп на 200 КБ),
-кожна відповідь цитована і перевіряна, розрахунок на тисячу дрібних запитів замість
-одного великого звіту. Жодна observability-система так не побудована, бо їх писали
-під людину з дашбордом.
-
----
-
-## 9. Демо, воно ж критерій приймання
-
-1. Агент виходить за бюджет і робить небезпечний виклик, його блокують.
-2. `trailryx run 4471` розгортає ланцюг: запит → вердикт політики (з версією)
-   → стан бюджету → що агент пам'ятав → виклик → блок.
-3. `trailryx query --agent X --march` повертає рядки **плюс доказ повноти**.
-4. `trailryx evidence --incident 4471 > pack.json` збирає доказовий пакет.
-5. Пакет переноситься **на машину без Trailryx**: `trailryx-verify pack.json` каже OK.
-6. `trailryx forget --subject "Ivan Petrenko"` стирає суб'єкта.
-7. `trailryx-verify pack.json` **знову каже OK**, але пейлоади порожні, а в ланцюгу
-   стоїть запис про стирання.
-8. `qryx scan --policy cnsa` на власному сховищі: без порушень.
-
-Кроки 3 і 7 не покаже ніхто на ринку.
-
-**Критерій приймання:** усі вісім проходять на чистій машині, з нуля, **двічі поспіль**.
+**The consumer of this data is an agent, not only a person.** So the surface is designed
+for it from the start: MCP-native, economical with tokens (summaries and references, not a 200 KB dump),
+every answer cited and verifiable, built for thousands of small queries instead of
+one large report. No observability system is built this way, because they were written
+for a person with a dashboard.
 
 ---
 
-## 10. Як таке валідується
+## 9. The demo, which is also the acceptance criterion
 
-Рушій помирає не в основному сценарії, а в хвості. Тому валідація це окрема фаза,
-не «прогнали тести»:
+1. An agent exceeds its budget and makes a dangerous call, and it is blocked.
+2. `trailryx run 4471` unfolds the chain: request → policy verdict (with version)
+   → budget state → what the agent remembered → call → block.
+3. `trailryx query --agent X --march` returns rows **plus a completeness proof**.
+4. `trailryx evidence --incident 4471 > pack.json` assembles the evidence pack.
+5. The pack is moved **to a machine without Trailryx**: `trailryx-verify pack.json` says OK.
+6. `trailryx forget --subject "Ivan Petrenko"` erases the subject.
+7. `trailryx-verify pack.json` **says OK again**, but the payloads are empty and the chain
+   contains an erasure record.
+8. `qryx scan --policy cnsa` on its own store: no violations.
 
-| Набір | Що робить |
+Nobody else on the market will show steps 3 and 7.
+
+**Acceptance criterion:** all eight pass on a clean machine, from scratch, **twice in a row**.
+
+---
+
+## 10. How this is validated
+
+An engine dies not in the main scenario but in the tail. So validation is a separate phase,
+not "we ran the tests":
+
+| Suite | What it does |
 |---|---|
-| **Ін'єкція крахів** | `kill -9` на кожній фазі запису, обірвані записи, брехливий fsync, заповнений диск. Після кожного: журнал відкривається, ланцюг цілий, останній неповний запис відкинуто явно |
-| **Ворожі тести на підробку** | перевернути біт, вилучити запис, переставити місцями, підмінити сегмент, повторити старий сегмент. **Кожен випадок має бути виявлений**, мовчазних проходів нуль |
-| **Доказ повноти під атакою** | приховати запис від відповіді → доказ повноти **мусить** зламатись |
-| **Property-based на бітемпоральність** | для будь-якого `as_of` рівно один активний рядок на (s, p); ланцюг супересій відновлює безперервність |
-| **Стирання під атакою** | після `forget` спробувати відновити пейлоад усіма шляхами: з проєкцій, з кешів, з експорту, з бекапу |
-| **Годинник** | стрибки назад, NTP-корекції, розбіжність емітента й приймача понад поріг |
-| **Другий прогін** | усе вище повторюється на вже наповненому сховищі, а не тільки на порожньому |
+| **Crash injection** | `kill -9` at every phase of the write, torn records, a lying fsync, a full disk. After each: the journal opens, the chain is intact, the last incomplete record is explicitly discarded |
+| **Adversarial forgery tests** | flip a bit, remove a record, reorder records, substitute a segment, replay an old segment. **Every case must be detected**, zero silent passes |
+| **Completeness proof under attack** | hide a record from the answer → the completeness proof **must** break |
+| **Property-based tests on bitemporality** | for any `as_of` exactly one active row per (s, p); the supersession chain restores continuity |
+| **Erasure under attack** | after `forget`, try to recover the payload by every path: from projections, from caches, from export, from backup |
+| **Clock** | jumps backwards, NTP corrections, issuer and receiver divergence above the threshold |
+| **Second run** | everything above is repeated on an already populated store, not only on an empty one |
 
-Mockryx може генерувати ворожі сценарії для перших двох наборів (як зовнішній інструмент,
-не як залежність).
+Mockryx can generate adversarial scenarios for the first two suites (as an external tool,
+not as a dependency).
 
 ---
 
-## 10a. Рішення фази 0 (ухвалені 2026-07-29)
+## 10a. Phase 0 decisions (made 2026-07-29)
 
-П'ять блокуючих питань закрито. Кожне можна переглянути, але тоді свідомо
-і з розумінням наслідків, перелічених нижче.
+Five blocking questions are closed. Each can be revisited, but then deliberately
+and with an understanding of the consequences listed below.
 
-### Р1. Мова ядра: Rust
+### R1. Core language: Rust
 
-> Переглянуто 2026-07-29 після дослідження. Перша редакція називала Go; вона
-> спиралася на припущення, що вбудований SQL-рушій не потрібен, і не враховувала
-> вимоги DST. Обидва припущення виявились хибними.
+> Revised 2026-07-29 after research. The first edition named Go; it
+> relied on the assumption that an embedded SQL engine is not needed, and did not take into account
+> the DST requirements. Both assumptions turned out to be wrong.
 
-**Чому.** Дві **незалежні** лінії аргументів дають одну відповідь.
+**Why.** Two **independent** lines of argument give one answer.
 
-*Лінія 1, коректність.* Головний пріоритет продукту це «не падає, не втрачає, мало
-багів», а він досягається методологією DST (§1a архітектури), не мовою. Але DST
-накладає вимогу: увесь недетермінізм за ін'єктованими інтерфейсами, а ядро
-детерміноване **пошардово** (thread-per-core, §1b архітектури), без спільної пам'яті
-й локів. Рантайм Go **навмисно рандомізує** планування горутин,
-і детермінована програма не може йти більш ніж на одному OS-потоці: Polar Signals
-заради цього компілювали в WASM і форкали рантайм, Resonate писав власний
-кооперативний планувальник. У Rust це готова екосистема (MadSim у RisingWave,
+*Line 1, correctness.* @decided 2026-07-29: the main product priority is that it does not crash, does not lose data and has few
+bugs; it is achieved by the DST methodology (§1a of the architecture), not by the language. But DST
+imposes a requirement: all nondeterminism sits behind injected interfaces, and the core is
+deterministic **per shard** (thread-per-core, §1b of the architecture), with no shared memory
+and no locks. The Go runtime **deliberately randomizes** goroutine scheduling,
+and a deterministic program cannot run on more than one OS thread: Polar Signals
+compiled to WASM and forked the runtime for this, Resonate wrote its own
+cooperative scheduler. In Rust this is a ready-made ecosystem (MadSim in RisingWave,
 turmoil, mad-turmoil).
 
-*Лінія 2, рушій запитів.* Найближчий прецедент, перепис InfluxDB з Go на Rust
-(2020-2024), зроблено саме заради **вбудовування готового рушія запитів**,
-а не через GC чи швидкість.
+*Line 2, query engine.* The closest precedent, the InfluxDB rewrite from Go to Rust
+(2020-2024), was done precisely to **embed a ready-made query engine**,
+and not because of GC or speed.
 
-**Наслідки.**
-- ML-KEM з **aws-lc-rs** (валідація FIPS 140-3), ML-DSA звідти ж за unstable-прапорцем,
-  SLH-DSA поза v1 (§14.2 архітектури).
-- В естейті дві екосистеми (6 репозиторіїв Go + TokenFuse і Trailryx на Rust);
-  онбординг контриб'юторів повільніший. Свідома плата.
-- Розглянуто й відкинуто **Zig**: найкращий для DST, але без DataFusion і без
-  валідованої PQC довелося б писати власну крипту й власний SQL.
+**Consequences.**
+- ML-KEM from **aws-lc-rs** (FIPS 140-3 validation), ML-DSA from the same crate behind an unstable flag,
+  SLH-DSA outside v1 (§14.2 of the architecture).
+- The estate has two ecosystems (6 Go repositories + TokenFuse and Trailryx in Rust);
+  contributor onboarding is slower. A deliberate cost.
+- **Zig** was considered and rejected: the best for DST, but with no DataFusion and no
+  validated PQC we would have to write our own crypto and our own SQL.
 
-### Р2. Гібридний ML-KEM з першого дня: так
+### R2. Hybrid ML-KEM from day one: yes
 
-**Дизайн.** Кожен пейлоад шифрується **AES-256-GCM** власним випадковим DEK;
-DEK загортається під KEK через **HPKE з гібридним X25519 + ML-KEM-768** (KDF від обох
-секретів: стійкість зберігається, якщо витримає хоч один). KEK суб'єктний, якщо
-суб'єкт відомий, інакше тенантний, з пізнішим re-wrap (§7.2). `forget` знищує
-суб'єктний KEK.
+**Design.** Every payload is encrypted with **AES-256-GCM** under its own random DEK;
+the DEK is wrapped under a KEK via **HPKE with hybrid X25519 + ML-KEM-768** (the KDF takes both
+secrets: strength is preserved if at least one holds). The KEK is per subject if
+the subject is known, otherwise per tenant, with a later re-wrap (§7.2). `forget` destroys
+the subject KEK.
 
-**Наслідки.** Ієрархія ключів проєктується у фазі 1. `kem_alg` і `key_id` у схемі
-з першого дня. Управління KEK (де живе, як ротується) стає окремим підрозділом:
-без нього стирання не працює.
+**Consequences.** The key hierarchy is designed in phase 1. `kem_alg` and `key_id` are in the schema
+from day one. KEK management (where it lives, how it is rotated) becomes a separate subsection:
+without it erasure does not work.
 
-### Р3. OTel GenAI semconv: канон свій, semconv як адаптер
+### R3. OTel GenAI semconv: our own canon, semconv as an adapter
 
-Мапимо лише стабільну частину (`gen_ai.operation.name`, модель, токени, виклики
-інструментів, латентність). Усе інше зберігаємо **дослівно і без інтерпретації,
-але в шифрованій пейлоад-площині**, ніколи в метаданих (§5.2 г): нерозпізнані
-атрибути OTel регулярно містять промпти й PII, і в метаданих вони пережили б `forget`.
+We map only the stable part (`gen_ai.operation.name`, model, tokens, tool
+calls, latency). Everything else we store **verbatim and without interpretation,
+but in the encrypted payload plane**, never in metadata (§5.2 g): unrecognized
+OTel attributes regularly contain prompts and PII, and in metadata they would survive `forget`.
 
-**Наслідки.** Коли semconv зміниться, міняється **версія мапера**, не формат
-сховища. Кожен запис зберігає версію мапера, якою створений. Потрібен корпус
-конформанс-тестів на реальних OTLP-потоках, і серед них тест, що метадана площина
-не містить жодного поля вільного тексту.
+**Consequences.** When semconv changes, the **mapper version** changes, not the format
+of the store. Every record keeps the version of the mapper that created it. A corpus
+of conformance tests on real OTLP streams is needed, and among them a test that the metadata plane
+contains no free-text field.
 
-### Р4. Автентифікований індекс: дві структури
+### R4. Authenticated index: two structures
 
-| Що доводимо | Структура |
+| What we prove | Structure |
 |---|---|
-| журнал тільки доповнювався, не переписувався | **Merkle history tree**, consistency proofs, модель CT (RFC 6962) |
-| це **всі** записи за предикатом у діапазоні | **відсортований Merkle-індекс на сегмент**, докази включення і не-включення через сусідні листки |
+| the journal was only appended to, never rewritten | **Merkle history tree**, consistency proofs, the CT model (RFC 6962) |
+| these are **all** the records matching a predicate in a range | **sorted Merkle index per segment**, inclusion and non-inclusion proofs via neighboring leaves |
 
-Sparse Merkle Tree відкинуто: створений для змінюваного стану, а наші сегменти
-незмінні.
+Sparse Merkle Tree is rejected: it was built for mutable state, and our segments
+are immutable.
 
-**Обмеження, яке фіксуємо явно.** Доказ повноти можливий лише для предикатів по
-**індексованому ключу сортування**. Довільний `WHERE` довести неможливо без
-комітменту на весь скан. Тому фіксуємо малий набір **доказових вимірів**:
-часовий діапазон, `agent_id`, `run_id`, тип події. Решта це фільтр **без доказу**,
-і API позначає це явним прапорцем у відповіді.
+**A limitation we state explicitly.** A completeness proof is possible only for predicates over an
+**indexed sort key**. An arbitrary `WHERE` cannot be proven without
+a commitment to the whole scan. So we fix a small set of **proof dimensions**:
+time range, `agent_id`, `run_id`, event type. The rest is a filter **without proof**,
+and the API marks this with an explicit flag in the response.
 
-**Наслідки.** Набір доказових вимірів фіксується у фазі 1: він визначає сортування
-сегментів, і зміна потім означає перебудову всіх індексів.
+**Consequences.** The set of proof dimensions is fixed in phase 1: it determines the sorting
+of segments, and changing it later means rebuilding all indexes.
 
-### Р6. Довіра до нас як до виробника доказів
+### R6. Trust in us as a producer of proofs
 
-Питання, яке поставить перший серйозний аудитор: **«а хто перевірив ваш код?»**
-Для звичайної бази це другорядне, для доказової це головне заперечення, і соло-авторство
-робить його гострішим. Відповідь будується сходинками, за зростанням ціни:
+The question the first serious auditor will ask: **"who has reviewed your code?"**
+For an ordinary database this is secondary, for a proof-grade one it is the main objection, and solo authorship
+makes it sharper. The answer is built in steps, in order of increasing cost:
 
-1. **Мінімізація TCB.** Офлайн-верифікатор це окремий crate з мінімумом залежностей,
-   написаний так, щоб людина прочитала його за годину. Усе, що не потрібне для перевірки,
-   лишається поза ним.
-2. **Відтворювані збірки і опубліковані DST-сіди.** Будь-хто відтворює наш прогін
-   і наш бінарник побайтово.
-3. **Друга незалежна реалізація верифікатора** іншою мовою (наприклад Go або Python),
-   що читає той самий пакет. Дві реалізації, які сходяться, доводять формат, а не автора.
-4. **Зовнішній аудит crypto-usage шару** перед першим комплаєнс-контрактом.
-   Це витрата, тому окремим рішенням і не зараз, але в плані вона стоїть.
+1. **Minimizing the TCB.** The offline verifier is a separate crate with minimal dependencies,
+   written so that a person can read it in an hour. Everything not needed for verification
+   stays outside it.
+2. **Reproducible builds and published DST seeds.** Anyone can reproduce our run
+   and our binary byte for byte.
+3. **A second independent implementation of the verifier** in another language (for example Go or Python),
+   reading the same pack. Two implementations that agree prove the format, not the author.
+4. **An external audit of the crypto-usage layer** before the first compliance contract.
+   This is a cost, so it is a separate decision and not now, but it is in the plan.
 
-Пункти 1-2 входять у v0.1, пункт 3 у v0.2, пункт 4 за твоїм рішенням.
+Items 1-2 go into v0.1, item 3 into v0.2, item 4 is subject to a separate decision.
 
-### Р5. Ліцензія: Apache-2.0
+### R5. License: Apache-2.0
 
-Узгоджено з рішенням «нічого платного, гроші з консалтингу» і з рештою естейту.
+@decided 2026-07-29: nothing is paid, and the money comes from consulting. This is consistent with that decision and with the rest of the estate.
 
-AGPL відкинуто свідомо: він захищає від хмарного вендора, який захостить продукт
-і забере дохід, а доходу з хостингу тут немає за визначенням. Натомість AGPL
-відчутно ускладнює впровадження в банківському периметрі. Для продукту, який
-продає довіру, найпростіша ліцензія це перевага. Apache-2.0 ще й дає явний
-патентний грант, на який дивиться юридичний відділ великого клієнта.
+AGPL is rejected deliberately: it protects against a cloud vendor who would host the product
+and take the revenue, but here there is no hosting revenue by definition. Meanwhile AGPL
+noticeably complicates adoption inside a bank's perimeter. For a product that
+sells trust, the simplest license is an advantage. Apache-2.0 also gives an explicit
+patent grant, which the legal department of a large client looks at.
 
 ---
 
-## 11. Питання до закриття
+## 11. Questions to close
 
-**[Б]**-питання закриті в §10a. Нижче лишаються **[П]** (вирішується в пілоті)
-і **[Д]** (можна відкласти); блокуючі залишені для історії рішень.
+The **[B]** questions are closed in §10a. Below remain the **[P]** (decided in the pilot)
+and **[D]** (can be postponed); the blocking ones are kept for the decision history.
 
-| # | Питання | Рекомендація |
+| # | Question | Recommendation |
 |---|---|---|
-| 1 | **[Б]** Мова ядра | Go: один статичний бінарник, зрілі Parquet і Arrow, швидкий онбординг. Контраргумент: TokenFuse на Rust, тобто в естейті буде дві екосистеми |
-| 2 | **[Б]** Гібридний ML-KEM одразу? | **Так.** Без нього криптостирання перестає стирати, щойно з'явиться CRQC, а вкрадений шифротекст не перезагорнути |
-| 3 | **[Б]** Прив'язка до OTel GenAI semconv | Не як канон: станом на 17.07.2026 жоден `gen_ai.*` не Stable, 12 червня їх винесли в окремий репозиторій. Канон свій, semconv підтримуємо на вході і виході |
-| 4 | **[Б]** Структура автентифікованого індексу | Відсортований Merkle на сегмент з доказами включення **і відсутності**. Альтернативи (sparse Merkle tree, verifiable B-tree) порівняти на прототипі до фази 3 |
-| 5 | **[Б]** Ліцензія | Apache-2.0, нічого платного, гроші з консалтингу і впровадження |
-| 6 | **[П]** Формат журналу | Записо-орієнтований, самоописний, з довжиною і CRC на запис. Версія формату в кожному сегменті з першого дня |
-| 7 | **[П]** Індексація пейлоада проти шифрування | У пілоті full-text немає. Далі: індекс до шифрування зі стиранням разом із ключем, або blind index. Обидва течуть по-різному, вибирати свідомо |
-| 8 | **[П]** Гранулярність ключів стирання | **Закрито (§7.2):** DEK на кожен пейлоад, KEK суб'єктний або тенантний, пізніша атрибуція через re-wrap, обидві дії як події ланцюга |
-| 9 | **[П]** Довіра до годинника | `recorded_at` наш і довірений, `occurred_at` від емітента і позначений недовіреним. Розбіжність понад поріг це подія, не тиха корекція |
-| 10 | **[П]** Поведінка під тиском | Fail-open щодо трафіку емітента, але **втрата запису сама стає записом** (лічильник прогалин). Мовчазна втрата це найгірше для аудиту |
-| 11 | **[П]** Ідемпотентність | Ключ дедуплікації `(source, agent_id, run_id, seq)` |
-| 12 | **[П]** Ретенція і рівні | Мінімум шість місяців за AI Act. Гарячий рівень локальний диск, холодний об'єктне сховище. **Downsampling заборонений за визначенням**: аудит не проріджують |
-| 13 | **[П]** Політика перепідписання | За розкладом (річний цикл) і за подією (депрекація алгоритму). Кожне як запис |
-| 14 | **[Д]** Мультитенантність | У пілоті один тенант. Далі префікс тенанта в сегментах, не спільна таблиця |
-| 15 | **[Д]** Джерело зовнішнього якоря | RFC 3161 TSA з PQC, transparency-log, або підписаний артефакт CI. Маніфест готується під усі три |
-| 16 | **[Д]** Домен і GitHub | Перевірити зайнятість, марку в класах 9 і 42. **Реєстрація тільки після окремої згоди** (витрата) |
+| 1 | **[B]** Core language | Go: one static binary, mature Parquet and Arrow, fast onboarding. Counterargument: TokenFuse is in Rust, so the estate will have two ecosystems |
+| 2 | **[B]** Hybrid ML-KEM from the start? | **Yes.** Without it crypto-erasure stops erasing as soon as a CRQC appears, and a stolen ciphertext cannot be re-wrapped |
+| 3 | **[B]** Binding to OTel GenAI semconv | Not as the canon: as of 17.07.2026 no `gen_ai.*` is Stable, on 12 June they were moved to a separate repository. Our own canon, semconv supported on input and output |
+| 4 | **[B]** Structure of the authenticated index | A sorted Merkle per segment with inclusion **and absence** proofs. Alternatives (sparse Merkle tree, verifiable B-tree) to be compared on a prototype before phase 3 |
+| 5 | **[B]** License | Apache-2.0, nothing paid, money from consulting and implementation |
+| 6 | **[P]** Journal format | Record-oriented, self-describing, with length and CRC per record. Format version in every segment from day one |
+| 7 | **[P]** Payload indexing versus encryption | No full-text in the pilot. Later: an index built before encryption and erased together with the key, or a blind index. The two leak in different ways, choose deliberately |
+| 8 | **[P]** Granularity of erasure keys | **Closed (§7.2):** a DEK per payload, KEK per subject or tenant, later attribution via re-wrap, both actions as chain events |
+| 9 | **[P]** Trust in the clock | `recorded_at` is ours and trusted, `occurred_at` comes from the issuer and is marked untrusted. A divergence above the threshold is an event, not a silent correction |
+| 10 | **[P]** Behavior under pressure | Fail-open with respect to issuer traffic, but **the loss of a record itself becomes a record** (a gap counter). Silent loss is the worst thing for an audit |
+| 11 | **[P]** Idempotency | Deduplication key `(source, agent_id, run_id, seq)` |
+| 12 | **[P]** Retention and tiers | At least six months under the AI Act. Hot tier is local disk, cold tier is object storage. **Downsampling is forbidden by definition**: an audit is not thinned out |
+| 13 | **[P]** Re-signing policy | On a schedule (annual cycle) and on an event (algorithm deprecation). Each as a record |
+| 14 | **[D]** Multitenancy | One tenant in the pilot. Later a tenant prefix in segments, not a shared table |
+| 15 | **[D]** Source of the external anchor | RFC 3161 TSA with PQC, a transparency log, or a signed CI artifact. The manifest is prepared for all three |
+| 16 | **[D]** Domain and GitHub | Check availability, the trademark in classes 9 and 42. **Registration only after separate consent** (a cost) |
 
 ---
 
-## 12. Фази
+## 12. Phases
 
-**Єдине джерело порядку робіт це [`trailryx-roadmap.md`](trailryx-roadmap.md).**
-Тут таблиці фаз немає навмисно: три документи з трьома різними нумераціями
-розходяться при першій же правці. Роадмап тримає етапи 0-13, згруповані у три
-віхи (A «Доказ», B «Сумісність», C «Масштаб»), з критерієм «готово, коли»
-для кожного етапу.
+**The single source of work order is [`trailryx-roadmap.md`](trailryx-roadmap.md).**
+There is deliberately no phase table here: three documents with three different numberings
+diverge on the first edit. The roadmap holds stages 0-13, grouped into three
+milestones (A "Proof", B "Compatibility", C "Scale"), with a "done when" criterion
+for each stage.
 
-Правило порядку, яке діє в усіх документах: **спершу гарантії, потім швидкість**.
-Перша реалізація журналу й індексу свідомо наївна і повільна, зате з повним набором
-властивостей. Оптимізація після того, як є на чому міряти регресії.
-
----
-
-## 13. Що коштує грошей
-
-- Розробка і всі тести локально: **0**.
-- Пілотний прогін на боксі: Hetzner CPX-класу, орієнтовно **EUR 10-30/міс**, зноситься після.
-- Об'єктне сховище для холодного рівня: **метрована послуга**, у пілоті не вмикаємо,
-  пишемо на локальний диск.
-- Домен і марка: витрата, тільки після окремої згоди.
-- **Зовнішній аудит crypto-usage шару** (Р6, пункт 4): відкладена витрата, актуальна
-  перед першим комплаєнс-контрактом, не раніше. Порядок цін уточнювати ближче до дати.
-- Жодного платного API в гарячому шляху: підписи локальні, LLM не потрібен взагалі.
+The ordering rule that applies in all documents: **guarantees first, then speed**.
+The first implementation of the journal and index is deliberately naive and slow, but with the full set of
+properties. Optimization comes after there is something to measure regressions against.
 
 ---
 
-## Джерела
+## 13. What costs money
 
-- OTel GenAI semconv, стан на липень 2026: [огляд](https://john-hodge.com/blog/opentelemetry-genai-semantic-conventions/)
-- EU AI Act ст. 12: [Help Net Security](https://www.helpnetsecurity.com/2026/04/16/eu-ai-act-logging-requirements/)
-- PQC-дедлайни: NIST IR 8547, CNSA 2.0, NCSC, роадмап ЄС (червень 2025)
-- ClickHouse + Langfuse: [анонс](https://clickhouse.com/blog/clickhouse-acquires-langfuse-open-source-llm-observability)
-- VictoriaMetrics як зразок операційної простоти: [сайт](https://victoriametrics.com), [GitHub](https://github.com/VictoriaMetrics)
+- Development and all tests locally: **0**.
+- Pilot run on a box: Hetzner CPX class, roughly **EUR 10-30/month**, torn down afterwards.
+- Object storage for the cold tier: **a metered service**, not enabled in the pilot,
+  we write to local disk.
+- Domain and trademark: a cost, only after separate consent.
+- **External audit of the crypto-usage layer** (R6, item 4): a deferred cost, relevant
+  before the first compliance contract, not earlier. Price levels to be clarified closer to the date.
+- No paid API in the hot path: signatures are local, no LLM is needed at all.
+
+---
+
+## Sources
+
+- OTel GenAI semconv, state as of July 2026: [overview](https://john-hodge.com/blog/opentelemetry-genai-semantic-conventions/)
+- EU AI Act art. 12: [Help Net Security](https://www.helpnetsecurity.com/2026/04/16/eu-ai-act-logging-requirements/)
+- PQC deadlines: NIST IR 8547, CNSA 2.0, NCSC, the EU roadmap (June 2025)
+- ClickHouse + Langfuse: [announcement](https://clickhouse.com/blog/clickhouse-acquires-langfuse-open-source-llm-observability)
+- VictoriaMetrics as a model of operational simplicity: [site](https://victoriametrics.com), [GitHub](https://github.com/VictoriaMetrics)

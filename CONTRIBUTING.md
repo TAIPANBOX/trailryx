@@ -95,7 +95,7 @@ rather than committed.
 
 ## Where the open work is
 
-`docs/planning/trailryx-roadmap.md` is the working record, in Ukrainian, and it is
+`docs/planning/trailryx-roadmap.md` is the working record, in English (translated from the Ukrainian original on 2026-10-13), and it is
 where each stage says what it did **not** do, stage by stage. Every review finding
 raised so far has been measured and either fixed or refuted, so the open work is now
 the named gaps rather than a candidate list: gRPC, a validated cipher behind the AEAD

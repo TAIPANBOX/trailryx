@@ -1,2008 +1,2008 @@
-# Trailryx: порядок робіт
+# Trailryx: order of work
 
-> Що за чим будуємо і чому саме в такому порядку.
-> Супутні документи: [`trailryx-plan.md`](trailryx-plan.md) (що і навіщо),
-> [`trailryx-architecture.md`](trailryx-architecture.md) (як).
+> What we build in which order, and why in exactly this order.
+> Companion documents: [`trailryx-plan.md`](trailryx-plan.md) (what and why),
+> [`trailryx-architecture.md`](trailryx-architecture.md) (how).
 >
-> Дата: 2026-07-29. Мова: Rust.
+> Date: 2026-07-29. Language: Rust.
 
 ---
 
-## Стан на 2026-07-29
+## State as of 2026-07-29
 
-Етапи **0-5 виконані**, етапи 6-9 виконані частково, **демо-критерій виконаний**,
-ядро **заморожене**. 450 тестів, 29 598 рядків, шістнадцять крейтів, нуль
-залежностей.
+Stages **0-5 done**, stages 6-9 partly done, **demo criterion met**,
+the core **frozen**. 450 tests, 29,598 lines, sixteen crates, zero
+dependencies.
 
-| Етап | Стан | Що з'явилось |
+| Stage | State | What appeared |
 |---|---|---|
-| 0. Каркас DST і шардів | готово | трейти, симулятор, модель краху, відтворення за сідом |
-| 1. Канон і контракти | готово | запис, схема, межа площин, вісім контрактів, конформанс |
-| 2. Журнал | готово | кодек, кадрування, шлях запису, відновлення, контракт довговічності |
-| 3. Індекс | готово | RFC 6962, доказ повноти, композиція сегмент → шард → store |
-| 4-5. Поверхня читання | готово | запити з проштовхуванням, `as_of`, реконструкція, прапорець доказовості |
-| 6. Прийом даних | частково | protobuf-читач, розбір OTLP, мапер, **транспорт OTLP/HTTP**, **читач OTLP/JSON-файлу**; gRPC і автентифікація лишились |
-| 7. Крипта і стирання | частково | конверти, ієрархія ключів, стирання без видалення; примітиви за сімом |
-| 8. Докази назовні | частково | evidence pack, офлайн-верифікатор, підпис P-384 і свідки; TSA і мапінг лишились |
-| 9. Проєкції | частково | свій Thrift + Parquet, перевірено pyarrow; списки і рівні зберігання лишились |
+| 0. DST and shard skeleton | done | traits, simulator, crash model, replay by seed |
+| 1. Canon and contracts | done | record, schema, plane boundary, eight contracts, conformance |
+| 2. Journal | done | codec, framing, write path, recovery, durability contract |
+| 3. Index | done | RFC 6962, completeness proof, segment → shard → store composition |
+| 4-5. Read surface | done | queries with pushdown, `as_of`, reconstruction, provability flag |
+| 6. Ingestion | partial | protobuf reader, OTLP parsing, mapper, **OTLP/HTTP transport**, **OTLP/JSON file reader**; gRPC and authentication remain |
+| 7. Crypto and erasure | partial | envelopes, key hierarchy, erasure without deletion; primitives are behind a seam |
+| 8. Proofs outward | partial | evidence pack, offline verifier, P-384 signature and witnesses; TSA and mapping remain |
+| 9. Projections | partial | own Thrift + Parquet, checked with pyarrow; lists and storage tiers remain |
 
-Між етапами 3 і 4 стався **ворожий архітектурний перегляд**, який знайшов шість
-критичних дірок у системі доказів. Усі закриті, кожна з регресійним тестом
-з боку атакуючого. Спільний корінь сформульований як правило:
-**верифікатор ніколи не має дізнаватись форму відповіді з самої відповіді.**
+Between stages 3 and 4 an **adversarial architecture review** took place, which found six
+critical gaps in the proof system. All are closed, each with a regression test
+from the attacker's side. The common root is stated as a rule:
+**the verifier must never learn the shape of the answer from the answer itself.**
 
-### Що саме зроблено з етапу 6 (2026-07-29)
+### What exactly was done in stage 6 (2026-07-29)
 
-Зроблено: власний protobuf-читач із межею вкладеності, розбір
-`ExportTraceServiceRequest`, мапер OTel GenAI semconv, `Source`-адаптер із
-лічильниками втрат. Чужий агент зі стоковою інструментацією пише в нас без
-жодної зміни в ньому.
+Done: own protobuf reader with a nesting limit, parsing of
+`ExportTraceServiceRequest`, the OTel GenAI semconv mapper, a `Source` adapter with
+loss counters. A foreign agent with stock instrumentation writes to us without
+any change in it.
 
-Правило мапера: **атрибут потрапляє в типізоване поле метаданих лише якщо
-парситься в нього, решта йде в пейлоад-площину.** Наслідок сформульований як
-інваріант і перевіряється тестом: кожен атрибут лягає рівно в одну площину.
-Нічого не «лагодиться»: назва моделі, яка не влазить у `ModelId`, лишає поле
-порожнім, а не приводиться до нижнього регістру.
+The mapper rule: **an attribute lands in a typed metadata field only if it
+parses into it, the rest goes to the payload plane.** The consequence is stated as an
+invariant and checked by a test: every attribute lands in exactly one plane.
+Nothing is "fixed up": a model name that does not fit into `ModelId` leaves the field
+empty rather than being lowercased.
 
-Чого OTLP дати не може і що тому лишається порожнім: `policy_version`,
+What OTLP cannot provide and what therefore stays empty: `policy_version`,
 `budget_remaining_micros`, `memory_ref`, `identity_chain`, `parent_run_id`.
-Це не дефект мапера, це різниця між телеметрією і доказом.
+That is not a mapper defect, it is the difference between telemetry and proof.
 
-**Не зроблено на той момент**: транспорт HTTP/gRPC і NDJSON-джерело. Перше
-закрито того ж дня (`trailryx-ingest`), друге 2026-07-30 (`trailryx-json` плюс
-`otlpjson` і `jsonl`). Лишились gRPC і автентифікація.
+**Not done at that point**: the HTTP/gRPC transport and the NDJSON source. The first was
+closed the same day (`trailryx-ingest`), the second on 2026-07-30 (`trailryx-json` plus
+`otlpjson` and `jsonl`). What remains is gRPC and authentication.
 
-Два реальні баги знайшли власні тести під час написання: підказка clippy
-`then_some` обчислює значення до перевірки умови, тож охоронець від'ємної
-тривалості не охороняв (паніка на переповненні); і `error.type` виду
-`RateLimitError` не матчився, бо матчинг ішов по підкресленнях, а не по літерах.
+Two real bugs were found by the tests themselves while being written: the clippy hint
+`then_some` evaluates the value before checking the condition, so the guard against negative
+duration did not guard (panic on overflow); and an `error.type` of the form
+`RateLimitError` did not match, because matching went by underscores, not by letters.
 
-### Етап 7: механіка є, примітивів нема (2026-07-29)
+### Stage 7: the mechanics exist, the primitives do not (2026-07-29)
 
-Зроблено: формат конверта пейлоада з прив'язкою до запису, ієрархія ключів,
-реєстр «суб'єкт → ключі», стирання, маніфест стирання, запис про стирання.
-Головна властивість перевірена тестом, а не заявлена: запечатати, довести,
-стерти, довести ще раз - той самий корінь, той самий доказ.
+Done: the payload envelope format bound to the record, the key hierarchy, the
+"subject → keys" registry, erasure, the erasure manifest, the erasure record.
+The main property is checked by a test, not declared: seal, prove,
+erase, prove again - the same root, the same proof.
 
-**Знайдено помилку в самому плані.** План казав: поки суб'єкт невідомий,
-загортати DEK під тенантний ключ, а після атрибуції перегортати під суб'єктний
-і **знищувати стару обгортку**. Так не працює. Стара обгортка лежить у
-реплікованому, забекапленому, часто WORM-сховищі, і «знищити стару обгортку»
-означає видалити об'єкт, тобто саме те, заради уникнення чого крипто-стирання й
-існує. Лишити її - тенантний ключ і далі її відкриває.
+**A mistake was found in the plan itself.** The plan said: while the subject is unknown,
+wrap the DEK under the tenant key, and after attribution re-wrap it under the subject key
+and **destroy the old wrapped key**. That does not work. The old wrapped key sits in
+replicated, backed-up, often WORM storage, and "destroy the old wrapped key"
+means deleting an object, which is exactly what crypto-erasure exists to
+avoid. If it stays, the tenant key still opens it.
 
-Тому атрибуція тут не перегортає нічого: неатрибутований пейлоад отримує
-**власний ключ, що не належить нікому**, а атрибуція лише додає цей ключ до
-множини суб'єкта. Ціна це більше ключів. Виграш це стирання, яке переживає
-відновлений бекап. `ObjectStore` без методу видалення виявився не прогалиною
-контракту, а якраз правильною формою.
+So attribution here re-wraps nothing: an unattributed payload gets its
+**own key that belongs to nobody**, and attribution only adds that key to the
+subject's set. The price is more keys. The gain is erasure that survives a
+restored backup. An `ObjectStore` without a delete method turned out not to be a gap
+in the contract but exactly the right shape.
 
-Ще одне рішення того ж роду: маніфест стирання не перелічує знищені id ключів.
-Інакше будь-хто з доступом до метаданих перетнув би маніфест із записами і
-дізнався, які саме записи належали людині, що попросила її забути. Кожен запис
-маніфесту це хеш від пари (ключ суб'єкта, знищений ключ): перевіряється тим, хто
-має псевдонім, і нічого не каже всім іншим.
+One more decision of the same kind: the erasure manifest does not list the ids of destroyed keys.
+Otherwise anyone with access to the metadata would intersect the manifest with the records and
+learn exactly which records belonged to the person who asked to be forgotten. Each manifest
+entry is a hash of a pair (subject key, destroyed key): it is checked by whoever
+has the pseudonym, and tells everyone else nothing.
 
-**Не зроблено**: валідованого шифру за сімом (стоїть заглушка, яка на питання
-`is_validated()` відповідає `false`, і конструктор її не пускає), провайдера
-ключів на реальному KMS. Ворожі тести проходять усіма шляхами, які вже існують;
-кеші, проєкції, експорти і бекапи додають свою спробу разом із собою.
+**Not done**: a validated cipher behind the seam (a stub stands in, which answers
+`is_validated()` with `false`, and the constructor refuses it), a key provider
+on a real KMS. The hostile tests pass through all the paths that already exist;
+caches, projections, exports and backups add their own attempt as they arrive.
 
-### Етап 8: борг закритий (2026-07-29)
+### Stage 8: debt closed (2026-07-29)
 
-`trailryx-verify` це окремий крейт **без жодної залежності**, включно з рештою
-Trailryx, ~1500 рядків разом із тестами, з власним SHA-384. Спільний хеш означав
-би, що баг у ньому дає хибний корінь і верифікатор, який радісно погоджується.
+`trailryx-verify` is a separate crate **with no dependencies at all**, including the rest of
+Trailryx, ~1500 lines with tests, with its own SHA-384. A shared hash would mean
+that a bug in it gives a false root and a verifier that cheerfully agrees.
 
-Пакет несе байти записів так, як їх записав журнал, і маніфести сегментів.
-Більше нічого: ні ланок ланцюга, ні ключів індексу, ні витягнутих полів. Те, що
-пакет **заявляє**, пакет може збрехати; тому все інше **виводиться**.
-Верифікатор перераховує ланцюг із байтів кожного запису, дерево історії з цих
-ланок, кожен індекс власним сортуванням, корені маніфестів, шардів і store.
+The pack carries the record bytes as the journal wrote them, and the segment manifests.
+Nothing more: no chain links, no index keys, no extracted fields. What the
+pack **claims**, the pack can lie about; so everything else is **derived**.
+The verifier recomputes the chain from the bytes of each record, the history tree from those
+links, each index with its own sort, the roots of manifests, shards and the store.
 
-**Це закриває один із двох записаних боргів.** Всередині store індекс
-відсортований тому, що його сортував код, який його будував. Тепер інший код, що
-не ділить із ним нічого, сортує ті самі записи і має прийти до того самого
-кореня. Доказ повноти над невідсортованим індексом не означає нічого, і досі
-цього ніхто ззовні не перевіряв.
+**This closes one of the two recorded debts.** Inside the store the index is
+sorted because the code that built it sorted it. Now other code, which
+shares nothing with it, sorts the same records and must arrive at the same
+root. A completeness proof over an unsorted index means nothing, and until now
+nobody from outside had checked this.
 
-Дві речі верифікатор робити відмовляється. Він **ніколи** не викидає підтримку
-алгоритму, лише позначає слабким: у день, коли SHA-384 виведуть з обігу, кожен
-виданий до того пакет має далі перевірятись, бо доказ із терміном придатності це
-не доказ. І він **ніколи** не пише «все добре» на непідписаному пакеті: пакет
-доводить власну внутрішню узгодженість, а чи це справжня історія встановлюють
-підпис і зовнішній якір.
+There are two things the verifier refuses to do. It **never** drops support for an
+algorithm, it only marks it weak: on the day SHA-384 is withdrawn from use, every
+pack issued before that must still verify, because a proof with an expiry date is
+not a proof. And it **never** writes "all good" on an unsigned pack: a pack
+proves its own internal consistency, and whether this is the genuine history is established by
+the signature and the external anchor.
 
-Перевірено кінець-у-кінець: бінарник прочитав файл на 2790 байтів і сказав
-VERIFIED; після зміни **однієї літери** в одному agent_id вісім перевірок
-провалились і він сказав NOT VERIFIED з кодом виходу 1.
+Checked end to end: the binary read a 2790-byte file and said
+VERIFIED; after changing **one letter** in one agent_id eight checks
+failed and it said NOT VERIFIED with exit code 1.
 
-**Не зроблено**: підпису над коренем store (тому кожен пакет зараз
-«непідписаний»), RFC 3161 TSA, мапінгу на ст. 12 AI Act / SR 11-7 / SOC 2,
-відтворюваних збірок.
+**Not done**: a signature over the store root (so every pack is currently
+"unsigned"), RFC 3161 TSA, mapping to Art. 12 of the AI Act / SR 11-7 / SOC 2,
+reproducible builds.
 
-### Етап 9: Parquet своїми руками, перевірений чужими (2026-07-29)
+### Stage 9: Parquet by hand, verified by others (2026-07-29)
 
-Писати формат обміну власноруч це погана угода, якщо результат лише
-«схожий на Parquet». Тому коректність не доводиться тут, а делегується: тест
-пише файл, і **pyarrow** читає назад кожну клітинку. Результат:
+Writing an exchange format by hand is a bad deal if the result is merely
+"similar to Parquet". So correctness is not proved here but delegated: a test
+writes a file, and **pyarrow** reads back every cell. Result:
 `pyarrow read 3 rows, 42 columns, 126 cells, all matching`.
 
-Обмеження свідомі: PLAIN, без стиснення, одна row group, data page v1. Решта
-формату це стиснення і швидкість, а етап 9 не про це.
+The limits are deliberate: PLAIN, no compression, one row group, data page v1. The rest
+of the format is compression and speed, and stage 9 is not about that.
 
-**Два правила визначають, що таке проєкція.**
+**Two rules define what a projection is.**
 
-Перше: **вона ніколи не є доказом.** Parquet-файл тут похідний: видали, і він
-перебудується з журналу побайтово. `Projection::provable()` повертає `false`
-методом, а не абзацом, бо спокуса реальна: проєкція швидка, її хоче SQL, і її
-рядки виглядають точно як записи. Кожен рядок несе `chain_link`, і саме це
-робить її корисною, не роблячи авторитетною: рядок відстежується назад до
-журналу, а доказ дає сегмент.
+First: **it is never a proof.** The Parquet file here is derived: delete it, and it
+will be rebuilt from the journal byte for byte. `Projection::provable()` returns `false`
+by method, not by a paragraph, because the temptation is real: a projection is fast, SQL wants it, and its
+rows look exactly like records. Each row carries `chain_link`, and that is what
+makes it useful without making it authoritative: a row is traceable back to the
+journal, and the proof is given by the segment.
 
-Друге: **у ній немає ні пейлоада, ні вільного тексту.** Проєкція лягає в
-об'єктне сховище, копіюється в лейк, реплікується, бекапиться: рівно та
-поверхня, куди знищення ключа не дістає. Тому кожна колонка це типізоване поле,
-валідований токен, назва enum або хеш, і тест обходить кожну клітинку, щоб
-переконатись, що жодне значення не може бути реченням.
+Second: **it contains neither a payload nor free text.** A projection lands in
+object storage, is copied into the lake, replicated, backed up: exactly the
+surface that destroying a key does not reach. So every column is a typed field,
+a validated token, an enum name or a hash, and a test walks every cell to
+make sure that no value can be a sentence.
 
-Часи в наносекундах, колонки названі `_nanos`: жоден converted type у Parquet не
-несе наносекундної точності, а експорт, який округлює час на виході, це не той
-експорт «без втрат», який просив роадмап.
+Times are in nanoseconds, columns are named `_nanos`: no converted type in Parquet
+carries nanosecond precision, and an export that rounds time on the way out is not the
+"lossless" export that the roadmap asked for.
 
-**Не зроблено**: повторюваних колонок (списки склеєні комою, що безпечно, бо в
-жодному наборі символів ідентифікатора коми немає), рівнів зберігання
-гарячий/теплий/холодний.
+**Not done**: repeated columns (lists are joined with a comma, which is safe because no
+identifier character set contains a comma), storage tiers
+hot/warm/cold.
 
-### Ворожий перегляд транспорту (2026-07-30)
+### Adversarial review of the transport (2026-07-30)
 
-Той перегляд, що двічі впав на 529, відбувся: **шість лінз, 96 агентів, 11
-мільйонів токенів**, кожна знахідка віддана трьом скептикам із наказом її
-опровергнути. Вижили 12, і вони зводяться до **восьми окремих дефектів**. Мій
-власний перегляд одними очима знайшов тоді чотири речі, і жодна з них не була цими.
+The review that twice fell over on a 529 took place: **six lenses, 96 agents, 11
+million tokens**, every finding handed to three skeptics with orders to
+refute it. 12 survived, and they reduce to **eight distinct defects**. My
+own single-pair-of-eyes review found four things back then, and none of them was one of these.
 
-**Найгірший: бюджет тіл рахував стиснуту довжину.** gzip-запит резервував те, що
-заявив, потім розпаковувався до 16 МіБ і тримав це, поки чекав на замок. 256
-з'єднань по 15 КіБ могли тримати 4 ГіБ проти 64-мегабайтної межі, яка порахувала
-4 МБ. Тепер стиснутий запит рахується по найгіршому випадку, до якого може
-розпакуватись, а дефолт межі прямо каже: поділи її на `max_body` і отримаєш
-кількість одночасних gzip-запитів.
+**The worst: the body budget counted the compressed length.** A gzip request reserved what it
+declared, then inflated to 16 MiB and held that while waiting for the lock. 256
+connections of 15 KiB could hold 4 GiB against a 64-megabyte limit that had counted
+4 MB. Now a compressed request is counted at the worst case it can
+inflate to, and the default of the limit says it directly: divide it by `max_body` and you get
+the number of simultaneous gzip requests.
 
-**Другий: ліміт співвідношення не міг спрацювати ніколи.** Він відкривався після
-32 КіБ **спожитого входу**, а 16-мегабайтна бомба це 16 КіБ входу. Виміряно: 16
-МіБ нулів стискаються в 16 328 байтів і повертали `Ok` при співвідношенні 1027.
-Абсолютний ліміт виходу далі тримав, тож нічого безмежного не було, але перевірка,
-чия єдина мета зробити витрати атакуючого пропорційними, була декорацією з
-коментарем, що каже інше, а це гірше за відсутню перевірку. Тепер шлюз відкривається
-по **виробленому виходу**, і тест перевіряє це на тих налаштуваннях, які сервер
-справді постачає, а не на підібраних, щоб пройшло.
+**Second: the ratio limit could never fire.** It opened after
+32 KiB of **consumed input**, while a 16-megabyte bomb is 16 KiB of input. Measured: 16
+MiB of zeros compress to 16,328 bytes and returned `Ok` at a ratio of 1027.
+The absolute output limit still held, so nothing was unbounded, but a check
+whose only purpose is to make the attacker's costs proportional was decoration with
+a comment saying otherwise, and that is worse than no check. Now the gate opens
+on the **produced output**, and a test checks this with the settings the server
+actually ships, not with ones picked so that it passes.
 
-Решта шість: спани, які декодер викинув на власних лімітах, повідомлялись клієнту
-як повний успіх, бо `submit` читав два лічильники, а їх три; простоююче
-keep-alive з'єднання отримувало непрошений 408 на запит, який не починався, а
-справжній запит клієнта потім з'їдав дренаж (408 не ретраїбельний, а дефолтний
-read_timeout це 5 секунд, і це ж дефолтна затримка батчу в OTel-експортері, тобто
-це був найзвичайніший випадок з усіх); перевірка повної черги йшла в іншому
-захопленні замка, ніж вставка; недопідписаний код Гаффмана приймався, тож потік,
-який відкидає кожен zlib-декодер, давав тіло, що ми віддавали в сховище; трейлер
-gzip читався з останніх 8 байтів незалежно від того, що перед ними, тож легальний
-багатомемберний потік відхилявся як пошкодження, а байти, приховані перед
-трейлером, ігнорувались; і фіксовані таблиці Гаффмана будувались на кожен блок,
-тож 16 МіБ порожніх блоків спалювали 21 секунду при мовчазних лімітах.
+The other six: spans that the decoder dropped on its own limits were reported to the client
+as complete success, because `submit` read two counters while there are three; an idle
+keep-alive connection received an unsolicited 408 for a request that had not started, and the
+client's real request was then eaten by the drain (408 is not retryable, and the default
+read_timeout is 5 seconds, which is also the default batch delay in the OTel exporter, so
+this was the most ordinary case of all); the full-queue check happened in a different
+lock acquisition than the insertion; an under-subscribed Huffman code was accepted, so a stream
+that every zlib decoder rejects produced a body that we handed to the store; the gzip trailer
+was read from the last 8 bytes regardless of what came before them, so a legal
+multi-member stream was rejected as corruption, and bytes hidden before the
+trailer were ignored; and fixed Huffman tables were built for every block,
+so 16 MiB of empty blocks burned 21 seconds under silent limits.
 
-Усі вісім виправлені, кожен із регресійним тестом. Виправлення недопідписаного
-коду спершу зламало **весь** корпус: фіксований код відстаней із самої
-специфікації визначений на 30 символах п'ятибітними кодами, тобто недопідписаний
-за арифметикою і легальний за визначенням. Так код і навчився розрізняти його від
-недопідписаного коду, прочитаного з дроту.
+All eight are fixed, each with a regression test. The fix for the under-subscribed
+code at first broke the **whole** corpus: the fixed distance code from the
+specification itself is defined over 30 symbols with five-bit codes, that is, under-subscribed
+by arithmetic and legal by definition. That is how the code learned to tell it apart from an
+under-subscribed code read off the wire.
 
-### Два боргу закриті без відкриття схеми (2026-07-30)
+### Two debts closed without opening the schema (2026-07-30)
 
-Обидва я сам описував як «впираються в заморожену схему запису». Це було моє
-**прочитання, а не факт**, і перевірка побила віру: жоден із них схеми не потребував.
+I had described both myself as "running into the frozen record schema". That was my
+**reading, not a fact**, and checking overturned the belief: neither of them needed the schema.
 
-**Позначка довговічності.** `acked` жив лише в пам'яті, тож новий процес починав з
-нуля, `recovered < promised` не могло стати правдою, і журнал, який вернувся на три
-записи коротшим за те, що попередній процес підтвердив, не звітував нічого. Тепер це
-дванадцять байтів у файлі поруч із журналом. Заголовок сегмента тримати їх не може, бо
-він хешується в genesis і пишеться один раз, тож окремий файл, і **формат запису не
-змінився ні на байт**.
+**The durability mark.** `acked` lived only in memory, so a new process started from
+zero, `recovered < promised` could never become true, and a journal that came back three
+records shorter than what the previous process had acknowledged reported nothing. Now it is
+twelve bytes in a file next to the journal. The segment header cannot hold them, because
+it is hashed into genesis and written once, so a separate file, and the **record format did not
+change by a single byte**.
 
-Порядок тут і є вся суть: спершу fsync журналу, потім позначка. Крах між ними лишає
-позначку **позаду** журналу, тобто вона обіцяє менше, ніж є, і це безпечно. Зворотний
-порядок обіцяв би записи, яких журнал не має, а це саме та брехня, проти якої весь
-файл і існує. Порвана позначка не обіцяє нічого, а не правдоподібне число: за це
-відповідає CRC, і тест перевіряє чотири способи її зіпсувати.
+The order here is the whole point: first fsync the journal, then the mark. A crash between them leaves
+the mark **behind** the journal, so it promises less than there is, and that is safe. The reverse
+order would promise records that the journal does not have, and that is exactly the lie the whole
+file exists against. A torn mark promises nothing rather than a plausible number: the CRC
+is responsible for that, and a test checks four ways of corrupting it.
 
-**Втрачене причинне ребро.** `reconstruct` міг знизити доказ лише для ребра, яке
-**присутнє** і не розв'язується; ребро, яке ніколи не створили, не давало жодного
-хопу, тож замикання лишалось `Full` і звітувало себе повним, що не відрізнити від
-запуску, який батька справді не мав.
+**The lost causal edge.** `reconstruct` could only lower the proof for an edge that is
+**present** and does not resolve; an edge that was never created yielded no
+hop at all, so the closure stayed `Full` and reported itself complete, which is indistinguishable from
+a run that really had no parent.
 
-Лічильник цього змінити не міг, бо лічильника немає в сховищі. **Запис є.** Складач
-пише `StoreEvent` із **власним** `run_id` того запуску, який втратив ребро, а оскільки
-`run_id` це один із п'яти доказових вимірів, той самий запит, який реконструкція вже
-робить, його знаходить: без нового поля, без нового індексу, без версії формату. Тож
-зниження тепер підпирається зчепленим і зафіксованим записом, а не числом у пам'яті,
-і це строго краще за поле, яке я збирався додати.
+A counter could not change this, because there is no counter in the store. **A record exists.** The assembler
+writes a `StoreEvent` with the **own** `run_id` of the run that lost the edge, and since
+`run_id` is one of the five proof dimensions, the very same query that reconstruction already
+makes finds it: no new field, no new index, no format version. So
+the downgrade is now backed by a chained and fixed record, not by a number in memory,
+and that is strictly better than the field I was going to add.
 
-`EventType::StoreEvent` документований як «gap, re-sign, recovery», а розпізнається
-зниження по `Verdict::Failed` і **не** по виду втрати: реконструкції не треба знати,
-чи зникло ребро, спан чи батч, лише що щось зникло. Загальний запис-аномалія живе у
-власному синтетичному `run_id`, тож не колізіонує.
+`EventType::StoreEvent` is documented as "gap, re-sign, recovery", and the downgrade is
+recognised by `Verdict::Failed` and **not** by the kind of loss: reconstruction does not need to know
+whether an edge, a span or a batch vanished, only that something vanished. A general anomaly record lives in
+its own synthetic `run_id`, so it does not collide.
 
-Мапа запусків, що втратили ребро, обмежена тим самим вікном, що й кореляція, з тієї ж
-причини: приймач працює місяцями. Але **загальна сума не обмежена**, бо викинути
-лічильник це не те саме, що викинути факт.
+The map of runs that lost an edge is bounded by the same window as correlation, for the same
+reason: the receiver runs for months. But the **grand total is not bounded**, because dropping a
+counter is not the same as dropping a fact.
 
-### Етапи 11 і 12 закриті, 13 почато (2026-07-31)
+### Stages 11 and 12 closed, 13 started (2026-07-31)
 
-**Етап 11 закритий.** Атомарна публікація працює в трьох хмарах: S3, GCS (той самий
-адаптер, чотири інші імені) і Azure (окремий підпис Shared Key). Плюс холодний ярус і
-ярусування з політикою та читанням крізь нього, де прочитаний із холодного сегмент
-**перезапечатується** і його маніфест звіряється з опублікованим.
+**Stage 11 closed.** Atomic publication works in three clouds: S3, GCS (the same
+adapter, four other names) and Azure (a separate Shared Key signature). Plus a cold tier and
+tiering with a policy and reading through it, where a segment read from cold is
+**re-sealed** and its manifest is checked against the published one.
 
-**Етап 12 закритий у частині правила**, яка і є критерієм: відповідь федерації повна
-тоді і тільки тоді, коли набір пірів засвідчений, кожен пір відповів, і кожна
-відповідь сама була повна. Забутий пір ламає доказ. Транспорт (gRPC із mTLS за
-рішенням A2) лишається.
+**Stage 12 closed in the part that is the rule**, which is the criterion: a federation answer is complete
+if and only if the set of peers is attested, every peer answered, and every
+answer was itself complete. A forgotten peer breaks the proof. The transport (gRPC with mTLS per
+decision A2) remains.
 
-**Етап 13 почато:** фазинг усіх парсерів у воротах, справжній kill-прогін
-(40 убивств, apfs, нуль втрачених підтверджених записів) і `VALIDATION.md`, де кожне
-число має команду й дату, а окремий розділ називає те, чого **ще не виміряно**:
-ext4/xfs, два бекенди вводу-виводу, живий бакет, роки симульованого часу, зовнішній
-аудит крипти.
+**Stage 13 started:** fuzzing of all parsers in the gates, a real kill run
+(40 kills, apfs, zero lost acknowledged records) and `VALIDATION.md`, where every
+number has a command and a date, and a separate section names what is **not yet measured**:
+ext4/xfs, two I/O backends, a live bucket, years of simulated time, an external
+audit of the crypto.
 
-### Публікація сегмента: успіх, про який ніхто не дізнався (2026-07-30)
+### Segment publication: a success that nobody learned about (2026-07-30)
 
-Це третій пункт критерію етапу 11: «симулятор із помилками умовного запису не
-створює розбіжності». Тепер він тест, а не намір.
+This is the third item of the stage 11 criterion: "a simulator with conditional-write errors does not
+create divergence". Now it is a test, not an intention.
 
-**Протокол це два записи.** Тіло сегмента за ключем, що містить його власний дайджест,
-потім маніфест умовним записом. Маніфест і є точка коміту: сегмент опублікований тоді
-і тільки тоді, коли є маніфест. Тіло без маніфеста невидиме, і його прибирає lifecycle
-rule; маніфест без тіла був би зобов'язанням до байтів, яких ніхто не прочитає. Порядок
-не смак. Thanos пише `meta.json` останнім, Iceberg міняє вказівник на метадані, Delta
-пише один запис у лог: усі троє зійшлись на цьому, бо це те, що об'єктне сховище
-взагалі може пообіцяти.
+**The protocol is two writes.** The segment body under a key that contains its own digest,
+then the manifest by conditional write. The manifest is the commit point: a segment is published if
+and only if the manifest exists. A body without a manifest is invisible, and a lifecycle
+rule cleans it up; a manifest without a body would be a commitment to bytes that nobody can read. The order
+is not a matter of taste. Thanos writes `meta.json` last, Iceberg swaps the pointer to the metadata, Delta
+writes a single entry in the log: all three converged on this, because it is what an object store
+can promise at all.
 
-**Збій, який формує код, це втрачене підтвердження.** Запис доїхав до сховища,
-відповідь до клієнта не доїхала. Клієнт повторює, і умовний запис відмовляє йому проти
-об'єкта, який записав не хтось, а він сам. Публікатор, який прочитає це як «мене
-випередили», зарепортує конфлікт із самим собою, а якщо ще й опублікує під іншим іменем,
-розріже один сегмент на два.
+**The failure that shapes the code is the lost acknowledgement.** The write reached the store,
+the response did not reach the client. The client retries, and the conditional write refuses it against
+an object that was written not by someone else but by itself. A publisher that reads this as "I was
+beaten to it" will report a conflict with itself, and if it also publishes under a different name,
+it will cut one segment into two.
 
-**Токен ідемпотентності це сам маніфест.** Kafka має producer id, Stripe idempotency
-key, Delta транзакційні ідентифікатори. Тут маніфест детермінована функція від того, що
-запечатано, тож на відмову ми **читаємо збережений маніфест і порівнюємо байти**: ті
-самі байти означають, що сегмент опублікований (нами або піром, який запечатав ті самі
-записи), інші байти означають, що двоє запечатали РІЗНІ записи під одним номером
-сегмента. Друге репортиться голосно і ніколи не «вирішується» тихо.
+**The idempotency token is the manifest itself.** Kafka has a producer id, Stripe an idempotency
+key, Delta transaction identifiers. Here the manifest is a deterministic function of what is
+sealed, so on a refusal we **read the stored manifest and compare the bytes**: the same
+bytes mean the segment is published (by us or by a peer that sealed the same
+records), different bytes mean two parties sealed DIFFERENT records under one segment
+number. The second is reported loudly and is never "resolved" silently.
 
-**Наслідок, який зламав мій тест і вартий запису:** при втраченому підтвердженні сегмент
-може бути опублікований так, що ЖОДЕН публікатор не почує `Committed`. Обидва коректно
-отримують «вже опубліковано», маніфест на місці. Мій тест вимагав, щоб хтось відзвітував
-`Committed`, і впав на seed 17. Тест був неправий, причому саме про ту поведінку, заради
-якої протокол існує.
+**A consequence that broke my test and is worth recording:** with a lost acknowledgement a segment
+can be published in such a way that NO publisher hears `Committed`. Both correctly
+get "already published", the manifest is in place. My test demanded that somebody report
+`Committed`, and failed on seed 17. The test was wrong, and about exactly the behaviour for
+which the protocol exists.
 
-**Модель збоїв** у формі, як `IoFaults` і `BusFaults`: `unavailable_ppm`,
-`lost_ack_ppm`, `read_error_ppm`, все через посіяний RNG, тож фейл це seed, який можна
-перезапустити. 200 посівів на кожну властивість: один публікатор сходиться; двоє, що
-згодні, обидва успішні; двоє, що не згодні, публікує рівно один.
+**The fault model** in the same form as `IoFaults` and `BusFaults`: `unavailable_ppm`,
+`lost_ack_ppm`, `read_error_ppm`, everything through a seeded RNG, so a failure is a seed that can be
+rerun. 200 seeds per property: a single publisher converges; two that
+agree both succeed; of two that disagree, exactly one publishes.
 
-**Мутації проти власного коду, знову корисні.** Чотири: не звіряти прочитаний маніфест,
-не писати тіло, прибрати дайджест із ключа тіла, ретраїти `Unsupported`. Три спіймані,
-**четверта ні**: `Unsupported` не покривав жоден тест, тобто сховище без умовного запису
-спалило б увесь бюджет спроб, перш ніж сказати єдину корисну річ. Дописаний тест із
-підрахунком викликів: рівно один, а не один на спробу.
+**Mutations against my own code, useful again.** Four: do not compare the read manifest,
+do not write the body, remove the digest from the body key, retry `Unsupported`. Three caught,
+**the fourth not**: no test covered `Unsupported`, meaning a store without conditional write
+would burn the whole attempt budget before saying the one useful thing. A test added with
+a call count: exactly one, not one per attempt.
 
-### S3: небезпечне сховище це те, яке каже «так» (2026-07-30)
+### S3: the dangerous store is the one that says "yes" (2026-07-30)
 
-Сегмент публікується атомарно умовним записом, і саме це прибирає координатора: ні
-etcd, ні Consul, ні сервісу блокувань. В S3 це `If-None-Match: *`.
+A segment is published atomically by a conditional write, and this is exactly what removes the coordinator: no
+etcd, no Consul, no lock service. In S3 this is `If-None-Match: *`.
 
-**Три факти з документації AWS, кожен окремим тестом:** `412` це програна гонка, а не
-збій (двоє вузлів запечатують той самий сегмент, і той, хто програв, читає чужі
-байти); `409 Conflict` буває, коли видалення встряє між перевіркою і записом, і AWS
-пише, що PutObject можна просто повторити; а у versioned-бакеті умовний запис
-**проходить, якщо поточна версія це delete marker**, тобто адміністратор, який видалив
-сегмент, знову відкриває його ім'я. Останнє і є причина, чому опублікований об'єкт
-читається **за версією**, а не за ключем.
+**Three facts from the AWS documentation, each as a separate test:** `412` is a lost race, not a
+failure (two nodes seal the same segment, and the one that lost reads someone else's
+bytes); `409 Conflict` happens when a deletion slips in between the check and the write, and AWS
+says PutObject can simply be retried; and in a versioned bucket a conditional write
+**succeeds if the current version is a delete marker**, meaning an administrator who deleted
+the segment opens its name again. The last one is the reason why a published object is
+read **by version**, not by key.
 
-**Найгірший збій тихіший за всі три.** Не кожне S3-сумісне сховище реалізує умовний
-запис, а те, що ігнорує заголовок, відповідає `200` і **перезаписує**. У відповіді
-немає жодного поля, яке відрізнить це від чесного першого запису. Два вузли
-опублікували б різні байти під одним іменем, і будь-який доказ на цьому сегменті
-залежав би від того, яку копію ти прочитав.
+**The worst failure is quieter than all three.** Not every S3-compatible store implements a conditional
+write, and one that ignores the header answers `200` and **overwrites**. The response
+has no field that would distinguish this from an honest first write. Two nodes would
+have published different bytes under one name, and any proof on that segment would
+depend on which copy you read.
 
-**Прецедент:** `object_store` у Rust має `S3ConditionalPut` як **оголошену властивість
-бекенда**, а не припущення, саме тому що бекенди різні. Копіюю це через `Conditional`
-і додаю крок, якого налаштування дати не може: `verify_conditional_writes`
-**вимірює** ендпоінт, пишучи той самий ключ двічі і вимагаючи, щоб другий запис
-відмовили. Health-check, який нічого не змінює, цей клас сховищ виявити не може, тому
-цей навмисно пише один маленький об'єкт.
+**Precedent:** `object_store` in Rust has `S3ConditionalPut` as a **declared property of the
+backend**, not an assumption, precisely because backends differ. I copy this through `Conditional`
+and add a step that a configuration setting cannot provide: `verify_conditional_writes`
+**measures** the endpoint by writing the same key twice and requiring the second write to be
+refused. A health check that changes nothing cannot detect this class of store, so
+this one deliberately writes one small object.
 
-**HTTP-клієнт винесений в окремий крейт `trailryx-http`**, бо TSP-клієнт умів тільки
-POST, один шлях і 200. Тепер він справді ОДИН на воркспейс, а строгість TSP лишилась
-у якорі. Клієнт **декодує chunked**, і це не ввічливість: S3 відповідає на
-`ListObjectsV2` саме chunked без `Content-Length`, тобто клієнт, який chunked не вміє,
-не може перелічити бакет взагалі.
+**The HTTP client is moved into a separate crate `trailryx-http`**, because the TSP client could only do
+POST, one path and 200. Now it really is ONE per workspace, and the strictness of TSP stayed
+in the anchor. The client **decodes chunked**, and this is not politeness: S3 answers
+`ListObjectsV2` precisely as chunked without `Content-Length`, so a client that cannot do chunked
+cannot list a bucket at all.
 
-**Мутаційна перевірка власних тестів.** Усі 28 тестів пройшли з першого разу, а це
-рівно той випадок, коли треба перевірити, чи вони кусаються. Вісім мутацій проти
-свого ж коду: не слати умову, малий hex в UriEncode, не сортувати query, зупинити
-листинг після першої сторінки, звітувати програну гонку як запис, викинути префікс
-`AWS4`, зіпсувати декод `&amp;`, забути CRLF у chunked. Сім спіймано. **Восьма, зняте
-сортування query, не спіймалась**, бо мій тест подавав пари вже у правильному порядку,
-тобто був коментарем, а не тестом. Переписаний на вхід, який не збігається ні з
-відповіддю, ні з порядком до кодування (ключ `{` кодується в `%7B`, а `%` сортується
-нижче за всі unreserved), і тепер ловить обидві мутації: і відсутнє сортування, і
-сортування ДО кодування.
+**Mutation check of my own tests.** All 28 tests passed on the first run, and this is
+exactly the case where one must check whether they bite. Eight mutations against
+my own code: do not send the condition, lowercase hex in UriEncode, do not sort the query, stop
+listing after the first page, report a lost race as a write, drop the prefix
+`AWS4`, break the `&amp;` decoding, forget CRLF in chunked. Seven were caught. **The eighth, the removed
+query sorting, was not caught**, because my test fed the pairs already in the right order,
+so it was a comment, not a test. Rewritten to an input that matches neither the
+response nor the pre-encoding order (the key `{` is encoded to `%7B`, and `%` sorts
+below all unreserved characters), and now it catches both mutations: both the missing sorting and
+sorting BEFORE encoding.
 
-**Ще не зроблено:** TLS (той самий шов, що в прийомі і pgwire: термінатор дає
-розгортання), multipart для великих сегментів, гаряче/холодне ярусування, GCS і Azure.
+**Not yet done:** TLS (the same seam as in ingestion and pgwire: the terminator is provided by the
+deployment), multipart for large segments, hot/cold tiering, GCS and Azure.
 
-### SigV4 своїми руками, перевірений CLI від AWS (2026-07-30)
+### SigV4 by hand, verified against the AWS CLI (2026-07-30)
 
-Юрій вибрав: один HTTP-клієнт плюс SigV4, а не три хмарні SDK. Обґрунтування тримається:
-**S3 API це HTTP плюс підпис**, а HTTP-клієнт у воркспейсі вже був (писав для RFC 3161),
-і обидві геш-функції теж. `aws-sdk-s3` притягнув би рантайм, HTTP-стек, TLS-стек і кілька
-сотень крейтів, щоб сказати те саме. `trailryx-s3` має **нуль сторонніх залежностей**, як
-усе поза SQL-фасадом.
+@decided 2026-07-30: one HTTP client plus SigV4 for the cloud calls, not three cloud SDKs. The reasoning holds:
+**the S3 API is HTTP plus a signature**, and the HTTP client was already in the workspace (written for RFC 3161),
+and both hash functions too. `aws-sdk-s3` would pull in a runtime, an HTTP stack, a TLS stack and a few
+hundred crates to say the same thing. `trailryx-s3` has **zero third-party dependencies**, like
+everything outside the SQL facade.
 
-**Але це виправдано тільки якщо підпис правильний.** Підпис, перевірений сам собою, це
-підпис, який у проді отримає `SignatureDoesNotMatch` без жодної підказки, яка зі стадій
-розійшлась. Тому перевірка делегована **CLI від AWS**: тести його запускають, витягають з
-debug-логу канонічний запит, string-to-sign і підпис, і вимагають **побайтового збігу** за
-тими самими входами. Плюс окремим тестом задокументований приклад самої AWS
-(`AKIDEXAMPLE`, IAM ListUsers, підпис `5d672d79...`).
+**But this is justified only if the signature is right.** A signature verified against itself is
+a signature that in production gets `SignatureDoesNotMatch` with no hint of which stage
+diverged. So verification is delegated to the **AWS CLI**: the tests run it, extract the canonical request,
+string-to-sign and signature from the debug log, and require a **byte-for-byte match** on
+the same inputs. Plus, a separate test covers the example documented by AWS itself
+(`AKIDEXAMPLE`, IAM ListUsers, signature `5d672d79...`).
 
-**Три правила, які кусаються, і в кожного свій тест:**
+**Three rules that bite, each with its own test:**
 
-- **`UriEncode` не платформенний.** AWS сама це пише в документації. Hex у верхньому
-  регістрі, пробіл це `%20` і ніколи `+`, слеш кодується в значенні запиту і лишається в
-  шляху.
-- **Рядок запиту сортується ПІСЛЯ кодування**, не до. `a+` кодується в `a%2B`, а `%`
-  сортується перед `b`: сортування спершу дає інший порядок.
-- **Ключ підпису починається з `"AWS4" + secret`**, а не з секрета.
+- **`UriEncode` is not the platform's.** AWS itself says so in the documentation. Hex in upper
+  case, a space is `%20` and never `+`, a slash is encoded in a query value and stays in the
+  path.
+- **The query string is sorted AFTER encoding**, not before. `a+` is encoded to `a%2B`, and `%`
+  sorts before `b`: sorting first gives a different order.
+- **The signing key starts with `"AWS4" + secret`**, not with the secret.
 
-**HMAC-SHA256** написаний із векторами RFC 4231, включно з випадком 6, де ключ довший за
-блок і має **гешуватись, а не обрізатись**, бо обрізання тихо робить різні ключі рівними.
+**HMAC-SHA256** is written with RFC 4231 vectors, including case 6, where the key is longer than the
+block and must be **hashed, not truncated**, because truncation silently makes different keys equal.
 
-**Дві мої помилки в тестах, обидві варті запису.** Перша: тест на випадок 7 RFC перевіряв
-**довжину** дайджеста замість значення, тобто проходив би для будь-якої реалізації;
-переписаний на справжній вектор. Друга: тест «секрет не друкується» шукав підрядок `tok` і
-знаходив його всередині **назви поля** `session_token`, тобто падав, поки код був правий.
+**Two mistakes of mine in the tests, both worth recording.** The first: the test for RFC case 7 checked the
+**length** of the digest instead of the value, so it would have passed for any implementation;
+rewritten to the real vector. The second: the test "the secret is not printed" looked for the substring `tok` and
+found it inside the **field name** `session_token`, so it failed while the code was right.
 
-І одна в оракулі: парсер логу різав блок на наступному рядку, що починається з `20`, а
-другий рядок string-to-sign це саме timestamp. Блок обривався після першого рядка, і
-оракул звітував розбіжність, якої не було. **Зламаний оракул гірший за відсутній**, тож це
-теж у комментарі.
+And one in the oracle: the log parser cut a block at the next line starting with `20`, and the
+second line of the string-to-sign is exactly the timestamp. The block was cut off after the first line, and the
+oracle reported a divergence that did not exist. **A broken oracle is worse than none**, so this is
+in a comment too.
 
-**Ще не зроблено:** самі операції S3 поверх підпису (PUT з `If-None-Match`, GET за
-versionId, LIST) і TLS. TLS тут той самий шов, що в прийомі й pgwire: його дає розгортання,
-а не ми, і термінатор перед маршрутизованим бindом.
+**Not yet done:** the S3 operations themselves on top of the signature (PUT with `If-None-Match`, GET by
+versionId, LIST) and TLS. TLS here is the same seam as in ingestion and pgwire: it is provided by the deployment,
+not by us, and the terminator sits in front of the routed bind.
 
-### WORM захищає версію, а не ключ (2026-07-30)
+### WORM protects the version, not the key (2026-07-30)
 
-Етап 11 почав із того ж принципу: подивитись, як воно насправді працює в тих, у кого
-воно працює. Найсильніше твердження в §6.3 звучить так: «навіть адміністратор із
-правами не зможе перезаписати сегмент». Перевірив проти документації S3 Object Lock, і
-воно правдиве **в одному режимі з двох і тільки якщо читач питає версію**.
+Stage 11 started from the same principle: look at how it actually works in those where
+it works. The strongest claim in §6.3 reads: "even an administrator with
+privileges cannot overwrite a segment". I checked it against the S3 Object Lock documentation, and
+it is true **in one mode of two and only if the reader asks for the version**.
 
-Документація каже прямо: retention і legal hold «**don't prevent new versions of the
-object from being created**, or delete markers to be added on top of the object».
+The documentation says it directly: retention and legal hold "**don't prevent new versions of the
+object from being created**, or delete markers to be added on top of the object".
 
-Тобто:
+That is:
 
-- **Object Lock захищає версію, а не ключ.** Актор із креденшелами завжди може покласти
-  нову версію поверх, і будь-який читач, який питає ключ, отримає його байти.
-- **Простий `DELETE` повертає `200 OK`**, ставить delete marker, і обʼєкт зникає зі
-  звичайного читання, поки замкнена версія лежить під ним, ціла й недосяжна для того,
-  хто не знає, що її треба просити.
-- **Два режими не взаємозамінні.** У **governance** користувач із
-  `s3:BypassGovernanceRetention` видаляє обʼєкт, і консоль AWS шле цей заголовок **за
-  замовчуванням**. Лише **compliance** відмовляє всім, включно з root, і там же:
-  «единственный способ видалити до закінчення терміну це видалити акаунт».
+- **Object Lock protects the version, not the key.** An actor with credentials can always put
+  a new version on top, and any reader who asks for the key gets its bytes.
+- **A plain `DELETE` returns `200 OK`**, puts a delete marker, and the object disappears from
+  ordinary reads while the locked version lies beneath it, intact and unreachable for
+  someone who does not know that it must be requested.
+- **The two modes are not interchangeable.** In **governance**, a user with
+  `s3:BypassGovernanceRetention` deletes the object, and the AWS console sends this header **by
+  default**. Only **compliance** refuses everyone, including root, and there too:
+  "the only way to delete before the retention period ends is to delete the account".
 
-Це не причіпка до документації. Це різниця між тим, чи Object Lock захищає щось, чи
-нікого: актор, проти якого він існує, це рівно той, у кого є креденшели.
+This is not nitpicking the documentation. It is the difference between Object Lock protecting something or
+no one: the actor it exists against is exactly the one who has credentials.
 
-**Що змінено в контракті.** `put_if_absent` віддає **те, як сховище назвало обʼєкт**, а
-`get_version` читає саме його, що б поверх не написали. Сховище без версіонування
-віддає `None` і **відмовляє** читання за версією, тобто розгортання дізнається, що цієї
-гарантії в нього нема, а не припускає її. «Ми ввімкнули Object Lock» це речення, яке
-потрапляє в комплаєнс-документ.
+**What changed in the contract.** `put_if_absent` returns **how the store named the object**, and
+`get_version` reads exactly that, whatever is written on top. A store without versioning
+returns `None` and **refuses** reads by version, so the deployment learns that it does not have this
+guarantee instead of assuming it. "We enabled Object Lock" is a sentence that
+ends up in a compliance document.
 
-**Атака проганяється, а не описується.** `VersioningObjectStore` моделює задокументовану
-поведінку S3, і тести показують: умовний запис відмовляє другому публікатору, а
-адміністратор усе одно кладе нову версію, звичайне читання віддає підробку, і
-опублікована версія читається за токеном. Плюс вісім підробок і delete marker поверх не
-дістають до неї.
+**The attack is run, not described.** `VersioningObjectStore` models the documented
+behavior of S3, and the tests show: the conditional write refuses the second publisher, while an
+administrator still puts a new version, an ordinary read returns the forgery, and the
+published version is read by token. Plus eight forgeries and a delete marker on top do not
+reach it.
 
-Конформанс-набір тепер вимагає: сховище, яке видало токен версії, мусить його **вміти
-виконати**. Видати токен і не змогти прочитати за ним гірше, ніж не видавати зовсім.
+The conformance suite now requires: a store that issued a version token must be **able to
+honor it**. Issuing a token and being unable to read by it is worse than not issuing one at all.
 
-**Ще не зроблено на етапі 11:** самі адаптери S3/GCS/Azure (це SDK, тобто ще залежності,
-і це окреме рішення), та рівнева міграція гарячого й холодного.
+**Not yet done in stage 11:** the S3/GCS/Azure adapters themselves (these are SDKs, meaning more dependencies,
+and that is a separate decision), and the tiered hot and cold migration.
 
-### `journal()`: подивився, як це вирішили в Postgres, і зробив так само (2026-07-30)
+### `journal()`: looked at how Postgres solved it, and did the same (2026-07-30)
 
-Питання було справжнє: §3.3 хоче сиру правду повз проєкції, §3.2a каже, що фасад
-ніколи не лізе в живий журнал. Юрій сказав правильну річ: подивитись, як це працює в
-тих, у кого воно працює, і цікаві лише успішні приклади.
+The question was real: §3.3 wants the raw truth bypassing projections, §3.2a says the facade never touches the live journal.
+@decided 2026-07-30: look at how this works in systems where it already works, and only successful
+examples are of interest.
 
-**PostgreSQL зіткнувся рівно з цим і випустив `pg_walinspect` у версії 15**: віддати WAL
-через SQL, не пускаючи виконавця запитів на шлях запису. Чотири його рішення
-переносяться сюди повністю, тож усі чотири скопійовані, а не виведені заново:
+**PostgreSQL ran into exactly this and shipped `pg_walinspect` in version 15**: expose the WAL
+through SQL without letting the query executor onto the write path. Its four decisions
+transfer here completely, so all four are copied, not derived anew:
 
-| `pg_walinspect` | тут | чому |
+| `pg_walinspect` | here | why |
 |---|---|---|
-| table-функція з діапазоном | `journal(from_seq, to_seq)` | немає `SELECT * FROM wal`, бо клієнт, який може попросити весь лог, може попросити сервер його весь прочитати |
-| помилка, коли початок недоступний | помилка, коли sequence у жодному **запечатаному** сегменті | тиха порожня відповідь невідрізненна від «цей діапазон порожній», а для форензики це різні речі |
-| поблажлива до верхньої межі | так само | інакше «усе від сюди» стає рухомою ціллю |
-| **інший привілей**, ніж звичайний SQL | `Action::ReadMetadata`, не `Action::Query` | читання повз докази це **сильніший** дозвіл, ніж запит, попри те, як читаються назви |
+| table function with a range | `journal(from_seq, to_seq)` | there is no `SELECT * FROM wal`, because a client that can ask for the whole log can ask the server to read all of it |
+| error when the start is unavailable | error when the sequence is in no **sealed** segment | a silent empty response is indistinguishable from "this range is empty", and for forensics these are different things |
+| lenient about the upper bound | the same | otherwise "everything from here on" becomes a moving target |
+| **a different privilege** than ordinary SQL | `Action::ReadMetadata`, not `Action::Query` | reading around the proofs is a **stronger** permission than a query, despite how the names read |
 
-**Четверте я б зробив неправильно.** Сесія без гранту не отримує функцію
-**зареєстрованою взагалі**, тобто не має її, а не отримує відмову, коли потягнеться.
-Каталог, який сесія бачить, це те, чим їй можна користуватись.
+**The fourth one I would have done wrong.** A session without a grant does not get the function
+**registered at all**, meaning it does not have it, rather than getting a refusal when it reaches for it.
+The catalog a session sees is what it may use.
 
-Плюс: `Action::ReadMetadata` і `Action::Query` тепер мають доккоментарі, які кажуть, що
-перше сильніше за друге. Без цього наступний читач словника вирішив би навпаки.
+Plus: `Action::ReadMetadata` and `Action::Query` now have doc comments that say that the
+former is stronger than the latter. Without this the next reader of the vocabulary would decide the opposite.
 
-І відповідь `journal()` **не несе доказу і каже це**, а не звітує найсильніше значення
-для скану, який навмисно обійшов те, що доводить.
+And the `journal()` response **carries no proof and says so**, rather than reporting the strongest value
+for a scan that deliberately bypassed what proves.
 
-**Одна справжня дірка знайшлась тестом:** доказ відповіді table-функції нікуди не
-потрапляв, бо `last_proof()` читав лише головну таблицю. Тепер **один слот на сесію**, у
-який пише будь-яка таблиця, що відповіла: питання «наскільки доказова була остання
-відповідь» не має залежати від того, яка саме таблиця відповіла.
+**One real gap was found by a test:** the proof of a table function's response went nowhere,
+because `last_proof()` read only the main table. Now there is **one slot per session**, into
+which any table that answered writes: the question of "how provable was the last
+response" must not depend on which table answered.
 
-**Етап 10 закритий повністю.**
+**Stage 10 closed completely.**
 
-### Розширення діалекту, і свідоме відхилення від синтаксису (2026-07-30)
+### Dialect extensions, and a deliberate deviation from the syntax (2026-07-30)
 
-§3.3 показує три розширення. **Третє парситься парсером рушія, перші два ні**, і це
-перевірено, а не припущено: `AS OF TIMESTAMP` і хвостовий `WITH PROOF` `DFParser`
-відкидає. У `sqlparser` є форма `FOR SYSTEM_TIME AS OF`, і діалект DataFusion її не
-вмикає.
+§3.3 shows three extensions. **The third is parsed by the engine's parser, the first two are not**, and this is
+verified, not assumed: `DFParser` rejects `AS OF TIMESTAMP` and the trailing `WITH PROOF`.
+`sqlparser` has the form `FOR SYSTEM_TIME AS OF`, and the DataFusion dialect does not
+enable it.
 
-Отримати ілюстрований синтаксис точно можна було б двома способами, і обидва я
-відмовив:
+The illustrated syntax could be obtained exactly in two ways, and I rejected both
+of them:
 
-- **Форкнути або обгорнути парсер.** Тоді два парсери читають один рядок і можуть
-  розійтись у тому, де закінчується клауза, а це рівно той клас дефекту, для усунення
-  якого зроблений `gate`. Повернути його назад через один модуль було б непослідовно.
-- **Препроцесити текст.** Гірше: рядковий літерал, що містить `WITH PROOF`, спотвориться,
-  і гейт оглядатиме statement, який не є тим, що виконається.
+- **Fork or wrap the parser.** Then two parsers read one string and may
+  diverge on where a clause ends, and this is exactly the class of defect that the `gate` was built to
+  eliminate. Bringing it back in through one module would be inconsistent.
+- **Preprocess the text.** Worse: a string literal containing `WITH PROOF` would be distorted,
+  and the gate would examine a statement that is not what will be executed.
 
-Тому всі три це table-функції, які парсер рушія приймає як є:
-`records_as_of('...')`, `causal_closure('4471')`, `trailryx_proof()`. **Спроможність та
-сама, написання інше**, і це рішення варте запису, а не синтаксис, який тихо не
-зробили. Якщо написання колись важитиме більше за кількість парсерів, шлях до нього
-через `sqlparser` вгору за течією, а не через друге читання рядка тут.
+So all three are table functions that the engine's parser accepts as is:
+`records_as_of('...')`, `causal_closure('4471')`, `trailryx_proof()`. **The capability is the
+same, the spelling is different**, and this decision is worth recording, rather than a syntax that was quietly
+not done. If the spelling ever outweighs the number of parsers, the path to it goes
+through `sqlparser` upstream, not through a second reading of the string here.
 
-**Дві речі, де я не дав слабшій відповіді пройти:**
+**Two things where I did not let a weaker answer through:**
 
-`records_as_of` це **час транзакції**, тобто що сховище **встигло записати** до того
-моменту, а не що було правдою тоді. Подорож у часі валідності потребувала б шару
-фактів, які заміщують одне одного, а це сховище тримає події. Назва і комментар кажуть,
-котре з двох на столі, бо дізнатись про різницю від аудитора це найгірший момент.
+`records_as_of` is **transaction time**, meaning what the store **had managed to write** by that
+moment, not what was true then. Valid-time travel would need a layer of
+facts that supersede one another, and this store holds events. The name and the comment say
+which of the two is on the table, because learning about the difference from an auditor is the worst moment.
 
-`trailryx_proof()` до першої відповіді каже **«none», а не «full»**. Сесія, яка нічого
-не довела, не має права звітувати найсильніше значення за відсутність відповіді.
+`trailryx_proof()` before the first response says **"none", not "full"**. A session that has proven nothing
+has no right to report the strongest value in place of an absent response.
 
-Інстант приймається у двох формах, які не можна прочитати двояко: наносекунди від
-епохи, або `YYYY-MM-DDTHH:MM:SSZ`. Локальний час без зони **відмовляється**, а не
-припускається UTC, з тієї ж причини, що і в читачі міток верифікатора.
+An instant is accepted in two forms that cannot be read two ways: nanoseconds since the
+epoch, or `YYYY-MM-DDTHH:MM:SSZ`. Local time without a zone is **refused** rather than
+assumed to be UTC, for the same reason as in the verifier's label reader.
 
-`causal_closure` віддає вердикт самої реконструкції, а не виводить його заново: другий
-обхід міг би розійтись із першим, а перший це той, про який тести сховища.
+`causal_closure` returns the verdict of the reconstruction itself and does not derive it anew: a second
+traversal could diverge from the first, and the first is the one the store's tests are about.
 
-**Етап 10 закритий**, окрім `journal` як таблиці сирої правди, яка за §3.3 читає повз
-проєкції, тобто за §3.2a фасаду туди не можна взагалі.
+**Stage 10 closed**, except `journal` as a table of raw truth, which per §3.3 reads around the
+projections, meaning per §3.2a the facade cannot go there at all.
 
-### pgwire: клієнт підключається, і два дефолти довелось відмовити (2026-07-30)
+### pgwire: a client connects, and two defaults had to be refused (2026-07-30)
 
-Критерій виходу етапу 10 сказано так: «Grafana підключається як до Postgres». Grafana
-в тест не поставити, тож замінник це `tokio-postgres`, той самий драйвер і той самий
-протокол. Підключається, автентифікується, читає, і відмову отримує **на обох
-протоколах**, простому й підготовлених statement-ів.
+The exit criterion of stage 10 reads: "Grafana connects the way it does to Postgres". Grafana
+cannot be put into a test, so the substitute is `tokio-postgres`, the same driver and the same
+protocol. It connects, authenticates, reads, and gets a refusal **on both
+protocols**, simple and prepared statements.
 
-**`datafusion_postgres::serve` не використовується**, і обидві причини зміряні проти
-бібліотеки, а не припущені:
+**`datafusion_postgres::serve` is not used**, and both reasons are measured against the
+library, not assumed:
 
-1. **Він не автентифікує нічого.** `HandlerFactory::new` ставить
-   `SimpleStartupHandler`, чий власний комментар каже «does no authentication», а
-   `AuthManager::new` заводить суперюзера `postgres` з **порожнім паролем**,
-   `can_login: true` і `Permission::All`. Хто дістався порту, той увійшов, як
-   суперюзер.
-2. **Він передає довільний SQL**, тобто читання довільного файлу.
+1. **It authenticates nothing.** `HandlerFactory::new` installs
+   `SimpleStartupHandler`, whose own comment says "does no authentication", and
+   `AuthManager::new` creates the superuser `postgres` with an **empty password**,
+   `can_login: true` and `Permission::All`. Whoever reached the port is in as
+   a superuser.
+2. **It passes arbitrary SQL**, meaning reading an arbitrary file.
 
-Це не докір бібліотеці: універсальний адаптер, який ухвалив би ці рішення за тебе,
-був би гіршим. Це рішення, які сховище, що віддає аудиторський слід, ухвалює саме.
+This is not a reproach to the library: a universal adapter that made these decisions for you
+would be worse. These are decisions that a store that serves an audit trail makes itself.
 
-**Тому startup handler наш**, і він питає `AuthProvider` розгортання, називаючи
-**`Action::Query`** прямо: контракт розділяє `ReadMetadata`, `ReadPayload` і `Query`, бо
-це різні дозволи, і **дозвіл писати записи це не дозвіл їх читати** (є окремий тест на
-провайдері, який дозволяє лише `Ingest`). Loopback за замовчуванням, маршрутизований
-bind без провайдера **не стартує до відкриття сокета**, а отруєний mutex відмовляє
-назавжди, а не падає навстіж.
+**So the startup handler is ours**, and it asks the deployment's `AuthProvider`, naming
+**`Action::Query`** directly: the contract separates `ReadMetadata`, `ReadPayload` and `Query`, because
+these are different permissions, and **permission to write records is not permission to read them** (there is a separate test on a
+provider that allows only `Ingest`). Loopback by default, a routed
+bind without a provider **does not start before the socket is opened**, and a poisoned mutex refuses
+forever rather than failing open.
 
-**Модель креденшела своя, і вона сильніша за pgwire-ову.** `AuthSource` у pgwire питає
-сервер, який пароль **очікується**, тобто сервер мусить його тримати. Наш
-`AuthProvider::authenticate` бере креденшел і віддає principal, тобто сервер секрета не
-тримає й не вирішує, хто це. Тому `StartupHandler` реалізований напряму, а не через
-їхній `AuthSource`. Ім'я користувача, яке надсилає клієнт, записується і **нікому не
-довіряється**: principal приходить від провайдера, інакше клієнт сам вибирав би, хто він.
+**The credential model is ours, and it is stronger than pgwire's.** pgwire's `AuthSource` asks the
+server which password is **expected**, so the server must hold it. Our
+`AuthProvider::authenticate` takes a credential and returns a principal, so the server does not
+hold the secret and does not decide who this is. So `StartupHandler` is implemented directly, not through
+their `AuthSource`. The user name the client sends is recorded and **trusted by
+no one**: the principal comes from the provider, otherwise the client would choose who it is.
 
-**Дві речі про написання цього handler-а варті передачі**, бо симптом при пропуску
-будь-якої однаковий і не каже нічого: **кожен клієнт бачить «connection closed»**.
-Потрібен `protocol_negotiation`, і потрібен
-`set_state(PgWireConnectionState::AuthenticationInProgress)`, без якого pgwire взагалі
-не маршрутизує повідомлення з паролем у handler. Дізнався, пропустивши обидва.
+**Two things about writing this handler are worth passing on**, because the symptom of skipping
+either is the same and says nothing: **every client sees "connection closed"**.
+`protocol_negotiation` is needed, and
+`set_state(PgWireConnectionState::AuthenticationInProgress)` is needed, without which pgwire does not
+route password messages to the handler at all. I found out by skipping both.
 
-**Конвертацію Arrow у pg-рядки не писав.** `DfSessionService` це вміє через `arrow-pg`,
-а 42 колонки з чотирма списками це багато кодування, щоб зробити його тонко
-неправильно, і їхня версія прогнана більшою кількістю клієнтів, ніж була б наша. Наше
-тут те, **що дозволено запускати**, і саме в цьому нам треба бути правими.
+**I did not write the Arrow-to-pg-rows conversion.** `DfSessionService` does it via `arrow-pg`,
+and 42 columns with four lists is a lot of encoding to get subtly
+wrong, and their version has been run by more clients than ours would be. Ours
+here is **what is allowed to run**, and that is where we need to be right.
 
-**Гейт стоїть хуком на всіх трьох фазах**, включно з parse: інакше клієнт підготував би
-statement зараз і виконав пізніше, минаючи гейт, який дивився лише на виконання. І
-`Session` сам будує pg-сервіс із гейтом усередині, а контекст так і не віддає, тож
-забути гейт неможливо.
+**The gate is installed as a hook on all three phases**, including parse: otherwise a client would prepare a
+statement now and execute it later, bypassing a gate that looked only at execution. And
+`Session` itself builds the pg service with the gate inside, and never hands out the context, so
+forgetting the gate is impossible.
 
-Залежностей стало **297** транзитивних (було 243). 895 тестів.
+Dependencies are now **297** transitive (were 243). 895 tests.
 
-**Лишилось на етапі 10:** `AS OF TIMESTAMP`, `WITH PROOF` і `causal_closure()` у самому
-діалекті. Семантика всіх трьох у ядрі вже є (`Query::as_of`, `ProofStatus`,
-`causal.rs`), тобто це робота з розбором діалекту, а не з новими гарантіями.
+**Left in stage 10:** `AS OF TIMESTAMP`, `WITH PROOF` and `causal_closure()` in the dialect itself.
+The semantics of all three already exist in the core (`Query::as_of`, `ProofStatus`,
+`causal.rs`), so this is dialect parsing work, not new guarantees.
 
-### Порт Postgres із довільним SQL це читання довільного файлу (2026-07-30)
+### A Postgres port with arbitrary SQL is reading an arbitrary file (2026-07-30)
 
-Перед тим як дротувати мережу, перевірив одну річ, і вона виявилась найважливішою за
-все дротування. Звичайний `SessionContext` DataFusion приймає це, планує, виконує і
-віддає файл:
+Before wiring up the network, I checked one thing, and it turned out to be the most important of
+all the wiring. A plain DataFusion `SessionContext` accepts this, plans it, executes it and
+returns the file:
 
 ```sql
 CREATE EXTERNAL TABLE leak (a INT, b VARCHAR) STORED AS CSV LOCATION '/etc/passwd';
 SELECT * FROM leak;
 ```
 
-Тобто фасад, який передає довільний SQL у сесію, це **читання довільного локального
-файлу на хості сховища**. І хто зробив би за архітектурним дротуванням, не подумавши
-про види statement-ів, відвантажив би саме це. Для сховища, чия вся цінність у тому,
-що йому вірить той, хто не довіряє оператору, це гірше за будь-що з боку запису:
-прийом може лише додати запис, а це виносить усе інше з машини.
+So a facade that passes arbitrary SQL into the session is a **read of an arbitrary local
+file on the store's host**. And whoever wired it up following the architecture, without thinking
+about statement kinds, would have shipped exactly this. For a store whose whole value is
+that it is believed by someone who does not trust the operator, this is worse than anything on the write side:
+ingestion can only add a record, while this carries everything else off the machine.
 
-**Зміряно виконанням, не міркуванням.** Тест на це стоїть першим у `gate.rs`.
+**Measured by execution, not by reasoning.** The test for this comes first in `gate.rs`.
 
-**Гейт вирішує на розібраному statement-і**, парсером самого рушія. Порівняння
-префіксів рядка ламається комментарем, пробілами, регістром і точкою з комою. А два
-парсери, які розходяться в тому, де закінчується statement, це той самий клас
-дефекту, що request smuggling, і використання парсера рушія його прибирає. Два
-statement-и в одному запиті **відмовляються, а не розділяються**: гейт, який перевіряє
-перший і виконує решту, це форма кожної SQL-інʼєкції, яку писали.
+**The gate decides on the parsed statement**, by the engine's own parser. Comparing
+string prefixes is broken by a comment, whitespace, case and a semicolon. And two
+parsers that diverge on where a statement ends are the same class of
+defect as request smuggling, and using the engine's parser removes it. Two
+statements in one request are **refused, not split**: a gate that checks the
+first and executes the rest is the form of every SQL injection ever written.
 
-Це **allowlist**: запити, `EXPLAIN`, і та сесійна балаканина, яку кожен клієнт
-надсилає при підключенні (`SET client_encoding`, `SHOW`, `BEGIN`). Denylist був би
-списком, який хтось мусить тримати повним, поки `sqlparser` росте, а оновленням був би
-чийсь спогад.
+This is an **allowlist**: queries, `EXPLAIN`, and the session chatter that every client
+sends on connecting (`SET client_encoding`, `SHOW`, `BEGIN`). A denylist would be
+a list that someone must keep complete while `sqlparser` grows, and the update would be
+someone's memory.
 
-**І гейт неможливо забути.** `Session` володіє контекстом, **не віддає його** і гейтить
-до того, як рушія спитали. Автор сервера, який потягнувся б до `SessionContext::sql`,
-відтворив би дірку без жодного попередження, тож цих дверей просто немає.
+**And the gate cannot be forgotten.** `Session` owns the context, **does not hand it out** and gates
+before the engine is asked. A server author who reached for `SessionContext::sql`
+would recreate the gap without any warning, so this door simply does not exist.
 
-**Ще не зроблено:** сам pgwire-сервер. `datafusion-postgres 0.18` має `QueryHook` і
-`serve_with_hooks`, тобто гейт туди встає, але лишається питання, яке я не буду
-вирішувати наспіх: **автентифікація читання**. Контракт має `Action::Query`,
-`ReadMetadata` і `ReadPayload`, і порт, який віддає аудиторський слід, мусить їх
-питати. Доктрина та сама, що на прийомі: loopback за замовчуванням, а маршрутизований
-bind без провайдера не стартує.
+**Not done yet:** the pgwire server itself. `datafusion-postgres 0.18` has `QueryHook` and
+`serve_with_hooks`, so the gate plugs in there, but a question remains that I will not
+settle in a hurry: **read authentication**. The contract has `Action::Query`,
+`ReadMetadata` and `ReadPayload`, and a port that serves the audit trail must
+ask for them. The doctrine is the same as on ingestion: loopback by default, and a routed
+bind without a provider does not start.
 
-### `TableProvider`: SQL, який або доводить, або каже, що ні (2026-07-30)
+### `TableProvider`: SQL that either proves or says it cannot (2026-07-30)
 
-§3.2 реалізований: предикат по одному з пʼятьох доказових вимірів стає сортованим
-виміром діапазону автентифікованого індексу, і відповідь несе доказ повноти. Решта
-застосовується (тобто рядки правильні), але відповідь позначається `partial`, **і
-кожен непроведений предикат називається**.
+§3.2 is implemented: a predicate on one of the five provable dimensions becomes a sorted
+range dimension of the authenticated index, and the answer carries a completeness proof. The rest
+is applied (that is, the rows are correct), but the answer is marked `partial`, **and
+every predicate that was not pushed down is named**.
 
-Дев'ять тестів через справжній DataFusion, і два з них знайшли те, що було б тихою
-брехнею.
+Nine tests through real DataFusion, and two of them found what would have been a silent
+lie.
 
-**Перше, і воно серйозне: фасад не має права відповідати `Unsupported`.** DataFusion
-не передає непідтримуваний фільтр у `scan` узагалі, тож фасад **не дізнається, що
-предикат існував**, не знаходить нічого непроведеного і звітує **повний доказ для
-запиту, який бачив лише частково**. `severity = 'error'` повертався позначеним як
-повністю доказовий, доки тест не спитав. Тепер усе, чого не можемо довести точно, це
-`Inexact`: рушій перевіряє повторно, що коштує одне зайве порівняння і купує
-можливість казати правду.
+**First, and it is serious: the facade has no right to answer `Unsupported`.** DataFusion
+does not pass an unsupported filter to `scan` at all, so the facade **does not learn that the
+predicate existed**, finds nothing unproven and reports **a full proof for a
+query it saw only in part**. `severity = 'error'` was returned marked as
+fully provable until a test asked. Now everything we cannot prove exactly is
+`Inexact`: the engine re-checks, which costs one extra comparison and buys
+the ability to tell the truth.
 
-**Друге: дві межі на тій самій колонці це один діапазон, а не два суперники.**
-DataFusion переписує `BETWEEN` у `>= AND <=`, і читання другої межі як конкурентного
-виміру робило найзвичайніший часовий запит `partial`. А `partial`, який спрацьовує на
-звичайних запитах, вчить читача, що partial не означає нічого конкретного, і це гірше
-за відсутність доказу.
+**Second: two bounds on the same column are one range, not two competitors.**
+DataFusion rewrites `BETWEEN` into `>= AND <=`, and reading the second bound as a competing
+dimension made the most ordinary time query `partial`. And a `partial` that fires on
+ordinary queries teaches the reader that partial does not mean anything specific, and that is worse
+than having no proof.
 
-**Третє, менше: тест на `INSERT` перевіряв не ту властивість.** Він вимагав, щоб
-планувальник відмовив, а DataFusion спокійно планує і падає на **виконанні**, з
-дефолтного `insert_into` самого трейта. Планування це не межа. Тест тепер вимагає, щоб
-**жодний запис не завершився**, і перевіряє це на чотирьох statement-ах плюс кількості
-рядків після.
+**Third, smaller: the `INSERT` test checked the wrong property.** It required the
+planner to refuse, but DataFusion plans happily and fails at **execution**, from the
+trait's own default `insert_into`. Planning is not the boundary. The test now requires that
+**no write completes**, and checks this on four statements plus the row count
+afterwards.
 
-**Похідна ключа лишилась в одному місці.** Фасаду треба зробити ключ індексу з
-SQL-літерала, і `event_code` був приватним у `trailryx-index`. Дублювати його було б
-помилкою класу «похідна, написана двічі, розійдеться»: ключ, що відрізняється на байт,
-дає діапазон, який промине записи, які індекс тримає, а доказ повноти скаже, що
-відповідь ціла. Тому в індексі зʼявились `Dimension::key_from_text` і `key_from_i64`, і
-фасад **не кодує нічого сам**. Тест поруч із похідною вимагає, щоб ключ із літерала
-байт-у-байт дорівнював ключу із запису.
+**The key derivation stayed in one place.** The facade has to build an index key from an
+SQL literal, and `event_code` was private in `trailryx-index`. Duplicating it would have been
+a mistake of the class "a derivation written twice will diverge": a key that differs by a byte
+gives a range that misses records the index holds, while the completeness proof will say that
+the answer is whole. So `Dimension::key_from_text` and `key_from_i64` appeared in the index, and the
+facade **encodes nothing itself**. The test next to the derivation requires that the key from a literal
+equal the key from a record byte for byte.
 
-**Chain-link беремо з сегмента, не вигадуємо.** `Answer` несе записи й не несе ланок, а
-колонка `chain_link` це те, що робить рядок перевірним. Пари запис-ланка беруться з
-самого сегмента й відбираються за `seq`, який унікальний у межах сегмента.
+**We take the chain link from the segment, we do not invent it.** `Answer` carries records and carries no links, and the
+`chain_link` column is what makes a row verifiable. Record-link pairs are taken from
+the segment itself and selected by `seq`, which is unique within a segment.
 
-**Одна помилка Arrow, варта запису:** `ListBuilder` за замовчуванням робить поле `item`
-nullable, а схема оголошувала `element` non-nullable, і Arrow порівнює типи включно з
-іменем і nullability елемента. Девʼять тестів упали з одним повідомленням. Поле тепер
-виводиться з одної функції, тож схема й білдер не можуть розійтись.
+**One Arrow mistake worth recording:** `ListBuilder` by default makes the `item` field
+nullable, while the schema declared `element` non-nullable, and Arrow compares types including
+the element's name and nullability. Nine tests failed with one message. The field is now
+derived from a single function, so the schema and the builder cannot diverge.
 
-**Чого ще нема на етапі 10:** pgwire (тобто підключення Grafana), `AS OF TIMESTAMP`,
-`WITH PROOF` у самому діалекті, `causal_closure()`. Доказ поки читається через
-`RecordTable::last_proof()`, і це заглушка, яка про себе так і каже: конкурентний
-другий запит її перезапише.
+**What is not yet in stage 10:** pgwire (that is, connecting Grafana), `AS OF TIMESTAMP`,
+`WITH PROOF` in the dialect itself, `causal_closure()`. The proof is for now read through
+`RecordTable::last_proof()`, and this is a stub that says so about itself: a concurrent
+second query will overwrite it.
 
-### Залежності взяті, межа зроблена перевіркою (2026-07-30)
+### Dependencies taken, the boundary enforced by a check (2026-07-30)
 
-Юрій вирішив: беремо те, що треба, головне щоб база працювала, не мала багів і не
-вилітала, а відсутність залежностей це третє чи четверте питання.
+@decided 2026-07-30: take the dependencies that are needed; the main thing is that the database works, has no bugs and does not
+crash, while the absence of dependencies is a third or fourth concern.
 
-**Заміряна ціна, а не оцінена:**
+**Measured cost, not estimated:**
 
-| | до | після |
+| | before | after |
 |---|---|---|
-| сторонніх крейтів у дереві фасада | 0 | **243** |
-| чиста збірка фасада | - | **2:19** |
-| гейт на теплому кеші | ~40 с | **1:28** |
-| сторонніх крейтів у верифікаторі | 0 | **0** |
+| third-party crates in the facade tree (2026-07-30) | 0 | **243** |
+| clean facade build | - | **2:19** |
+| gate on a warm cache | ~40 s | **1:28** |
+| third-party crates in the verifier | 0 | **0** |
 
-**Що зроблено, перш ніж писати рушій.** Стара перевірка «zero third-party deps
-workspace-wide» перестала бути правдою, і замінена на **дві**, кожна з яких вартує
-більше за одну стару:
+**What was done before writing the engine.** The old check "zero third-party deps
+workspace-wide" stopped being true, and was replaced by **two**, each of which is worth
+more than the single old one:
 
-1. `zero deps outside the facade`: кожен крейт, крім `trailryx-sql`, має нуль.
+1. `zero deps outside the facade`: every crate except `trailryx-sql` has zero.
 2. `core builds without the facade`: `cargo test --workspace --exclude trailryx-sql`.
-   §3.2a просить цей тест на імʼя: якщо ядро не збирається й не проходить тести без
-   фасада, значить фасад проліз у фундамент.
-
-Друга перевірка це не гігієна, а **захист коректності**. Ядро це детермінований
-автомат на шард, і саме з цього живе DST (§1a, названий найважливішим розділом
-архітектури). DataFusion тягне tokio зі своїм пулом і своїм плануванням; змішати їх в
-одному просторі задач означає втратити детермінізм, а з ним і спосіб знаходити
-рідкісні баги. Тобто межа боронить рівно те, що Юрій назвав головним.
-
-Комментар у хуку («from stage 10 it stops being trivial, because DataFusion and pgwire
-arrive as a facade») передбачив цей день і тепер переписаний у минулий час.
-
-**Твердження переформульовані, а не залишені.** Бейдж `deps-0` став
-`deps-0 in the core`; таблиця порівняння з лідерами тепер каже «zero third-party
-dependencies **in the verifier**», бо це те, що лишилось правдою і те, що несло
-аргумент; у README число 243 стоїть відкрито поруч із «верифікатор має нуль», а в
-SECURITY.md зʼявився пункт, що уразливість у крейті фасада це справжній репорт, але
-репорт **про фасад**, а репорт про те, що залежність фасада дістає ядро, серйозніший.
-
-**`pushdown.rs`: §3.2, і він не знає про DataFusion.** Класифікація предикатів це та
-частина, що вирішує доказовість відповіді, тож вона тестується без async-рантайму, без
-сесії й без планувальника, і переживе зміну API рушія. Три місця, де предикат може
-виконатись: сортований вимір автентифікованого індексу (доказ повноти), наш власний
-фільтр (коштує доказ), рушій над нами (коштує доказ, і ми навіть не бачимо, що він
-відкинув). Кожен непроведений предикат **називається** у відповіді.
-
-Одне рішення варте окремо: серед кількох кандидатів вибирається **рівність перед
-діапазоном**, а не перший поданий. Інакше доказовість відповіді залежала б від
-порядку, в якому хтось набрав `WHERE`.
-
-**Ще не зроблено:** сам `TableProvider` над DataFusion, pgwire, `AS OF TIMESTAMP`,
-`WITH PROOF`, `causal_closure()`. Тобто зроблена межа й доказова частина, а не рушій.
-
-### Другий верифікатор, і дрейф README проти архітектури (2026-07-30)
-
-Юрій сказав звірятися з архітектурою Fable постійно і робити в межах системного
-дизайну. Перше, що це дало: **знайшов дрейф, і він мій**.
-
-README казав «the provable query language that **replaces** the SQL facade». В
-архітектурі й плані такої фрази **нема жодного разу**, і сказано протилежне: §3.1,
-SQL через Postgres wire **і є** першокласний інтерфейс, бо виграє сумісність, а не
-швидкість; §3.2, доказовість дає не інша мова, а `supports_filters_pushdown`, який
-штовхає предикати по доказових вимірах **у автентифікований індекс**, і відповідь або
-несе доказ повноти, або позначається `proof: partial` з переліком того, що не лягло.
-Я вніс це формулювання ще комітом `fb9c448` і повторив у CONTRIBUTING цієї сесії.
-Виправлено на те, що каже архітектура, плюс рядок: архітектура має пріоритет над
-будь-яким переказом, і речення, яке їй суперечить, це дефект речення.
-
-**Друге: етап 10 за архітектурою неможливо зробити без сторонніх залежностей**, і це
-рішення я не приймаю сам. Деталі окремо нижче.
-
-**Що зроблено з етапу 10 без жодної залежності:** пункт, який план просить прямо, Р6.
-
-`verifier-py/trailryx_verify.py`, лише стандартна бібліотека, жодного спільного коду
-з Rust. Перераховує самостійно все, з чого складається формат: SHA-384, RFC 6962
-корені з правильною точкою розбиття, крок ланцюга з доменним префіксом, корінь
-маніфеста сегмента, лист шарда, ключі індексу по пʼятьох доказових вимірах.
-`two_verifiers.rs` ганяє обидва на тих самих паках, добрих і підроблених, і вимагає
-однакового вердикту і однакової кількості перевірених записів.
-
-**І він одразу себе виправдав.** Мій python-чек послідовності порівнював кожен запис
-із попереднім, а це слабше за Rust у той бік, що має значення: сегмент, який втратив
-**перший** запис, або чиї номери всі зсунулись на однакову величину, пройшов би.
-Rust-верифікатор уже був посилений після ворожого перегляду, з міркуванням поруч із
-кодом («contiguous from one, not merely increasing»), а python ні. Знайшла це саме
-звірка двох, тобто механізм працює так, як задуманий.
-
-Друга моя помилка з того ж тесту: фікстура нумерувала записи глобально, а один сегмент
-це один файл журналу і нумерує з одиниці. Rust відмовив правильно.
-
-**Чого другий верифікатор НЕ доводить**, і це сказано в його README першим, а не
-останнім: він писався читанням Rust, тож той самий недогляд, зроблений двічі, він не
-зловить; підписів не перевіряє, бо ECDSA над P-384 на чистому Python це кілька сотень
-рядків модульної арифметики з тихими багами, а предмет тут формат, а не крива. Це
-друга думка, не заміна.
-
-Гейт має одинадцять перевірок.
-
-### Рішення, яке лишається за Юрієм: DataFusion і pgwire
-
-Решта етапу 10 (наш `TableProvider`, фізична ізоляція рантаймів, pgwire, діалектні
-розширення) **вимагає сторонніх залежностей**, і архітектура це планує свідомо: §3.2a
-каже, що фасад живе на tokio у виділених потоках, читає тільки проєкції і знімки,
-говорить із ядром каналами, і що **тест збірки без DataFusion входить у CI**. Хук
-pre-push це вже знає, там написано «from stage 10 it stops being trivial».
-
-Але це закінчує властивість «zero third-party dependencies **workspace-wide**», яка
-стоїть на бейджі, у README, у SECURITY.md і в аргументі «аудитор прочитає
-верифікатор». Правильно за архітектурою вона переформулюється у «нуль у ядрі, а
-опціональний SQL-фасад бере DataFusion і pgwire», і перевірка гейта міняється з
-«нуль у воркспейсі» на «нуль у ядрі, і ядро збирається й проходить тести без
-фасаду».
-
-Це не витрата грошей, але це найбільша архітектурна обіцянка проєкту і публічна
-поверхня постачання. Тому я її не перемикаю сам.
-
-### Знищення ключа асинхронне, і «стерто» тихо означало «сховано» (2026-07-30)
-
-Застосований шов: §7.2 плану, семантика `forget`, «знищує субʼєктний KEK, і разом з
-ним стають непіднімними всі DEKʼи». Перевірив блокер за власною ж памʼяткою, і він
-виявився не там, де я думав: KMS-провайдер **шифру не потребує**. Потребує іншого.
-
-**Контракт `KeyProvider` не міг виконати жоден справжній KMS.** `Destroyed` мав два
-варіанти, `Now` і `Already`, і оба означали «ключа немає». А гарантія казала: «after
-`destroy`, `unwrap` for that key fails **forever**, and a key id is never reissued».
-
-Перевірено проти первинної документації провайдерів 30.07.2026:
-
-- **AWS KMS** `ScheduleKeyDeletion`: обовʼязкове очікування **7-30 днів**, типово 30,
-  і фактична дата може бути ще на добу пізніше. У вікні ключ у стані
-  `Pending deletion` і криптооперації не виконує. `CancelKeyDeletion` його **повертає**.
-- **GCP Cloud KMS** `CryptoKeyVersions.destroy`: типово **30 днів**, стан
-  `scheduled for destruction`, непридатний, а `CryptoKeyVersions.restore` повертає.
-
-Тобто у вікні пейлоад **нечитний і не стертий**, і різниця не академічна: оператор
-одним викликом API скасовує це на строк до місяця. Сховище, яке звітувало б це як
-стирання, казало б суб'єкту даних, що його дані зникли, поки вони за один виклик від
-повернення. Це рівно «стерто» тихо означає «сховано», проти чого весь цей проєкт.
-
-**Що зроблено.** Третій варіант `Destroyed::Scheduled { effective_at, reversible }`,
-і гарантія переписана на те, що тримається універсально: «fails **from that moment
-on**». Слабше твердження, але правдиве, і різниця не заметена: провайдер, який лише
-планує, мусить це сказати, а далі **обовʼязок викликача** не звітувати про завершене
-стирання. Vault цього не робить:
-
-- `Forgotten::is_complete()` віддає false, і питання задане в одному місці, щоб жодне
-  місце виклику не відповіло на нього, дивлячись на `keys_destroyed`;
-- вердикт запису **`Held`**, а не `Allowed`. Це слово в словнику запису вже означало
-  саме це, тож **у замороженому форматі не змінилось нічого**. `Allowed` зробив би
-  незавершене стирання невідрізнимим від завершеного у самому сліді, тобто слід
-  брехав би про єдину операцію, для доказу якої існує;
-- `tokens_out` несе кількість лише обіцяних, тож читач доходить того ж висновку, не
-  довіряючи вердикту;
-- **рядок субʼєкта не викидається**, поки щось лише заплановане. Те саме
-  міркування, що вже раз розширювали: рядок це єдине, що змусить наступну спробу
-  подивитись знову. Сховище, яке його викинуло б, не мало б чим дізнатись, чи
-  сталось те стирання, про яке воно звітувало;
-- контролер дізнається **дату** (найпізнішу, бо стирання завершується з останнім
-  ключем, а не з першим) і **чи можна скасувати**.
-
-**Референсний `SchedulingKeyProvider`**, бо шов без реалізації це шов, який ніхто не
-проганяв: планує, ключ одразу непридатний, матеріал лишається, `elapse` закриває
-вікно, `cancel` повертає. Конформанс-набір тепер проходить і на ньому, і в ньому
-зʼявилась перевірка, якої не було: **повторний `destroy` не має зсувати дату**. Job
-стирання ретраїться, і кастодіан, який перезапускав би годинник на кожному ретраї,
-планував би стирання, яке ніколи не настане.
-
-**Тест не аргументує, а показує:** скасовує розклад і пейлоад **повертається**. Це і
-є той факт, який контролер приховував би, звітуючи вікно як стирання. П'ять із дев'яти
-нових тестів падають, якщо змусити сховище трактувати обіцянку як виконання, і я це
-перевірив, а не припустив.
-
-Дві мої хибні очікування в тестах: я думав, що знищується субʼєктний KEK, а
-знищуються **ключі на запис**, зареєстровані на субʼєкта при sealʼі; субʼєктний KEK
-це лише основа для тега.
-
-### Справжні списки в Parquet (2026-07-30)
-
-Застосований обовʼязок: §6.3 плану, «власний формат це борг довіри: аудитору
-доведеться вірити нашому рідеру», який закривається «гарантованим експортом без
-втрат у Parquet + JSON, самим по собі верифіковним». І там же: «Це не поступка, це
-аргумент продажу».
-
-Чотири повторюваних поля (`tool_manifest`, `on_behalf_of`, `caused_by`,
-`identity_chain`) були склеєні комами. Це було **без втрат**, бо жодна граматика
-ідентифікатора коми не допускає, і це було записано, а не сховано. Чим це не було,
-так це чесним колонковим виводом: pyarrow віддавав рядок там, де в записі список, тож
-кожен, хто робить запит по експорту, мусив знати, що треба ділити. Колонка, яку не
-прочитати без локального знання, несе рівно той борг довіри, який експорт мав закрити.
-
-Тепер канонічна трирівнева форма:
-`required group NAME (LIST) { repeated group list { required element } }`. Обидва
-зовнішні рівні вибрані за формою запису, не за зручністю: повторюване поле це `Vec`,
-який завжди присутній, а елементи це валідовані токени, які ніколи не null. Тому
-максимальний рівень визначення 1 і максимальний рівень повторення 1, тобто по одному
-біту, і наявний RLE-кодувальник покриває обидва.
-
-**Небезпека, для якої списки й існують**, це порожній список: він пише пару рівнів і
-**жодного значення**. Якщо це зробити неправильно, кожен наступний рядок зсувається
-на одиницю, і файл читається чисто, але каже інше. Тест ставить порожні списки на
-початку, посередині й у кінці, дві спискові колонки поспіль і скалярну поруч.
-
-**Перевірив, що тест справді ловить.** Внесені навмисно дві найімовірніші помилки:
-`num_values` рівний кількості рядків замість кількості рівнів, і порожній список із
-рівнем на максимумі. pyarrow упав на обох.
-
-Оракул тепер вимагає не лише збігу тексту, а **типу**: колонка, яку писач називає
-списком, мусить прийти списком, елементи мусять бути non-nullable, а сам список
-ніколи не null. Порівняння одного рендеру пройшло б однаково, віддай рідер список чи
-рядок, тобто не побачило б саму зміну.
-
-Побічно виправлено семантику: раніше порожній список доводилось писати як null, бо
-порожній рядок і список з одного порожнього рядка це той самий текст. Списковій
-колонці цього вибору робити не треба, тож запис без інструментів тепер читається як
-запис без інструментів, а не як запис, який не сказав.
-
-Лишається на етапі 9 рівнева міграція сховища, і вона по суті про обʼєктне сховище,
-тобто етап 11.
-
-### Відтворюваність: опублікований корпус сідів і побайтова збірка (2026-07-30)
-
-Критерій виходу етапу 8 казав: «будь-хто відтворює наш прогін і наш бінарник
-побайтово». Застосований шов: §1a.2 пункт 4 архітектури, «симулятор це частина
-продукту, а не тестова папка, і seed кожного падіння відтворюється однією командою».
-
-**`sim/corpus.tsv`**, шістнадцять рядків: повний набір параметрів, дайджест траси і
-скільки підтверджених записів прогін втратив. `--corpus` проганяє всі й відмовляє,
-якщо хоч один дайджест або лічильник розійшовся, друкуючи одну команду для
-відтворення того рядка. У гейті на кожному пуші.
-
-У заголовку файла написано, **що це доводить і чого ні**: доводить, що ця збірка
-відтворює ті прогони побайтово на чужій машині; **не** доводить коректності, бо
-хибна реалізація відтворюється ідеально. Плутати ці двоє це найлегший спосіб
-вичитати з файла більше, ніж він каже.
-
-**Корпус зловив те, що було задокументоване й ніколи не зміряне.** Два рядки
-повідомили durability violations, обидва з `--hostile` без `--honest-disk`, тобто з
-брехливим fsync. `docs/durability.md` §7 це прямо називає: «Nothing against a disk
-that lies... What the simulator guarantees is that we **notice**». Бракувало
-**числа**: «очікувано» без лічильника це твердження, яке ніхто не може перевірити, і
-зміна в ньому пройшла б непоміченою. Тепер це восьма колонка, і зміна в ній валить
-гейт.
-
-І окрема гвардія проти найспокусливішої реакції: **корпус, який записує втрату на
-рядку, де диск НЕ бреше, відмовляється сам**, зі словами «That is a defect in the
-store and not a number to record». Бо звичайна реакція на новий фейл це вставити
-нове число й піти далі.
-
-**`scripts/reproduce.sh`**: `git archive` двічі, у дві теки з іменами **навмисно
-різної довжини**, `--release --locked` у кожній, порівняння дайджестів, плюс окрема
-перевірка, що тека збірки не зʼявляється всередині бінарника. Довжина має значення:
-ламає це зазвичай шлях, вбудований у панік-повідомлення й debug info, а два шляхи
-однакової довжини сховали б різницю, залежну від довжини. Перша версія цієї
-перевірки використовувала `rb1` і `rb2` і доводила менше, ніж виглядала.
-
-Виявилось, що `--remap-path-prefix` сьогодні не потрібен: у верифікатора немає
-залежностей і абсолютний шлях у нього не потрапляє. Перевірка стоїть на той день,
-коли потрапить, і тоді впаде на пуші, а не на аудиті.
-
-**Що чесно НЕ запінено:** `rust-toolchain.toml` каже `channel = "stable"`, а stable
-рухається. Це рішення, не недогляд: пін на точну версію забрав би сигнал «новий
-компілятор ламає збірку», а він вартий більше за постійний дайджест. Тому правило:
-**дайджест збірки має сенс тільки опублікований разом із версією тулчейна й
-target-триплетом**, і скрипт друкує всі три щоразу.
-
-**Одна помилка інструмента, знову не Rust.** Генератор корпусу спершу був шелловим
-циклом із `set -- $spec`, і **zsh не робить word splitting на нелапкованому
-розширенні**, тож у бінарник пішли порожні значення і вийшло шістнадцять однакових
-рядків дефолтів. Бінарник був правий, цикл хибний, а вивід виглядав як вивід.
-Переписано на Python, і генератор тепер сам звіряє, що раннер повернув ті параметри,
-які йому дали.
-
-Гейт має десять перевірок замість восьми, приблизно сорок секунд. **Етап 8 закритий
-повністю.**
-
-### Комплаєнс-шар, і читання плану, яке треба було зробити раніше (2026-07-30)
-
-Юрій запитав просто: чому я, беручись писати код, не користуюсь тим архітектурним
-ресерчем, який ми вже зробили з Fable. Питання точне, і ціна називається конкретно.
-
-Я читав `trailryx-roadmap.md` і наявний код. Я **не** читав `trailryx-architecture.md`
-і `trailryx-plan.md`, тобто рівно ті два документи, 1120 рядків разом. З них
-випливали три речі, дві з яких я вже зробив неправильно:
-
-**Пункт 15 плану:** «Джерело зовнішнього якоря: RFC 3161 TSA з PQC,
-transparency-log, або підписаний артефакт CI. **Маніфест готується під усі три**.»
-А я щойно зафіксував секцію пакета з полями `authority`, `root`, `nonce: u64`,
-`token`, тобто під один із трьох. `nonce` для transparency-log не означає нічого,
-місця під inclusion-proof немає. Переробив: `kind` як дискримінатор, `algorithm`
-для свідчення, яке себе не описує, `challenge` замість `nonce`, `evidence` замість
-`token`. Знайдено читанням плану, а не тестом, і **до** того, як на цю помилку
-витратили версію формату.
-
-**§14.2.4 архітектури:** «SLH-DSA для якорювання епох переноситься за межі v1...
-**Формат маніфеста готується під нього одразу**.» Саме тому `algorithm` це поле, а
-не припущення: підпис CI-артефакта це голі байти, і назвати схему більше нікому.
-
-**§14.3 архітектури**, і це прямо про те, що я писав у той момент: профільний
-документ це **prEN ISO/IEC 24970 «AI system logging»**, жоден документ JTC 21 не
-цитований в Офіційному журналі, гармонізовані очікуються H2 2026 / H1 2027, першим
-процитують EN 18286. І пряме правило: **не писати «відповідає стандарту», поки
-стандарт не цитований**; формулювання «покриває вимоги ст. 12 і готовий до мапінгу
-на prEN ISO/IEC 24970». Я цілився в AI Act + SR 11-7 + SOC 2 і 24970 не згадав
-узагалі.
-
-**Що зроблено.** `trailryx-compliance`: версіонована таблиця зобовʼязань, і чотири
-відповіді на кожне, з яких дві це «ні»: `shown`, `not in this pack`,
-`not addressed`, `operator`. Слово «compliant» не зʼявляється у виводі ніде, і це
-перевіряє тест. Правило формулювання зі §14.3 теж тест, бо правило, яке тримається
-на обережності, тримається до першого поспіху.
-
-Ключове: **відповідь виводиться зі знахідок верифікатора про конкретний пакет,
-ніколи не заявляється**. І в пакет не пишеться нічого: пакет, який несе власне
-твердження про комплаєнс, це сховище, що описує своє свідчення, тобто рівно той
-режим відмови, для якого верифікатор і існує. Код виходу `trailryx-coverage` іде за
-вердиктом **пакета**, а не за таблицею.
-
-Ретенція це найчистіший `operator`-випадок і найспокусливіший для підтасовки: ст.
-19(1) і 26(6) хочуть щонайменше шість місяців, а в пакеті немає нічого, що показує,
-скільки що зберігалось. Що сховище додає, вужче й варте окремо: збережений лог, чия
-повнота доказова, тож ретенція стає питанням про носій, а не про довіру.
-
-Мапінгу по пунктах на prEN ISO/IEC 24970 **навмисно немає**. Номери пунктів із
-рухомого драфту, надруковані поруч із вердиктом, це вигадана точність. Шар
-версіонований саме щоб той мапінг можна було додати, коли документ процитують, не
-переписуючи того, що заявляли до цього.
-
-**Три тестові формулювання виявились хибними, і всі три мої.** Найцікавіше друге:
-я заборонив підрядок «presumption of conformity is», і він зловив мій же
-**заперечувальний** текст «a presumption of conformity is not available to be
-claimed». Перевірка була про літеру, а не про сенс; тепер вона вимагає заперечення
-в тому ж реченні. Третє: я перевіряв, що якір збільшує кількість показаних
-зобовʼязань, а вона не змінилась, бо єдиному зобовʼязанню, якому потрібна
-атестація, спершу потрібен підпис, і фікстура непідписана. Тест був хибний про
-фікстуру, не про дизайн.
-
-**Що я змінив у порядку роботи:** перед кожним етапом читаю `architecture.md` і
-`plan.md`, і кажу вголос, який шов чи патерн застосовую. Ця стаття роадмапу існує
-тому, що двох правок у форматі можна було не робити.
-
-### RFC 3161: якір, який ставить не оператор (2026-07-30)
-
-Підпис кореня каже **хто** опублікував історію. **Коли** він сказати не може, бо
-підписант сам вибирає той час, який підписує: історію можна перезібрати сьогодні,
-підписати сьогодні й датувати минулим роком, і підпис зійдеться ідеально. Це рівно
-та підробка, проти якої аудиторський слід і існує. У дереві вже був один відповідь,
-witness-атестація, але вона вимагає, щоб хтось тримав witness. Тепер є та, яку
-аудитор питає на імʼя: токен від публічного TSA, який можна отримати сьогодні й
-перевірити будь-яким OpenSSL.
-
-**Три нових шматки розбору руками**, бо залежностей воркспейс не бере:
-`trailryx-asn1` (обмежений DER-читач), `trailryx-anchor` (TimeStampReq/Resp,
-TSTInfo, підмножина CMS, RSA PKCS#1 v1.5 через Montgomery) і `Sha256` у
-`trailryx-crypto`, бо **дайджест для власного підпису вибирає TSA**, і це переважно
-SHA-256, а не наш SHA-384.
-
-**Рішення, які тут несуть вагу:**
-
-- **Блок PKCS#1 будується і порівнюється, ніколи не парситься.** Верифікатор, який
-  його парсить, це підробка підпису Bleichenbacher 2006; з нею відʼїхали цілі
-  TLS-стеки. Одне легальне кодування на кожен підписаний дайджест, і жодної
-  толерантності, всередині якої можна побудувати друге.
-- **Довіра це закріплений ключ.** Ні побудови ланцюга, ні revocation, ні EKU, ні
-  вікон валідності. Закріплення вирішує, якому ключу вірити, **один раз і поза
-  трактом**, там де на це може подивитись людина. Ціна названа, не схована: цей код
-  не можна навести на довільний TSA й попросити розібратись самому.
-- **Без закріпленого ключа `verify` віддає `Unsupported`, а не `Ok(true)`.** Токен,
-  який привʼязаний до правильного кореня, але чий підпис ніхто не перевіряв, не
-  доводить нічого, і єдине, чого тут робити не можна, це дати цьому читатись як
-  атестація. Структурний тип називається `Claim`, криптографічний `Attested`.
-- **Nonce надсилається завжди й перевіряється завжди.** Це єдине, що відрізняє «TSA
-  відповів на мій запит» від повтору старої відповіді на той самий корінь, а корінь
-  між ретраями не змінюється.
-- **Це живе ПОЗА офлайн-верифікатором.** Те, що той крейт читається за годину, і є
-  відповіддю на питання «а хто перевіряв ваш код»; ASN.1 плюс CMS плюс RSA
-  збільшили б його вдвічі.
-
-**Що всередині верифікатора все ж зʼявилось: девʼяносто рядків.** Вони читають
-власний imprint токена й перевіряють, що він комітиться до **цього** кореня. Це та
-частина, яку аудитор без пакета зробити не може. Підпис TSA верифікатор **не**
-перевіряє і каже це вголос окремою знахідкою, разом із командою, яка перевіряє. Бо
-сховище не має права саме заявляти, що його стороннє свідчення дійсне. А от чого
-воно не має права робити точно, так це **описувати своє свідчення**: токен, чий
-imprint це інший корінь, це `BROKEN`, а не note.
-
-Другий DER-читач у репозиторії названий як другий читач, а не тихо доданий: два
-читачі тих самих байтів це два шанси розійтись, тож справжній токен від справжнього
-TSA проходить через обидва, і `trailryx-store/tests/it/anchored.rs` порівнює, що кожен
-із них із нього прочитав.
-
-**Формат пакета став версією 3** (`SECTION_ANCHOR`), і версія 2 читається як
-раніше: пакет, записаний старішим комітом, мусить далі перевірятись. Бамп потрібен
-для іншого напрямку: **старий** верифікатор, зустрівши новий пакет, скаже «невідома
-версія», а не «невідома секція». Обидва відмовлять, але тільки один скаже чому.
-Формат **запису не змінився**.
-
-**Чотири дефекти знайдені вимірюванням, три з них мої власні:**
-
-1. Мій SHA-256 **викидав забуферизовані байти**, коли `update` не добивав блок.
-   Усі опубліковані одноразові вектори проходили; «abc» по одному байту давало
-   дайджест «c». Наявний SHA-384 те саме присвоєння захищає й ніколи не був хибний.
-2. CMS ставить у `signatureAlgorithm` **`rsaEncryption`**, а не
-   `sha256WithRSAEncryption`. Через це код відкидав кожен справжній токен як
-   непідтриманий алгоритм, доки токен від `openssl ts -reply` не пройшов через нього.
-3. Свіп із перевертанням бітів **стверджував, що кожен байт токена несучий**, і
-   знайшов 73 позиції, де це не так. Усі до одної в `digestAlgorithms` і
-   `certificates`, які CMS не підписує. Хибним було твердження, не код, і фіксом
-   став `tsp::covered`, який виносить межу довіри в код як діапазони байтів.
-4. У мінімальному читачі верифікатора я тричі вжив «значення заповнює контейнер»
-   там, де за полем ідуть його сусіди. Це відкидало кожен справжній токен як
-   не-DER.
-
-І одна помилка інструмента, варта записи: `python`-заміна вставила блок запису
-якоря **двічі**, бо шаблон трапився у файлі двічі. Знайшов це не огляд, а тест, який
-побачив дві однакові знахідки там, де мала бути одна.
-
-**Оракул і є суть.** OpenSSL підіймає справжній TSA, видає справжній сертифікат і
-підписує справжню відповідь, а її перевіряє наша арифметика руками. Потім того ж
-токена просять перевірити сам OpenSSL, тож згода йде в обидві сторони. Жоден тест
-не пропускається.
-
-Лишається на етапі 8: мапінг на ст. 12 AI Act / SR 11-7 / SOC 2 і відтворювані
-збірки з опублікованими сідами.
-
-### Автентифікація прийому: перевірка до тіла (2026-07-30)
-
-`AuthProvider` і `Action::Ingest` існували від етапу 1, конформанс на них був зелений,
-а сервер не викликав ні одного, ні другого. Це не «майбутня фіча»: сервер, який слухає
-порт і пише в аудиторське сховище будь-кого, хто до нього дістався, це стеля для
-будь-якого реального розгортання, і документована честь її не піднімає.
-
-**Головне тут не код відмови, а її момент.** Тіло обмежене 16 МіБ, а сума тіл у
-льоті 256 МіБ. Перевірка після читання тіла дала б неавтентифікованому виклику
-можливість займати чверть гігабайта пам'яті ціною одного рядка заголовка. Тож гейт
-живе у фазі до тіла, на самій голові.
-
-І це не «поставив раніше про запас», це **зміряно**. Перевірка стоїть **перед**
-розбором `Content-Length`, бо перша гілка того розбору сама повертає `ReadBody` для
-заявленої нульової довжини. Я переставив гейт на три рядки нижче, туди, де він
-виглядає так само правильно, і прогнав набір: неавтентифікований порожній експорт
-отримав **200**. Один тест існує рівно під цей порядок, і він єдиний із дванадцяти
-впав від переставляння.
-
-Друга така пастка: `100 Continue` пишеться всередині гілки `ReadBody`, тобто гейт
-після вердикту запрошував би тіло, яке збирався відкинути. Окремий тест на те, що
-запрошення не приходить.
-
-**401 і 403 обидва неповторювані, і це рішення, а не наслідок.** Експортер із
-неправильним токеном мусить зупинитись, а не довбати; фліт, що повторює хибний
-токен, це фліт, який атакує власний auth. Єдиний повторюваний варіант, 503, це коли
-впав **провайдер**, бо тоді батч треба зберегти. «Не той токен» і «схема, якої не
-розуміємо» відповідають однаково: різниця дала б перелічувати, що розгортання приймає.
-
-**Отруєний mutex відмовляє.** Провайдер, який панікнув, отруює блокування, і далі
-гейт відповідає 503 на кожен запит. Провал наскрізь був би єдиним режимом, який
-перетворює падіння в автентифікації на відкриті двері, тож ця гілка виписана руками,
-а не досягається через `unwrap`. Тест отруює блокування навмисно й міряє три
-наступні запити.
-
-**Маршрутизований bind без гейта тепер не стартує.** Раніше він лише писав
-попередження в лог, тобто оператор, якому це найпотрібніше було побачити, читав
-найменше: рядок приходить **після** того, як порт уже відкритий. Тепер відмова, і
-відмова **до** `TcpListener::bind`, щоб порту не було навіть на мить. Тест міряє
-саму цю різницю: та сама адреса з гейтом падає на сокеті, а не на політиці.
-
-**Референсний провайдер є, бо шов без реалізації це шов, який ніхто не проганяв.**
-`bearer::SharedSecret` це один секрет, поданий як `Bearer`. Він автентифікує **фліт,
-а не агента**, і так і написано; ідентичність запису як і раніше приходить із
-resource-атрибутів через мапер, і другого, незасвідченого джерела правди поруч не
-з'явилось. Секрет зберігається **дайджестом**: порівняння йде через уже наявний
-`digests_equal` на двох фіксованих довжинах, тож не тече ні префікс, ні довжина, а
-core dump цього процесу віддає дайджест, а не робочий токен. Читається з файла, бо
-`argv` видно в `ps`, а середовище успадковує кожен дочірній процес.
-
-Ще дві дрібниці, які були б дірками: два поля `Authorization` це відмова, а не вибір
-одного з них (інакше проксі, що додає своє, тихо перебирає доступ на себе), і
-порожнє значення поля не доходить до провайдера взагалі.
-
-Лишається на етапі 6 рівно одне: gRPC.
-
-### NDJSON: читаємо той файл, який колектор і так пише (2026-07-30)
-
-Питання було не «як реалізувати», а «що таке рядок». Дослідження і три
-незалежні дизайни з суддівською панеллю дали відповідь: **один рядок це один
-конверт OTLP/JSON**, побайтово те, що пише file exporter колектора при
-`format: json` і `compression: none`, і те, що його ж `otlp_json_file` receiver
-читає назад. Без кроку конвертації: оператор наводить на файл, який уже є.
-
-Альтернативою був власний людиночитний формат подій, і він читається краще
-руками, але програє в одному вирішальному: йому потрібен **другий мапер**. Кожне
-рішення про площину, таблиця контенту, деривації й обробка залишків існували б
-у двох місцях, а тест схеми в `trailryx-record` бачить лише одне з них. Плюс
-рядок міг би заявити verdict, що мапер відмовляє з прямо сформульованої причини:
-аудитор, який читає `allowed`, розумно вважатиме, що так сказав рушій політик.
-Тому JSON-декодер віддає **ті самі структури в пам'яті**, що й protobuf-декодер,
-і далі викликає той самий `map_span`. Два декодери, одне значення.
-
-Це й робить можливим головний тест: одна фікстура, описана один раз, закодована
-двічі двома **незалежно написаними** енкодерами, прочитана обома читачами, і
-результати порівняні як цілі структури. Якби межа площин була визначена двічі,
-цей тест був би тим, що це помітило.
-
-**JSON теж наш, і це та частина, яка кусається.** Хендрайтний парсер на межі
-довіри це зобов'язання, поки він не перевірений проти парсерів без спільного
-походження, тож `trailryx-json` перевіряється проти трьох: V8 у node, CPython і
-Ruby. **222 випадки** конформансу, генератор закомічений, кожен оракул їх
-класифікує, і розбіжності приколоті: множина випадків, де ми не збігаємось із
-CPython, це рівно 26, з node рівно 23, і двадцять сьома ламає збірку.
-
-CPython і node не збігаються **між собою** на 5 із 222, і ці п'ять варто назвати,
-бо це вся карта того, де світ JSON досі не визначився: чотири це нестандартні
-літерали `NaN`, `Infinity` і `-Infinity` у CPython, які V8 відкидає і ми
-відкидаємо, і один це ліміт CPython на 4300 цифр. На всіх п'яти ми на боці RFC.
-
-Три розбіжності наші свідомо, кожна бо ліберальна відповідь змінила б байти, які
-це сховище хешує: **дубльоване ім'я члена фатальне** (RFC благословляє обидві
-відповіді в двох різних секціях, тож кожен парсер обирає переможця, а
-CVE-2017-12635 це саме та деталь, яка вирішила, хто адміністратор); **одинокий
-сурогат фатальний** (Rust не тримає його в `String`, тож будь-який ліберальний
-шлях втрачає дані: U+FFFD змінює хеш, а обрізання це опублікований примітив
-підвищення прав, бо `"superadmin\ud888"` не має ставати `superadmin`); і **межа
-ніколи не звітується як синтаксична помилка** (RFC 8259 §9 в одному абзаці
-просить приймати кожен відповідний текст і дозволяє ставити ліміти, тож напруга
-живе в типі помилки).
-
-Глибина це те місце, де ворожий перегляд відпрацював свою ціну, і варто сказати
-прямо. Перша версія обмежувала JSON-читача 25 контейнерами і заявляла, що це число
-**виведене** з ліміту protobuf-читача 16, тож жоден транспорт не ліберальніший за
-інший. Це виведення неможливо зробити правильним, і лінза знайшла його падіння
-**одночасно в обидва боки**: атрибут ресурсу з двома рівнями масиву і трьома рівнями
-мапи дріт відхиляв, а JSON приймав; атрибут спана з чотирма рівнями масиву і одним
-рівнем мапи дріт приймав, а JSON відхиляв. Два транспорти, які не погоджуються, які
-рядки стають записами, це два сховища.
-
-Арифметика каже чому. Дріт рахує вкладені **повідомлення** і бере 2 за рівень
-`arrayValue` і 3 за рівень `kvlistValue`; JSON рахує **контейнери** і бере 3 і 4.
-Два різні співвідношення, тож жодна одна межа контейнерів не збігається з межею
-повідомлень для всіх змішувань.
-
-Тому паритет переїхав туди, де він може бути точним: JSON-декодер рахує рівні
-повідомлень OTLP так само, як дротяний читач, проти тієї ж константи, а межа
-контейнерів вернулась до того, чим мала бути завжди: запобіжник проти ворожого
-вкладення, а не пристрій паритету. Найглибше вкладення контейнерів, якого може
-досягти легальне для дроту значення OTLP, це **27**, виміряно, тож запобіжник
-стоїть на 32. А тест, який це пропустив, тепер сітка: три позиції, де може стояти
-`AnyValue`, на всі змішування двох форм, **144 випадки**, і обидва декодери мусять
-погодитись на кожному.
-
-Числа не проходять через float на вході. Таймштамп OTLP регулярно більший за
-2^53, а `"9223372036854775808".parse::<u64>()` успішний і `as i64` далі дає
-`i64::MIN`, `1e19 as i64` дає `i64::MAX`, а обгортове накопичення
-`18446744073709551616` дає 0. Кожне з цього це відмова в одязі правдоподібного
-значення, тож приведення float до цілого на шляху значень немає взагалі, і тест
-це греповно перевіряє.
-
-**Архів і живий файл це різні джерела.** `replay` не оцінює розбіг годинників і
-рахує, що не оцінював; `tail` оцінює. Читання експорту за минулий тиждень без
-цього розділення позначає кожен запис надмірно розбіглим і породжує запис-аномалію,
-правдивий про читача і хибний про парк. Демо-бінарник це показує: ті самі байти,
-`skew_not_assessed 4` в один бік і `excessive_clock_skew 3` в інший.
-
-Джерело також виправляє **три дефекти, які досі несе його protobuf-побратим**,
-кожен позначений у коді тим, що він виправляє: сума аномалій рахується по списку,
-побудованому вичерпним деструктуруванням усіх структур звітів, тож доданий
-пізніше лічильник це помилка компіляції, поки хтось не класифікує його як втрату
-чи діагностику (рукописна сума поруч пропускає один і тому ніколи не звітує про
-батч, чия єдина вада була невалідний UTF-8); обидва ідентифікатори будуються
-**до** зсуву позначки звітованого, тож невдача побудови не може відкинути звіт,
-уже позначений доставленим; і запис-аномалія штампується `UNMAPPED`, бо жоден
-мапер не торкався запису, який сховище написало про себе.
-
-**Чого не робимо, і це в списку «не зроблено»**: HTTP не подає JSON
-(`application/json` це 415 і далі, але причина змінилась і коментар у
-`trailryx-ingest` це визнає); немає gRPC, метрик і логів; немає розпакування і
-переframing'у (gzip, zstd і length-prefixed відмовляються з назвою налаштування
-колектора, яке їх зробило); немає багаторядкового JSON; немає snake_case-ключів і
-base64-ідентифікаторів, тож вивід `otel-cli server json` відмовляється, а не
-читається наполовину; немає слідування за ротацією; і немає збереженої позначки
-відновлення, тому джерело заявляє at-least-once.
-
-**Ворожий перегляд нової поверхні пройшов лише частково, і це записано як є.**
-Шість лінз, з них відпрацювали чотири; **усі 50 агентів-скептиків упали на 529
-Overloaded**, тож підсумок скрипта «14 опровергнуто» це артефакт логіки, а не
-вердикт. Три знахідки я перевірив вимірюванням сам і виправив:
-
-1. **Критична.** Відмова за маркером кодування ковтала решту буфера. Фреймер
-   відмовляв усередині шляху відкриття потоку, до того як чанк був розкадрований
-   чи облікований, тож `push` кидав його цілком, а виклик читав далі з наступного.
-   Виміряно: той самий 40-кілобайтний файл за UTF-16-маркером віддавав **0 записів
-   при читанні по 64 КіБ, 118 при 16 КіБ, 179 при 4 КіБ і 199 при двобайтовому**, і
-   кожен прогін звітував про один-два втрачені рядки. Скільки файлу доходить до
-   сховища не може бути функцією розміру читання. Тепер відмова защіпнута в обох
-   шарах, потік не віддає нічого при жодному розмірі, і рахується рівно раз.
-2. **Висока, у двох напрямках одночасно.** Виведення межі глибини (див. вище).
-3. **Середня.** Flush продюсера всередині багатобайтового символу рахувався як
-   пошкоджений рядок. `Utf8Error::error_len()` уже розрізняє «байти скінчились
-   усередині валідної послідовності» від «послідовність зламана», тож це нічого не
-   коштувало: новий `Encoding::IncompleteUtf8` звільняється **лише на останньому
-   рядку**, бо обірваний символ перед терміналом це справжнє пошкодження. Виміряно
-   до фіксу: 19 із 299 точок обриву одного українськомовного рядка давали запис
-   `Verdict::Failed` про втрату, якої не було.
-
-**Скептики відпрацювали з другої спроби**, і ще три знахідки їх пережили. Усі три
-виправлені тут:
-
-- **`unterminated_final_line` рахувався двічі.** Засувка була прапорцем, який
-  скидався щоразу, коли порожнів буфер переносу, а фреймер порожнить його ще й тоді,
-  коли викидає завеликий рядок. Тож один рядок без термінатора рахувався двічі:
-  один раз поки він був частковим під лімітом, і ще раз на `finish`. Це число
-  входить у хешований підписаний запис-аномалію, тобто оператору казали про два
-  обрізані рядки у файлі, де був один. Тепер засувка ключується на номері рядка.
-- **Повторений ключ атрибута губив кожне значення після першого.** Фільтр
-  викидав **ключ**, а не входження, тож `Span::attr` читав перше значення в
-  метадані, а payload пропускав усі. Виміряно на спані з двома
-  `gen_ai.request.model`: друга назва моделі не з'являлась ніде. Тепер повтор
-  метаданного ключа йде в залишок, а повтор контентного ключа отримує власну
-  частину того ж класу, бо залишок це `Diagnostic` і контент не має
-  перекласифіковуватись по дорозі.
-- **Мій же фікс `prompt_hash` був половиною фіксу.** Я закрив верхній рівень, а скептик
-  виміряв, що колізія жива на рівень глибше, у тій самій формі, яку конвенції
-  реально використовують: `gen_ai.input.messages` це масив мап, і ліміт відкидає
-  саму **частину**. Тепер перевірка рекурсивна, і навмисно консервативна: якщо
-  будь-яка частина прийшла порожньою, хеша немає взагалі.
-
-**Відкрито: нуль.** Усі три закриті того ж дня, кожна з регресійним тестом, і нижче
-лишається запис того, що вони були і що саме кожна означала. Три рішення варто
-назвати, бо два з них це рішення про **семантику**, а не про код:
-
-- **Що означає `queue_full_stops`.** Рахує **переходи в стан стопу**, а не виклики,
-  відбиті поки він триває, і класифікований як **діагностика, а не втрата**. Обидві
-  половини були хибні. Повна черга це не втрата: байти не прочитані, тож вони й далі
-  у викликача, і той самий чанк іде після дренажу; запис-аномалія, що заявляє втрату,
-  якої не було, вчить оператора не вірити тому, що заявляє справжню. А «повтори»
-  міряють цикл ретраїв викликача, не сховище: той, хто ретраїть щомілісекунди, і той,
-  хто щосекунди, показали б різні числа за однакових умов, а це той самий клас, що
-  тест, який закріпив машину замість того, що він тестує. Стоп лишається видимим там,
-  де йому місце: у власному звіті читача, який друкує бінарник, і в розбивці аномалії,
-  коли та народжується з іншої причини. Поверхня HTTP проводить межу там само:
-  backpressure там це 503 клієнту, а не запис у сховищі.
-- **На чому рахувати `unknown_fields`.** На **елементі**, з обох боків. Дріт бачить
-  один тег на елемент повторюваного поля, і це кращий вимір «скільки ми не зрозуміли»,
-  ніж один на член об'єкта. Тож змінився бік JSON, а не дріт, у якого ця семантика
-  давно в роботі. Порожній невідомий масив коштує **нуль**: proto3 JSON опускає
-  порожнє повторюване поле, тож `[]` і відсутність це одне повідомлення. Перша спроба
-  поставила там підлогу в одиницю, і дифференційний тест це зловив за хвилину.
-- **Що робити з id неправильної довжини.** **Відкидати спан, на обох транспортах.**
-  Змінився дріт, бо відкидання це безпечний бік, а не просто бік JSON: тримати такий
-  спан означає виводити ідентифікатор запуску з чотирьох байтів чогось, а нечитний
-  `parent_span_id`, прочитаний як відсутній, перетворює делегацію на прибуття запиту,
-  і це рівно той дефект, під який різали `MAPPER_VERSION` 2. Відсутній і нульовий
-  трактуються окремо, як відсутні, тож емітер, що дотримується специфікації, нічого
-  не втрачає.
-
-**Що було відкрито до цього:** Число раніше стояло 6, і воно було черстве в тому самому абзаці,
-де я писав про черствість статусу: я порахував кандидатів **до** трьох фіксів того ж
-дня, а ще один пункт («один про сам фреймер») просто вигадав, бо йому не відповідав
-жоден кандидат. Кожен із трьох нижче **зміряний проти поточного коду 2026-07-30**, а
-не порахований:
-
-1. **`queue_full_stops` рахує повтори виклику, а не стоп** (`jsonl.rs:475`, medium).
-   Зміряно: заповнити чергу і п'ять разів подати той самий чанк, як велить
-   задокументоване відновлення, дає `queue_full_stops = 5` при одному реальному
-   стопі. Тобто лічильник втрат зростає від того, що викликач робить усе правильно.
-2. **`unknown_fields` рахує по-різному на двох транспортах** (`otlpjson.rs:281`,
-   medium). Зміряно на спані з двома елементами невідомого повторюваного поля
-   (`links`): дріт каже 2, JSON каже 1, бо один рахує на елемент, а другий на член
-   об'єкта. Це дірка в тому самому твердженні «два декодери, одне значення», яке
-   стоїть у README: дифференційний тест на такому легальному повідомленні впаде.
-3. **Дріт приймає id будь-якої довжини, а JSON відкидає спан** (`otlp.rs:411`, low).
-   Зміряно на trace_id із чотирьох байтів: дріт віддає 1 спан, JSON віддає 0. Тобто
-   два транспорти не погоджуються, які спани стають записами, а це той самий клас,
-   що вже виправлена межа глибини.
-
-**Один кандидат закрився сам, і це варто записати:** «частковий рядок, що починається
-в тому ж читанні, де закінчився попередній, не рахується» більше не відтворюється,
-бо фікс засувки хвоста ключується на номері рядка, тож новий частковий рядок має
-новий номер і зараховується. Зміряно: 1, а не 0.
-
-Перегляд, який не відбувся, не є перегляд, що нічого не знайшов; перегляд, який
-відбувся частково, закривається до кінця; а число відкритих пунктів це теж
-твердження про статус, і воно так само черствіє.
-
-**Одна черствість статусу знайдена й виправлена по дорозі.** README казав «Stage 6
-has no HTTP or gRPC transport» рівно доти, доки хтось не порівняв це з таблицею
-крейтів двома секціями вище, де `trailryx-ingest` стоїть із 84 тестами. Речення
-про статус переживає роботу, яку описувало, якщо його не вимітати окремо.
-
-### Ворожий перегляд ядра (2026-07-30)
-
-Транспорт пройшов той перегляд, бо був найновішим і найвідкритішим кодом. Ядро
-його не проходило ніколи: **дев'ять лінз, 140 агентів, 16 мільйонів токенів**, по
-одній лінзі на кожне твердження, яке сховище проголошує вголос, кожна знахідка
-віддана трьом скептикам із наказом її опровергнути. 47 кандидатів, 25
-опровергнуто, **16 вижили**: п'ять критичних, три високих, сім середніх, один
-низький. У кожного з п'яти критичних поруч стояв коментар, який обіцяв протилежне.
-
-**Один перевернутий біт у 20-байтовому заголовку видаляв журнал цілком.**
-Відновлення трактувало заголовок, що не пройшов CRC, так само як обрізаний
-падінням, і потім обрізало файл у нуль. Виміряно: п'ять підтверджених записів,
-один біт у останньому байті CRC, файл із 1095 байтів став 20, а звіт казав
-`records: 0, discarded_bytes: 0, durability_violation: None`, і `is_suspicious()`
-було `false`. Ніщо не казало, що запис колись існував. Так робили 15 із 20 байтів
-заголовка. Різниця, якої коду бракувало: падіння зберігає **префікс**, тож за
-заголовком, який не долетів, нічого бути не може, а файл довший за заголовок не
-міг таким стати від падіння. Тепер відмова, і байти лишаються оператору. Та сама
-логіка закрила другий дефект: погана контрольна сума в ранньому кадрі забирала
-кожен валідний запис після неї, і звітувала про рутинний `TornTail`. Кадр, який
-далі розбирається після точки зупинки, доводить, що це був не хвіст.
-
-**Доказ повноти, що заявляв нуль записів, міг нести їх скільки завгодно.**
-Прив'язка порожнього кореня закрила половину цієї атаки етапом раніше й лишила
-другу: при `size == 0` кожна перевірка нижче пропускається, тож записи, скопійовані
-з іншого сегмента, не порівнювались ні з чим, а `matched()` їх рахував. Шлях до
-використання це звичайна експлуатація, а не компроміс: закрити по одному порожньому
-сегменту на шард **до** того, як корінь підписано й засвідчено (простій шарда це
-норма, закривач називає це `NothingDurable`), і далі підвішувати вигадані записи до
-того слота в будь-якому запиті. Офлайн-верифікатор теж нічого не бачив: сегмент на
-нуль записів чисто проходить record-count, history-root і chain-across-segments. Це
-**сьома** дірка в тій самій функції, і власне правило файлу її називає: верифікатор
-не має дізнаватись форму відповіді з відповіді.
-
-**Запис про стирання публікував ключ суб'єкта, і це зв'язувало забуту людину з її
-записами з однієї лише метаданої площини.** Рядок манифесту це хеш ключа суб'єкта
-й знищеного ключа; знищений ключ це `payload.key_id`, відкритий на кожному записі.
-Ключ суб'єкта в `basis.memory_ref`, теж відкритому, зробив обидва входи публічними,
-тож цикл `for` по сховищу зчитував, які саме записи були тієї людини. Коментар над
-функцією рядка казав, що саме це вона й унеможливлює. Гірше: payload, засеалений
-коли суб'єкт уже відомий, ішов під **ключем суб'єкта**, тож `payload.key_id` був
-однаковий на всіх його записах, і сховище групувалось за суб'єктом узагалі без
-манифесту. Тепер кожен payload під ключем свого запису, а запис несе однобічний
-тег над ключем суб'єкта замість ключа: власник дескриптора далі перевіряє своє
-стирання, а більше ніхто не порахує жодного рядка. Демо це перевіряє на справжньому
-сховищі.
-
-**`forget` скидав рядок реєстру суб'єкта перед знищенням ключів.** Док-коментар
-самого реєстру забороняє цей порядок цими ж словами. Одного `Unavailable` від KMS
-посеред циклу було достатньо: рядка вже нема, тож повтор, який робить кожне
-завдання стирання, не знаходив нічого, писав `NotApplicable` («ми нічого про цю
-людину не тримаємо»), а три payload з чотирьох лишались читними, і ніде не лишалось
-жодного id ключа, який мав померти. Тепер знищення спершу, а рядок падає лише коли
-всі знищення пройшли; `destroy` уже ідемпотентний, і саме це робить повтор
-правильним, а не просто можливим.
-
-**Сегмент, який називав шард, відсутній у списку пака, не перевірявся нічим.**
-Верифікатор іде згори вниз від `pack.shards`, і ніщо не вимагало, щоб кожна
-розібрана секція була досягнута, тож дописування двох секцій у **підписаний** пак
-вкладало в нього цілий вигаданий шард, а звіт виходив побайтово тим самим, разом із
-підписом: підпис покриває корінь сховища, а корінь виводиться лише зі списку
-шардів. Посередник, який не може підробити корінь, усе одно міг додати шарди
-вигідних записів. Обхід тепер повний в обидва боки, а дублікати секцій
-відхиляються парсером, бо `records_for` повертав перший збіг і другий набір
-записів для справжнього сегмента не декодувався взагалі.
-
-Далі, в тому ж паку: сегмент на нуль записів не мусив заявляти
-`chain_after == chain_before`, тож кожен слот сегмента був безкоштовною точкою
-врізки, і три записи вирізались із середини шарда з перерахунком усіх коренів;
-послідовність перевірялась на зростання, а не на неперервність, тож видалення
-запису seq 2 із трьох не давало жодної знахідки; імена свідків це довільний UTF-8
-від сторони, яку аудитують, і друкувались як є по одному рядку на знахідку, тож
-ім'я з переводами рядка дописувало знахідки в звіт аудитора, включно з нотою
-`root-signature`, що називає ключ, на паку **без підпису** (тепер підписувач
-відмовляє всьому, крім обмеженого токена, а верифікатор екранує те, що друкує); і
-видавець міг бути своїм же свідком, бо незалежність порівнювалась між свідками й
-ніколи проти ключа підпису.
-
-Поза сховищем: заявлена передумова вікна кореляції була перевернута для єдиного
-джерела, яке існує. «Батько приходить раніше за дитину за побудовою» хибне для
-OpenTelemetry, де спан експортується коли **закінчується**, а дитина закінчується
-всередині батька, тож батч приходить дітьми вперед і розв'язання в порядку
-надходження не знаходило нічого. Виміряно через справжній дріт: один батько, одна
-дитина, один батч, і обидва записи вийшли без жодного ребра. **Причинний граф був
-порожній для кожної трасі з OTLP.** `adopt_batch` карбує всі id і запам'ятовує всі
-імена перед тим, як розв'язувати хоч одне. Нульовий span id, який OTLP визначає як
-невалідний, а емітери все одно пишуть, приймався як справжнє ім'я, тож незв'язані
-корені отримували батька, якого не називали, і перекласифіковувались у делегації;
-тепер він відсутній так само, як уже був відсутній нульовий trace id, і версія
-маппера пішла на 2, щоб це сказати. Нерозв'язаний батько тепер рахується, а не
-зникає в тишу.
-
-Усі 16 виправлені, кожен із регресійним тестом. Два виправлення зробили сховище
-**суворішим до себе** й зламали фікстури, що закодували стару поведінку: сегмент,
-зібраний руками, що нумерував записи 4 і 5 (жоден журнал такого не робить), і тест,
-який стверджував, що переспрямований файл журналу спорожняється, а не відмовляє.
-
-**Чого перегляд не закрив, і чому.** Два боргу впираються в заморожену схему
-запису. Запис не може сказати «ця подія назвала батька, якого ми не розв'язали»,
-тож реконструкція без того ребра не може знизити свій власний доказ; складач
-рахує втрату замість цього. І позначка підтвердженої довговічності журналу живе
-лише в пам'яті, тож після рестарту ніщо не звітує про порушення проти того, що
-обіцяв попередній процес; руйнівні шляхи, через які це важило, закриті, а сама
-позначка хоче збереження. Один свідомий компроміс доступності: журнал із
-пошкодженою серединою тепер відмовляється відкриватись, а не лікує себе обрізанням,
-тож сховище не стартує, поки оператор не подивиться. Для сховища доказів це
-правильний бік: попередня поведінка стартувала чисто й уже видалила докази.
-
-### Складання винесене з демо (2026-07-29)
-
-Обидва кінці шва були побудовані й протестовані раніше за середину: джерело
-віддає `Ingest`, журнал бере `Record`, і ніщо їх не з'єднувало. Один коміт
-з'єднання жило в бінарнику демо, що є хибне місце для відсутньої половини
-продукту. Тепер це `trailryx-assemble`, і виніс закрив **три справжні дефекти**,
-які демо терпіло, а сховище не має.
-
-**Ідентичності були лічильником.** Лічильник рестартує з одиниці разом із
-процесом, тож перший запис після рестарту претендує на ідентичність, яка вже
-зайнята, журнал повідомляє про дублікат, і запис відкидається. Тиха втрата, з
-єдиного поля, яке не має колізіонувати. Тепер це ULID, чиї старші біти це власний
-`recorded_at` запису, що заодно робить індекс по id придатним для діапазону за
-часом, а не лише для точкового пошуку. Годинник, що пішов назад, не тягне id за
-собою.
-
-**Пам'ятались усі імена джерела, які він колись бачив.** Демо живе секунду,
-приймач місяці. Вікно тепер обмежене, а батько, що з нього випав, дає **відсутнє**
-ребро, а не вгадане: хибне ребро в графі причинності гірше за відсутнє, бо
-відсутнє коштує реконструкції її повноти, і реконструкція про це каже.
-
-**Порядок запечатування був проблемою викликача.** Треба було спитати, який id
-буде наступним, запечатати пейлоад проти нього і віддати посилання назад. Два
-кроки, які мусили узгоджуватись, у двох місцях. Тепер id мінтиться першим, а
-запечатування живе за одним викликом.
-
-Крейт вирішує три речі і відмовляється вирішувати решту. `seq`, `prev_hash` і
-`segment_id` лишаються значеннями, які ніхто не сплутає зі справжніми, бо їх
-штампує журнал при append, а правдоподібне число там було б брехнею, яка вижила б
-у записі.
-
-Один із тестів, які я написав, був хибний, не код: `u64` наносекунд максимум дає
-18.4e12 мілісекунд, а 48-бітне поле тримає 281e12, тож переповнити його з
-`Timestamp` неможливо. Твердження виправлене на те, що є правдою, і воно
-залишилось тестом, бо захисний clamp виглядає значущим і не є ним.
-
-### Зчеплення сегментів (2026-07-29)
-
-Найбільший борг, який знайшло демо, закритий. **Сегменти шарда тепер один
-ланцюг, через скільки файлів завгодно.**
-
-Що було: кожен журнал починав ланцюг з genesis, виведеного з власного заголовка,
-тож видалення цілого файлу сегмента лишало кожен інший файл внутрішньо валідним, а
-історію шарда тихо коротшою. Манiфест ніс `chain_before`/`chain_after` саме для
-цього ще з етапу 3, і ніхто їх не реалізував. Гірше за баг було те, що тест із
-назвою `segments_chain_to_one_another` **стверджував протилежне** і проходив.
-
-Що тепер: сегмент-продовження починається **буквально** з голови, на якій
-закінчився попередній. Перший сегмент шарда далі починається з genesis власного
-заголовка, тож файл не можна прийняти як чужий; а файл-продовження не можна
-перенаправити: перевідкриття під іншим попередником валить перший же запис, і
-байти відкидаються.
-
-Форму вибрав над альтернативою «покласти попередню голову в заголовок і виводити
-genesis із нього». Та варіант зберігав криптографічну прив'язку файлу до власної
-ідентичності для всіх сегментів, але тягнув зміну формату заголовка, `created_at`
-у манiфест, версію манiфеста і версію формату пакета. Обраний варіант **не змінює
-формат на диску взагалі**, а ідентичність тримає перевірка заголовка при відкритті
-(`WrongOwner`), яка вже була.
-
-`seal_segment` більше не приймає початок ланцюга параметром. Параметр, у якого
-може бути лише одне правильне значення, це параметр, який може бути хибним.
-
-Верифікатор отримав другу половину. Видалення сегмента з середини шарда ламає
-пару; видалення найстарішого або найновішого не ламає, тож перевіряється ще й
-нумерація. І він тепер прямо каже, чого перевірити **не може**: перший сегмент
-шарда починається з голови, виведеної із заголовка журналу, якого в пакеті немає,
-тож це одне значення заявлене, а не доведене. Обрізання найновішого сегмента
-ловиться підписаним коренем і свідком, а не нумерацією, і це вже побудовано.
-
-Один баг знайшовся під час фіксу: `read_all` перераховував genesis із заголовка
-замість того, з якого журнал справді почав. Це було правильно, поки кожен файл
-починався сам із себе, і стало хибним у ту мить, коли сегмент зміг продовжити
-попередній.
-
-**Не зроблено**: складання записів із джерела (`Assembler`) досі живе в демо.
-
-### Демо, воно ж критерій приймання (2026-07-29)
+   §3.2a asks for this test by name: if the core does not build and pass its tests without
+   the facade, the facade has crept into the foundation.
+
+The second check is not hygiene but a **correctness guard**. The core is a deterministic
+automaton per shard, and this is exactly what DST lives on (§1a, named the most important section of the
+architecture). DataFusion pulls in tokio with its own pool and its own scheduling; mixing them in a
+single task space means losing determinism, and with it the way to find rare bugs.
+@decided 2026-07-30: the boundary protects exactly what was named the main priority (a database that works, has no bugs and does not crash).
+
+The comment in the hook ("from stage 10 it stops being trivial, because DataFusion and pgwire
+arrive as a facade") anticipated this day and is now rewritten in the past tense.
+
+**The claims were reworded, not left in place.** The `deps-0` badge became
+`deps-0 in the core`; the comparison table against the leaders now says "zero third-party
+dependencies **in the verifier**", because that is what remained true and what carried the
+argument; in the README the number 243 stands openly next to "the verifier has zero", and in
+SECURITY.md an item appeared saying that a vulnerability in a facade crate is a real report, but a
+report **about the facade**, while a report that a facade dependency reaches the core is more serious.
+
+**`pushdown.rs`: §3.2, and it knows nothing about DataFusion.** Classifying predicates is the
+part that decides the provability of the answer, so it is tested without an async runtime, without a
+session and without a planner, and will survive a change in the engine's API. Three places where a predicate can
+run: a sorted dimension of the authenticated index (completeness proof), our own
+filter (costs the proof), the engine above us (costs the proof, and we cannot even see what it
+dropped). Every predicate not pushed down is **named** in the answer.
+
+One decision worth its own mention: among several candidates **equality is chosen before a
+range**, not the first one supplied. Otherwise the provability of the answer would depend on the
+order in which someone typed the `WHERE`.
+
+**Not done yet:** the `TableProvider` itself over DataFusion, pgwire, `AS OF TIMESTAMP`,
+`WITH PROOF`, `causal_closure()`. That is, the boundary and the provable part are done, not the engine.
+
+### Second verifier, and README drift against the architecture (2026-07-30)
+
+@decided 2026-07-30: keep checking against the Fable architecture continuously and work within the system
+design. The first thing this produced: **I found a drift, and it is mine**.
+
+README said "the provable query language that **replaces** the SQL facade". In
+the architecture and the plan there is **not a single instance** of such a phrase, and the opposite is said: §3.1,
+SQL over the Postgres wire **is** the first-class interface, because it wins on compatibility, not
+speed; §3.2, provability is given not by another language but by `supports_filters_pushdown`, which
+pushes predicates on the provable dimensions **into the authenticated index**, and the answer either
+carries a completeness proof or is marked `proof: partial` with a list of what did not fit.
+I introduced this wording back in commit `fb9c448` and repeated it in this session's CONTRIBUTING.
+Fixed to say what the architecture says, plus a line: the architecture takes priority over
+any retelling, and a sentence that contradicts it is a defect in the sentence.
+
+**Second: stage 10, per the architecture, cannot be done without third-party dependencies**, and I am not
+making this decision myself. Details separately below.
+
+**What was done from stage 10 with no dependency at all:** the item the plan asks for directly, R6.
+
+`verifier-py/trailryx_verify.py`, standard library only, no code shared
+with Rust. It recomputes on its own everything the format consists of: SHA-384, RFC 6962
+roots with the correct split point, the chain step with a domain prefix, the segment
+manifest root, the shard leaf, the index keys over the five provable dimensions.
+`two_verifiers.rs` runs both on the same packs, good and forged, and requires
+the same verdict and the same number of records checked.
+
+**And it immediately paid for itself.** My Python sequence check compared each record
+with the previous one, which is weaker than Rust in the direction that matters: a segment that lost its
+**first** record, or whose numbers were all shifted by the same amount, would have passed.
+The Rust verifier had already been hardened after the adversarial review, with the reasoning next to the
+code ("contiguous from one, not merely increasing"), and the Python one had not. What found this was
+the cross-check of the two, so the mechanism works as designed.
+
+My second mistake from the same test: the fixture numbered records globally, while one segment
+is one journal file and numbers from one. Rust refused correctly.
+
+**What the second verifier does NOT prove**, and this is stated first in its README, not
+last: it was written by reading the Rust, so the same oversight made twice it will not
+catch; it does not verify signatures, because ECDSA over P-384 in pure Python is several hundred
+lines of modular arithmetic with silent bugs, and the subject here is the format, not the curve. It is a
+second opinion, not a replacement.
+
+The gate has eleven checks.
+
+### Open decision: DataFusion and pgwire
+
+The rest of stage 10 (our `TableProvider`, physical isolation of the runtimes, pgwire, dialect
+extensions) **requires third-party dependencies**, and the architecture plans this deliberately: §3.2a
+says the facade lives on tokio in dedicated threads, reads only projections and snapshots,
+talks to the core over channels, and that **the build test without DataFusion goes into CI**. The
+pre-push hook already knows this, it says "from stage 10 it stops being trivial".
+
+But this ends the property "zero third-party dependencies **workspace-wide**", which
+stands on the badge, in the README, in SECURITY.md and in the argument "the auditor will read the
+verifier". Per the architecture it is correctly reworded as "zero in the core, and the
+optional SQL facade takes DataFusion and pgwire", and the gate check changes from
+"zero in the workspace" to "zero in the core, and the core builds and passes tests without the
+facade".
+
+This does not cost money, but it is the project's largest architectural promise and its public
+delivery surface. So I am not switching it myself.
+
+### Key destruction is asynchronous, and "erased" silently meant "hidden" (2026-07-30)
+
+Seam applied: §7.2 of the plan, the semantics of `forget`, "destroys the subject KEK, and with
+it all DEKs become unrecoverable". I checked the blocker against my own note, and it turned
+out not to be where I thought: a KMS provider **does not need a cipher**. It needs something else.
+
+**The `KeyProvider` contract could not be fulfilled by any real KMS.** `Destroyed` had two
+variants, `Now` and `Already`, and both meant "the key is gone". And the guarantee said: "after
+`destroy`, `unwrap` for that key fails **forever**, and a key id is never reissued".
+
+Checked against the providers' primary documentation on 30.07.2026:
+
+- **AWS KMS** `ScheduleKeyDeletion`: a mandatory waiting period of **7-30 days**, 30 by default,
+  and the actual date can be a day later still. During the window the key is in the state
+  `Pending deletion` and performs no cryptographic operations. `CancelKeyDeletion` **brings it back**.
+- **GCP Cloud KMS** `CryptoKeyVersions.destroy`: **30 days** by default, state
+  `scheduled for destruction`, unusable, and `CryptoKeyVersions.restore` brings it back.
+
+So in the window the payload is **unreadable and not erased**, and the difference is not academic: an operator
+cancels it with one API call for up to a month. A store that reported this as
+erasure would be telling the subject that their data is gone while it is one call away from
+coming back. This is exactly "erased" silently meaning "hidden", which this whole project is against.
+
+**What was done.** A third variant `Destroyed::Scheduled { effective_at, reversible }`,
+and the guarantee rewritten to what holds universally: "fails **from that moment
+on**". A weaker claim, but a true one, and the difference is not swept under the rug: a provider that only
+schedules must say so, and from there it is **the caller's duty** not to report a completed
+erasure. The vault does not do that:
+
+- `Forgotten::is_complete()` returns false, and the question is asked in one place so that no
+  call site answers it by looking at `keys_destroyed`;
+- the record's verdict is **`Held`**, not `Allowed`. This word in the record's vocabulary already meant
+  exactly that, so **nothing in the frozen format changed**. `Allowed` would have made an
+  unfinished erasure indistinguishable from a finished one in the trail itself, that is, the trail
+  would have lied about the one operation it exists to prove;
+- `tokens_out` carries the count of only the promised ones, so the reader reaches the same conclusion without
+  trusting the verdict;
+- **the subject row is not dropped** while anything is merely scheduled. The same
+  reasoning that was already extended once: the row is the only thing that will make the next attempt
+  look again. A store that dropped it would have no way to find out whether the
+  erasure it reported ever happened;
+- the controller learns the **date** (the latest, because erasure completes with the last
+  key, not the first) and **whether it can be cancelled**.
+
+**The reference `SchedulingKeyProvider`**, because a seam without an implementation is a seam nobody has
+run: it schedules, the key is unusable at once, the material remains, `elapse` closes the
+window, `cancel` brings it back. The conformance suite now passes on it too, and it gained a
+check that was not there: **a repeated `destroy` must not move the date**. The erasure job
+is retried, and a custodian that restarted the clock on every retry would
+be scheduling an erasure that never arrives.
+
+**The test shows rather than argues:** it cancels the schedule and the payload **comes back**. That is
+exactly the fact the controller would hide by reporting the window as erasure. Five of the nine
+new tests fail if the store is made to treat a promise as fulfilment, and I
+checked this rather than assumed it.
+
+Two of my wrong expectations in the tests: I thought the subject KEK is destroyed, but what is
+destroyed are the **per-record keys** registered to the subject at seal; the subject KEK
+is only the basis for the tag.
+
+### Real lists in Parquet (2026-07-30)
+
+Obligation applied: §6.3 of the plan, "a proprietary format is a trust debt: the auditor
+would have to trust our reader", which is closed by "a guaranteed lossless
+export to Parquet + JSON, itself verifiable". And in the same place: "This is not a concession, it is a
+selling point".
+
+The four repeated fields (`tool_manifest`, `on_behalf_of`, `caused_by`,
+`identity_chain`) were glued together with commas. That was **lossless**, because no identifier
+grammar admits commas, and this was written down, not hidden. What it was not
+was honest columnar output: pyarrow returned a string where the record has a list, so
+anyone querying the export had to know to split. A column that cannot be
+read without local knowledge carries exactly the trust debt the export was meant to close.
+
+Now the canonical three-level form:
+`required group NAME (LIST) { repeated group list { required element } }`. Both
+outer levels are chosen by the shape of the record, not for convenience: the repeated field is a `Vec`
+that is always present, and the elements are validated tokens that are never null. So
+the maximum definition level is 1 and the maximum repetition level is 1, one
+bit each, and the existing RLE encoder covers both.
+
+**The danger the lists exist for** is the empty list: it writes a pair of levels and
+**no value**. If this is done wrong, every following row shifts
+by one, and the file reads cleanly but says something else. The test places empty lists at the
+start, in the middle and at the end, two list columns in a row and a scalar next to them.
+
+**I checked that the test really catches.** Two of the likeliest mistakes were introduced on purpose:
+`num_values` equal to the row count instead of the level count, and an empty list with
+the level at the maximum. pyarrow failed on both.
+
+The oracle now requires not only a text match but the **type**: a column the writer calls a
+list must arrive as a list, the elements must be non-nullable, and the list itself is
+never null. Comparing a single rendering would have passed the same whether the reader returned a list or a
+string, that is, would not have seen the very change.
+
+As a side effect the semantics were fixed: previously an empty list had to be written as null, because
+an empty string and a list of one empty string are the same text. A list
+column does not need to make that choice, so a record with no tools now reads as a
+record with no tools, not as a record that did not say.
+
+What remains at stage 9 is the tiered storage migration, and it is really about object storage,
+that is, stage 11.
+
+### Reproducibility: a published seed corpus and a byte-for-byte build (2026-07-30)
+
+The exit criterion of stage 8 said: "anyone reproduces our run and our binary
+byte for byte". Seam applied: §1a.2 item 4 of the architecture, "the simulator is part of the
+product, not a test folder, and the seed of every failure is replayed by one command".
+
+**`sim/corpus.tsv`**, sixteen rows: the full parameter set, the trace digest and
+how many acknowledged records the run lost. `--corpus` runs all of them and fails
+if even one digest or counter diverged, printing one command to
+replay that row. In the gate on every push.
+
+The file header states **what this proves and what it does not**: it proves that this build
+reproduces those runs byte for byte on someone else's machine; it does **not** prove correctness, because a
+wrong implementation reproduces perfectly. Confusing the two is the easiest way to
+read more out of the file than it says.
+
+**The corpus caught what was documented and never measured.** Two rows
+reported durability violations, both from `--hostile` without `--honest-disk`, that is, with a
+lying fsync. `docs/durability.md` §7 names this outright: "Nothing against a disk
+that lies... What the simulator guarantees is that we **notice**". What was missing was a
+**number**: "expected" without a counter is a claim nobody can check, and a
+change in it would have gone unnoticed. Now it is the eighth column, and a change in it fails
+the gate.
+
+And a separate guard against the most tempting reaction: **a corpus that records a loss on a
+row where the disk does NOT lie refuses by itself**, with the words "That is a defect in the
+store and not a number to record". Because the usual reaction to a new failure is to insert a
+new number and move on.
+
+**`scripts/reproduce.sh`**: `git archive` twice, into two directories with names of **deliberately
+different length**, `--release --locked` in each, a comparison of digests, plus a separate
+check that the build directory does not appear inside the binary. The length matters: what usually
+breaks this is a path embedded in panic messages and debug info, and two paths of the
+same length would hide a length-dependent difference. The first version of this
+check used `rb1` and `rb2` and proved less than it looked.
+
+It turned out that `--remap-path-prefix` is not needed today: the verifier has no
+dependencies and no absolute path gets into it. The check is there for the day one
+does, and then it will fail on the push, not at the audit.
+
+**What is honestly NOT pinned:** `rust-toolchain.toml` says `channel = "stable"`, and stable
+moves. This is a decision, not an oversight: pinning an exact version would remove the signal "a new
+compiler breaks the build", and that is worth more than a constant digest. Hence the rule:
+**a build digest only means something published together with the toolchain version and the
+target triple**, and the script prints all three every time.
+
+**One tool error, again not Rust.** The corpus generator was first a shell
+loop with `set -- $spec`, and **zsh does not do word splitting on an unquoted
+expansion**, so empty values went into the binary and the result was sixteen identical
+rows of defaults. The binary was right, the loop was wrong, and the output looked like output.
+Rewritten in Python, and the generator now itself checks that the runner returned the parameters
+it was given.
+
+The gate has ten checks instead of eight, about forty seconds. **Stage 8 closed
+completely.**
+
+### The compliance layer, and the reading of the plan that should have been done earlier (2026-07-30)
+
+@decided 2026-07-30: code is written using the architectural
+research already done with Fable. The question of why it was not used is exact, and the cost is named concretely.
+
+I read `trailryx-roadmap.md` and the existing code. I did **not** read `trailryx-architecture.md`
+and `trailryx-plan.md`, that is, exactly the two documents, 1120 lines together. Three
+things followed from them, two of which I had already done wrong:
+
+**Item 15 of the plan:** "Source of the external anchor: RFC 3161 TSA with PQC,
+transparency log, or a signed CI artifact. **The manifest is prepared for all three**."
+And I had just fixed the pack section with the fields `authority`, `root`, `nonce: u64`,
+`token`, that is, for one of the three. `nonce` means nothing for a transparency log,
+and there is no room for an inclusion proof. Reworked: `kind` as a discriminator, `algorithm`
+for evidence that does not describe itself, `challenge` instead of `nonce`, `evidence` instead of
+`token`. Found by reading the plan, not by a test, and **before** a format version was
+spent on this mistake.
+
+**§14.2.4 of the architecture:** "SLH-DSA for epoch anchoring is moved beyond v1...
+**The manifest format is prepared for it right away**." That is why `algorithm` is a field, not
+an assumption: a CI artifact signature is bare bytes, and nobody else is left to name the scheme.
+
+**§14.3 of the architecture**, and this is directly about what I was writing at that moment: the profile
+document is **prEN ISO/IEC 24970 "AI system logging"**, no JTC 21 document
+is cited in the Official Journal, harmonised ones are expected H2 2026 / H1 2027, and EN 18286 will be the first
+to be cited. And a direct rule: **do not write "conforms to the standard" until the
+standard is cited**; the wording is "covers the requirements of Art. 12 and is ready for mapping
+to prEN ISO/IEC 24970". I was aiming at AI Act + SR 11-7 + SOC 2 and did not mention 24970
+at all.
+
+**What was done.** `trailryx-compliance`: a versioned table of obligations, and four
+answers for each, two of which are "no": `shown`, `not in this pack`,
+`not addressed`, `operator`. The word "compliant" appears nowhere in the output, and a
+test checks this. The wording rule from §14.3 is a test too, because a rule that rests
+on carefulness holds until the first rush.
+
+The key point: **the answer is derived from the verifier's findings about a specific pack,
+never asserted**. And nothing is written into the pack: a pack that carries its own
+compliance claim is a store describing its own evidence, which is exactly the
+failure mode the verifier exists for. The `trailryx-coverage` exit code follows the
+verdict of the **pack**, not the table.
+
+Retention is the cleanest `operator` case and the most tempting one to fudge: Art.
+19(1) and 26(6) want at least six months, and there is nothing in the pack that shows
+how long anything was kept. What the store adds is narrower and worth stating separately: a kept
+log whose completeness is provable, so retention becomes a question about the medium, not about trust.
+
+A clause-by-clause mapping to prEN ISO/IEC 24970 is **deliberately absent**. Clause numbers
+from a moving draft, printed next to a verdict, are invented precision. The layer is
+versioned precisely so that the mapping can be added when the document is cited, without
+rewriting what was claimed before.
+
+**Three test wordings turned out to be wrong, and all three were mine.** The most interesting is the second:
+I banned the substring "presumption of conformity is", and it caught my own
+**negating** text "a presumption of conformity is not available to be
+claimed". The check was about the letter, not the meaning; now it requires the negation
+in the same sentence. The third: I checked that the anchor increases the number of shown
+obligations, and it did not change, because the only obligation that needs
+attestation first needs a signature, and the fixture is unsigned. The test was wrong about the
+fixture, not about the design.
+
+**What I changed in the way of working:** before each stage I read `architecture.md` and
+`plan.md`, and say aloud which seam or pattern I am applying. This roadmap entry exists
+because two corrections to the format could have been avoided.
+
+### RFC 3161: an anchor placed by someone other than the operator (2026-07-30)
+
+A root signature says **who** published the history. It cannot say **when**, because the
+signer chooses the time they sign: a history can be rebuilt today,
+signed today and dated last year, and the signature will check out perfectly. That is exactly
+the forgery an audit trail exists to stop. The tree already had one answer,
+witness attestation, but it requires someone to hold a witness. Now there is the one
+an auditor asks for by name: a token from a public TSA, which can be obtained today and
+verified with any OpenSSL.
+
+**Three new pieces of hand-written parsing**, because the workspace takes no dependencies:
+`trailryx-asn1` (a bounded DER reader), `trailryx-anchor` (TimeStampReq/Resp,
+TSTInfo, a CMS subset, RSA PKCS#1 v1.5 via Montgomery) and `Sha256` in
+`trailryx-crypto`, because **the digest for its own signature is chosen by the TSA**, and it is mostly
+SHA-256, not our SHA-384.
+
+**Decisions that carry weight here:**
+
+- **The PKCS#1 block is built and compared, never parsed.** A verifier that
+  parses it is a Bleichenbacher 2006 signature forgery; whole
+  TLS stacks fell to it. One legal encoding per signed digest, and no
+  tolerance within which a second one can be built.
+- **Trust is a pinned key.** No chain building, no revocation, no EKU, no
+  validity windows. Pinning decides which key to believe, **once and outside the
+  path**, where a human can look at it. The cost is named, not hidden: this code
+  cannot be pointed at an arbitrary TSA and told to work it out itself.
+- **Without a pinned key `verify` returns `Unsupported`, not `Ok(true)`.** A token
+  that is bound to the right root but whose signature nobody checked proves
+  nothing, and the one thing not allowed here is letting it read as
+  attestation. The structural type is called `Claim`, the cryptographic one `Attested`.
+- **The nonce is always sent and always checked.** It is the only thing that tells "the
+  TSA answered my request" from a replay of an old response for the same root, and the root
+  does not change between retries.
+- **This lives OUTSIDE the offline verifier.** That the crate can be read in an hour is the
+  answer to the question "who reviewed your code"; ASN.1 plus CMS plus RSA
+  would double its size.
+
+**What did appear inside the verifier: ninety lines.** They read the token's
+own imprint and check that it commits to **this** root. That is the part
+an auditor cannot do without the pack. The verifier does **not** check the TSA signature
+and says so aloud as a separate finding, together with the command that does check it. Because the
+store has no right to declare by itself that its third-party evidence is valid. But what
+it definitely has no right to do is **describe its own evidence**: a token whose
+imprint is a different root is `BROKEN`, not a note.
+
+The second DER reader in the repository is named as a second reader, not quietly added: two
+readers of the same bytes are two chances to disagree, so a real token from a real
+TSA goes through both, and `trailryx-store/tests/it/anchored.rs` compares what each
+of them read from it.
+
+**The pack format became version 3** (`SECTION_ANCHOR`), and version 2 is read as
+before: a pack written by an older commit must still verify. The bump is needed
+for the other direction: an **old** verifier meeting a new pack will say "unknown
+version", not "unknown section". Both will refuse, but only one says why.
+The **record format did not change**.
+
+**Four defects found by measurement, three of them my own:**
+
+1. My SHA-256 **dropped buffered bytes** when `update` did not complete a block.
+   All published one-shot vectors passed; "abc" one byte at a time gave
+   the digest of "c". The existing SHA-384 protects the same assignment and was never wrong.
+2. CMS puts **`rsaEncryption`** in `signatureAlgorithm`, not
+   `sha256WithRSAEncryption`. Because of that the code rejected every real token as an
+   unsupported algorithm, until a token from `openssl ts -reply` went through it.
+3. The bit-flip sweep **claimed every byte of the token was load-bearing**, and
+   found 73 positions where that is not so. All of them in `digestAlgorithms` and
+   `certificates`, which CMS does not sign. The claim was wrong, not the code, and the fix
+   was `tsp::covered`, which puts the trust boundary into code as byte ranges.
+4. In the verifier's minimal reader I three times used "the value fills the container"
+   where the field is followed by its neighbours. That rejected every real token as
+   not DER.
+
+And one tool error worth recording: a `python` replacement inserted the anchor-record block
+**twice**, because the pattern occurred in the file twice. It was not a review that found it, but a test that
+saw two identical findings where there should have been one.
+
+**The oracle is the point.** OpenSSL stands up a real TSA, issues a real certificate
+and signs a real response, and our hand-written arithmetic verifies it. Then the same
+token is handed to OpenSSL itself to verify, so agreement runs in both directions. No test
+is skipped.
+
+What remains at stage 8: the mapping to Art. 12 AI Act / SR 11-7 / SOC 2 and reproducible
+builds with published seeds.
+
+### Ingestion authentication: the check before the body (2026-07-30)
+
+`AuthProvider` and `Action::Ingest` have existed since stage 1, conformance on them was green,
+and the server called neither. This is not a "future feature": a server that listens on a
+port and writes to the audit store for anyone who reaches it is a ceiling for
+any real deployment, and an honour system written down in the docs does not raise it.
+
+**What matters here is not the rejection code but its moment.** The body is capped at 16 MiB, and the sum of bodies
+in flight at 256 MiB. A check after reading the body would give an unauthenticated call
+the ability to occupy a quarter of a gigabyte of memory at the price of one header line. So the gate
+lives in the pre-body phase, on the head itself.
+
+And this is not "put earlier just in case", it is **measured**. The check sits **before**
+the `Content-Length` parsing, because the first branch of that parsing itself returns `ReadBody` for a
+declared zero length. I moved the gate three lines lower, to where it
+looks just as correct, and ran the suite: an unauthenticated empty export
+got **200**. One test exists for exactly this order, and it is the only one of twelve
+that failed from the move.
+
+A second such trap: `100 Continue` is written inside the `ReadBody` branch, so a gate
+after the verdict would invite a body it was about to reject. A separate test that
+the invitation does not arrive.
+
+**401 and 403 are both non-retryable, and that is a decision, not a consequence.** An exporter with a
+wrong token must stop, not hammer; a fleet that retries a wrong
+token is a fleet attacking its own auth. The only retryable variant, 503, is when the
+**provider** is down, because then the batch must be kept. "Wrong token" and "a scheme we
+do not understand" answer identically: a difference would let one enumerate what the deployment accepts.
+
+**A poisoned mutex refuses.** A provider that panicked poisons the lock, and from then on the
+gate answers 503 to every request. Failing through would be the only mode that
+turns a failure in authentication into an open door, so this branch is written out by hand,
+not reached through `unwrap`. The test poisons the lock on purpose and measures the three
+following requests.
+
+**A routed bind without a gate now does not start.** Before, it only wrote a
+warning to the log, that is, the operator who most needed to see it read it
+least: the line arrives **after** the port is already open. Now it is a refusal, and
+a refusal **before** `TcpListener::bind`, so that the port does not exist even for a moment. The test measures
+exactly this difference: the same address with a gate fails on the socket, not on policy.
+
+**A reference provider exists, because a seam without an implementation is a seam nobody has run.**
+`bearer::SharedSecret` is one secret, presented as `Bearer`. It authenticates the **fleet,
+not the agent**, and says so; the record's identity still comes from
+resource attributes via the mapper, and no second, unattested source of truth
+has appeared next to it. The secret is stored as a **digest**: comparison goes through the existing
+`digests_equal` on two fixed lengths, so neither prefix nor length leaks, and a
+core dump of this process yields the digest, not the working token. It is read from a file, because
+`argv` is visible in `ps`, and the environment is inherited by every child process.
+
+Two more small things that would have been gaps: two `Authorization` fields is a refusal, not a choice
+of one of them (otherwise a proxy that adds its own quietly takes the access over), and
+an empty field value does not reach the provider at all.
+
+Exactly one thing remains at stage 6: gRPC.
+
+### NDJSON: reading the file the collector already writes (2026-07-30)
+
+The question was not "how to implement" but "what is a line". Research and three
+independent designs with a judging panel gave the answer: **one line is one
+OTLP/JSON envelope**, byte for byte what the collector's file exporter writes with
+`format: json` and `compression: none`, and what its own `otlp_json_file` receiver
+reads back. No conversion step: the operator points at a file that already exists.
+
+The alternative was a human-readable event format of our own, which reads better by
+hand, but loses on one deciding point: it needs a **second mapper**. Every
+decision about the plane, the content table, the derivations and the handling of remainders would exist
+in two places, and the schema test in `trailryx-record` sees only one of them. Plus a
+line could assert a verdict that the mapper refuses with an explicitly stated reason:
+an auditor reading `allowed` would reasonably assume the policy engine said so.
+So the JSON decoder yields **the same in-memory structures** as the protobuf decoder,
+and then calls the same `map_span`. Two decoders, one value.
+
+This is also what makes the main test possible: one fixture, described once, encoded
+twice by two **independently written** encoders, read by both readers, and
+the results compared as whole structures. Had the plane boundary been defined twice,
+this test would be what noticed it.
+
+**The JSON is ours too, and that is the part that bites.** A hand-written parser at a trust boundary
+is a liability until it is checked against parsers with no common
+ancestry, so `trailryx-json` is checked against three: V8 in node, CPython and
+Ruby. **222 conformance cases**, the generator committed, every oracle
+classifies them, and divergences are pinned: the set of cases where we disagree with
+CPython is exactly 26, with node exactly 23, and a twenty-seventh breaks the build.
+
+CPython and node disagree **with each other** on 5 of 222, and these five are worth naming,
+because they are the whole map of where the JSON world has still not made up its mind: four are the
+non-standard literals `NaN`, `Infinity` and `-Infinity` in CPython, which V8 rejects and
+we reject, and one is CPython's limit of 4300 digits. On all five we are on the side of the RFC.
+
+Three divergences are ours deliberately, each because a liberal answer would change bytes that
+this store hashes: **a duplicated member name is fatal** (the RFC blesses both
+answers in two different sections, so each parser picks a winner, and
+CVE-2017-12635 is exactly the detail that decided who is an administrator); **a lone
+surrogate is fatal** (Rust does not hold it in a `String`, so any liberal
+path loses data: U+FFFD changes the hash, and truncation is a published privilege
+escalation primitive, because `"superadmin\ud888"` must not become `superadmin`); and **a limit
+is never reported as a syntax error** (RFC 8259 §9 in a single paragraph
+asks to accept every conforming text and permits setting limits, so the tension
+lives in the error type).
+
+Depth is the place where the adversarial review earned its cost, and it is worth saying
+plainly. The first version limited the JSON reader to 25 containers and claimed that this number was
+**derived** from the protobuf reader's limit of 16, so no transport is more liberal than the
+other. That derivation cannot be made correct, and the lens found it failing
+**in both directions at once**: a resource attribute with two levels of array and three levels of
+map the wire rejected and JSON accepted; a span attribute with four levels of array and one level of
+map the wire accepted and JSON rejected. Two transports that disagree on which
+rows become records are two stores.
+
+The arithmetic says why. The wire counts nested **messages** and takes 2 per level of
+`arrayValue` and 3 per level of `kvlistValue`; JSON counts **containers** and takes 3 and 4.
+Two different ratios, so no single container limit coincides with the message limit
+for all mixes.
+
+So parity moved to where it can be exact: the JSON decoder counts OTLP message levels
+the same way the wire reader does, against the same constant, and the container limit
+went back to what it should always have been: a safeguard against hostile
+nesting, not a parity device. The deepest container nesting that a wire-legal
+OTLP value can reach is **27**, measured, so the safeguard
+is set at 32. And the test that missed this is now a grid: the three positions where
+`AnyValue` can sit, across all mixes of the two forms, **144 cases**, and both decoders must
+agree on every one.
+
+Numbers do not pass through a float on input. An OTLP timestamp is routinely larger than
+2^53, and `"9223372036854775808".parse::<u64>()` succeeds and `as i64` then gives
+`i64::MIN`, `1e19 as i64` gives `i64::MAX`, and wrapping accumulation of
+`18446744073709551616` gives 0. Each of these is a failure dressed as a plausible
+value, so there is no float-to-integer conversion on the value path at all, and a test
+checks this by grep.
+
+**An archive and a live file are different sources.** `replay` does not assess clock skew and
+counts that it did not; `tail` assesses it. Reading last week's export without
+this separation marks every record as excessively skewed and produces an anomaly record,
+true about the reader and false about the fleet. The demo binary shows this: the same bytes,
+`skew_not_assessed 4` one way and `excessive_clock_skew 3` the other.
+
+The source also fixes **three defects that its protobuf sibling still carries**,
+each marked in the code with what it fixes: the sum of anomalies is computed over a list
+built by exhaustively destructuring all report structs, so a counter added
+later is a compile error until someone classifies it as a loss
+or a diagnostic (the handwritten sum next to it skips one and therefore never reports a
+batch whose only fault was invalid UTF-8); both identifiers are built
+**before** the reported mark advances, so a construction failure cannot discard a report
+already marked delivered; and the anomaly record is stamped `UNMAPPED`, because no
+mapper touched a record that the store wrote about itself.
+
+**What we do not do, and it is on the "not done" list**: HTTP does not serve JSON
+(`application/json` is still a 415, but the reason changed and the comment in
+`trailryx-ingest` acknowledges this); no gRPC, metrics or logs; no decompression and
+reframing (gzip, zstd and length-prefixed are refused, naming the collector setting
+that produced them); no multi-line JSON; no snake_case keys and
+base64 identifiers, so the output of `otel-cli server json` is refused rather than
+read halfway; no following of rotation; and no persisted resume mark,
+so the source claims at-least-once.
+
+**The adversarial review of the new surface went only partially, and that is recorded as it is.**
+Six lenses, of which four ran; **all 50 skeptic agents failed on 529
+Overloaded**, so the script's summary "14 refuted" is a logic artifact, not a
+verdict. I verified three findings by measurement myself and fixed them:
+
+1. **Critical.** A refusal on the encoding marker swallowed the rest of the buffer. The framer
+   refused inside the stream-opening path, before the chunk was framed
+   or accounted for, so `push` dropped it whole, and the call read on from the next one.
+   Measured: the same 40-kilobyte file behind a UTF-16 marker yielded **0 records
+   when read in 64 KiB pieces, 118 at 16 KiB, 179 at 4 KiB and 199 at two bytes**, and
+   every run reported one or two lost lines. How much of a file reaches
+   the store cannot be a function of the read size. Now the refusal is latched in both
+   layers, the stream yields nothing at any size, and it is counted exactly once.
+2. **High, in two directions at once.** The derivation of the depth limit (see above).
+3. **Medium.** A producer flush inside a multi-byte character was counted as a
+   damaged line. `Utf8Error::error_len()` already distinguishes "the bytes ended
+   inside a valid sequence" from "the sequence is broken", so this cost
+   nothing: the new `Encoding::IncompleteUtf8` is forgiven **only on the last
+   line**, because a cut-off character before the terminator is real damage. Measured
+   before the fix: 19 of the 299 cut points of one Ukrainian-language line produced a
+   `Verdict::Failed` record about a loss that did not happen.
+
+**The skeptics ran on the second attempt**, and three more findings survived them. All three
+are fixed here:
+
+- **`unterminated_final_line` was counted twice.** The latch was a flag that
+  was reset every time the carry buffer emptied, and the framer also empties it when
+  it drops an oversized line. So one line without a terminator was counted twice:
+  once while it was partial under the limit, and again on `finish`. This number
+  goes into the hashed, signed anomaly record, so the operator was told about two
+  truncated lines in a file that had one. Now the latch is keyed on the line number.
+- **A repeated attribute key lost every value after the first.** The filter
+  dropped the **key**, not the occurrence, so `Span::attr` read the first value in
+  metadata while the payload skipped all of them. Measured on a span with two
+  `gen_ai.request.model`: the second model name appeared nowhere. Now a repeat
+  of a metadata key goes to the remainder, and a repeat of a content key gets its own
+  part of the same class, because the remainder is a `Diagnostic` and content must not
+  be reclassified along the way.
+- **My own `prompt_hash` fix was half a fix.** I closed the top level, and the skeptic
+  measured that the collision is alive one level deeper, in the same shape the conventions
+  actually use: `gen_ai.input.messages` is an array of maps, and the limit drops
+  the **part** itself. Now the check is recursive, and deliberately conservative: if
+  any part came in empty, there is no hash at all.
+
+**Open: zero.** All three closed the same day, each with a regression test, and below
+stays a record of what they were and what exactly each meant. Three decisions are worth
+naming, because two of them are decisions about **semantics**, not about code:
+
+- **What `queue_full_stops` means.** It counts **transitions into the stop state**, not the calls
+  rejected while it lasts, and it is classified as **a diagnostic, not a loss**. Both
+  halves were wrong. A full queue is not a loss: the bytes were not read, so they are still
+  with the caller, and the same chunk goes after the drain; an anomaly record that claims a loss
+  that did not happen teaches the operator not to believe one that claims a real one. And "repeats"
+  measure the caller's retry loop, not the store: one who retries every millisecond and one
+  who retries every second would show different numbers under identical conditions, and this is the same class as
+  a test that pinned the machine instead of what it tests. The stop stays visible where
+  it belongs: in the reader's own report, which the binary prints, and in the anomaly breakdown
+  when that is born from another cause. The HTTP surface draws the line in the same place:
+  backpressure there is a 503 to the client, not a record in the store.
+- **What to count `unknown_fields` on.** On the **element**, on both sides. The wire sees
+  one tag per element of a repeated field, and that is a better measure of "how much we did not understand"
+  than one per object member. So the JSON side changed, not the wire, which has had this semantics
+  in service for a long time. An empty unknown array costs **zero**: proto3 JSON omits
+  an empty repeated field, so `[]` and absence are one message. The first attempt
+  put a floor of one there, and the differential test caught it within a minute.
+- **What to do with an id of the wrong length.** **Drop the span, on both transports.**
+  The wire changed, because dropping is the safe side, not just the JSON side: keeping such
+  a span means deriving the run identifier from four bytes of something, and an unreadable
+  `parent_span_id`, read as absent, turns a delegation into the arrival of a request,
+  and that is exactly the defect for which `MAPPER_VERSION` 2 was cut. Absent and zero
+  are each treated as absent, so an emitter that follows the specification loses
+  nothing.
+
+**What was open before this:** The number used to say 6, and it was stale in the very paragraph
+where I wrote about the staleness of status: I counted the candidates **before** three fixes of the same
+day, and one more item ("one about the framer itself") I simply invented, because no candidate
+corresponded to it. Each of the three below is **measured against the current code of 2026-07-30**, not
+counted:
+
+1. **`queue_full_stops` counts call repeats, not the stop** (`jsonl.rs:475`, medium).
+   Measured: filling the queue and submitting the same chunk five times, as the
+   documented recovery prescribes, gives `queue_full_stops = 5` with one real
+   stop. That is, the loss counter grows because the caller does everything right.
+2. **`unknown_fields` counts differently on the two transports** (`otlpjson.rs:281`,
+   medium). Measured on a span with two elements of an unknown repeated field
+   (`links`): the wire says 2, JSON says 1, because one counts per element and the other per member
+   of the object. This is a gap in the same claim, "two decoders, one value", which
+   stands in the README: a differential test on such a legal message will fail.
+3. **The wire accepts an id of any length, while JSON drops the span** (`otlp.rs:411`, low).
+   Measured on a trace_id of four bytes: the wire yields 1 span, JSON yields 0. That is,
+   the two transports disagree on which spans become records, and this is the same class
+   as the already fixed depth limit.
+
+**One candidate closed itself, and that is worth recording:** "a partial line that begins
+in the same read where the previous one ended is not counted" no longer reproduces,
+because the tail latch fix is keyed on the line number, so a new partial line has
+a new number and is counted. Measured: 1, not 0.
+
+A review that did not happen is not a review that found nothing; a review that
+happened partially is closed to the end; and the number of open items is also
+a statement about status, and it goes stale in the same way.
+
+**One staleness of status was found and fixed along the way.** The README said "Stage 6
+has no HTTP or gRPC transport" right up until someone compared it with the crate table
+two sections above, where `trailryx-ingest` stands with 84 tests. A sentence
+about status outlives the work it described unless it is swept out separately.
+
+### Adversarial review of the core (2026-07-30)
+
+The transport went through that review because it was the newest and most exposed code. The core
+had never been through it: **nine lenses, 140 agents, 16 million tokens**, one
+lens for each claim the store makes out loud, each finding
+handed to three skeptics with orders to refute it. 47 candidates, 25
+refuted, **16 survived**: five critical, three high, seven medium, one
+low. Each of the five critical ones had a comment next to it that promised the opposite.
+
+**A single flipped bit in the 20-byte header deleted the journal entirely.**
+Recovery treated a header that failed its CRC the same way as one truncated
+by a crash, and then truncated the file to zero. Measured: five confirmed records,
+one bit in the last byte of the CRC, the file went from 1095 bytes to 20, and the report said
+`records: 0, discarded_bytes: 0, durability_violation: None`, and `is_suspicious()`
+was `false`. Nothing said a record had ever existed. 15 of the 20 header bytes
+did this. The distinction the code lacked: a crash preserves a **prefix**, so behind
+a header that never arrived there can be nothing, and a file longer than the header cannot
+have become so from a crash. Now it refuses, and the bytes are left to the operator. The same
+logic closed a second defect: a bad checksum in an early frame swallowed
+every valid record after it, and reported a routine `TornTail`. A frame that
+still parses after the stopping point proves this was not the tail.
+
+**A completeness proof that claimed zero records could carry as many of them as anyone liked.**
+Binding the empty root closed half of this attack a stage earlier and left
+the other: at `size == 0` every check below is skipped, so records copied
+from another segment were compared with nothing, and `matched()` counted them. The path to
+exploiting it is ordinary operation, not a compromise: close one empty
+segment per shard **before** the root is signed and witnessed (an idle shard is
+normal, the closer calls this `NothingDurable`), and then hang invented records on
+that slot in any query. The offline verifier saw nothing either: a segment of
+zero records passes record-count, history-root and chain-across-segments cleanly. This is
+the **seventh** gap in the same function, and the file's own rule names it: the verifier
+must not learn the shape of the answer from the answer.
+
+**The erasure record published the subject key, and that linked the forgotten person to their
+records from the metadata plane alone.** A manifest row is a hash of the subject key
+and of the destroyed key; the destroyed key is `payload.key_id`, open on every record.
+The subject key in `basis.memory_ref`, also open, made both inputs public,
+so a `for` loop over the store could read off exactly which records belonged to that person. The comment above
+the row function said that this is exactly what it rules out. Worse: a payload sealed
+when the subject was already known went under the **subject key**, so `payload.key_id` was
+the same on all of their records, and the store grouped by subject without a manifest
+at all. Now every payload is under its own record's key, and the record carries a one-way
+tag over the subject key instead of the key: the descriptor's owner can still verify their own
+erasure, and nobody else can count a single row. The demo checks this on a real
+store.
+
+**`forget` dropped the subject's registry row before destroying the keys.** The registry's own
+doc comment forbids this order in so many words. A single `Unavailable` from KMS
+in the middle of the loop was enough: the row was already gone, so the retry that every
+erasure job makes found nothing and wrote `NotApplicable` ("we hold nothing about this
+person"), while three of the four payloads stayed readable, and nowhere was left
+a single key id that was supposed to die. Now destruction comes first, and the row is dropped only when
+all the destructions have gone through; `destroy` is already idempotent, and that is what makes the retry
+correct, and not merely possible.
+
+**A segment that named a shard absent from the pack's list was checked by nothing.**
+The verifier walks top-down from `pack.shards`, and nothing required that every
+parsed section be reached, so appending two sections to a **signed** pack
+put a whole invented shard into it, and the report came out byte for byte the same, together with the
+signature: the signature covers the store root, and the root is derived only from the list
+of shards. An intermediary who cannot forge the root could still add shards
+of favourable records. The traversal is now complete in both directions, and duplicate sections
+are rejected by the parser, because `records_for` returned the first match and the second set
+of records for the real segment was never decoded at all.
+
+Further, in the same pack: a segment of zero records did not have to claim
+`chain_after == chain_before`, so every segment slot was a free splice point,
+and three records were cut out of the middle of a shard with all roots recomputed;
+the sequence was checked for increase, not for continuity, so deleting
+the record with seq 2 out of three produced no finding; witness names are arbitrary UTF-8
+from the party being audited, and were printed as is, one line per finding, so
+a name with line breaks appended findings to the auditor's report, including a
+`root-signature` note naming a key, on a pack with **no signature** (now the signer
+refuses everything except a restricted token, and the verifier escapes what it prints); and
+the issuer could be its own witness, because independence was compared between witnesses and
+never against the signing key.
+
+Outside the store: the stated precondition of the correlation window was inverted for the only
+source that exists. "A parent arrives before its child by construction" is false for
+OpenTelemetry, where a span is exported when it **ends**, and a child ends
+inside its parent, so a batch arrives children first and resolution in arrival
+order found nothing. Measured over a real wire: one parent, one
+child, one batch, and both records came out with no edge. **The causal graph was
+empty for every trace from OTLP.** `adopt_batch` mints all ids and remembers all
+names before resolving even one. A zero span id, which OTLP defines as
+invalid but emitters write anyway, was accepted as a real name, so unrelated
+roots got a parent that was never named and were reclassified as delegations;
+now it is absent in the same way a zero trace id already was, and the version
+of the mapper went to 2 to say so. An unresolved parent is now counted instead of
+vanishing into silence.
+
+All 16 are fixed, each with a regression test. Two fixes made the store
+**stricter with itself** and broke fixtures that had encoded the old behaviour: a segment
+assembled by hand that numbered records 4 and 5 (no journal does that), and a test
+that asserted a redirected journal file is emptied rather than refused.
+
+**What the review did not close, and why.** Two debts run into the frozen
+record schema. A record cannot say "this event named a parent we did not resolve",
+so a reconstruction without that edge cannot lower its own proof; the assembler
+counts a loss instead. And the journal's confirmed-durability mark lives
+only in memory, so after a restart nothing reports a violation against what
+the previous process promised; the destructive paths through which this mattered are closed, but the
+mark itself wants persistence. One deliberate availability trade-off: a journal with a
+damaged middle now refuses to open instead of healing itself by truncation,
+so the store does not start until an operator has looked. For an evidence store this
+is the right side: the previous behaviour started cleanly and had already deleted the evidence.
+
+### Assembly moved out of the demo (2026-07-29)
+
+Both ends of the seam were built and tested before the middle: the source
+emits `Ingest`, the journal takes `Record`, and nothing connected them. One commit
+of wiring lived in the demo binary, which is the wrong place for the missing half
+of a product. Now it is `trailryx-assemble`, and moving it out closed **three real defects**
+that the demo tolerated and the store must not.
+
+**Identities were a counter.** The counter restarts from one along with
+the process, so the first record after a restart claims an identity that is already
+taken, the journal reports a duplicate, and the record is dropped. A silent loss, from
+the one field that must not collide. Now it is a ULID, whose high bits are the record's own
+`recorded_at`, which also makes the index on id usable for range queries by
+time, not only for point lookups. A clock that went backwards does not drag the id
+along with it.
+
+**Every source name it had ever seen was remembered.** The demo lives for a second,
+the receiver for months. The window is now bounded, and a parent that has fallen out of it gives an **absent**
+edge, not a guessed one: a wrong edge in the causality graph is worse than an absent one, because
+an absent one costs the reconstruction its completeness, and the reconstruction says so.
+
+**The order of sealing was the caller's problem.** One had to ask which id
+would be next, seal the payload against it, and hand the reference back. Two
+steps that had to agree, in two places. Now the id is minted first, and
+sealing lives behind a single call.
+
+The crate decides three things and refuses to decide the rest. `seq`, `prev_hash` and
+`segment_id` stay as values that nobody will mistake for real ones, because they are
+stamped by the journal at append, and a plausible number there would be a lie that would survive
+in the record.
+
+One of the tests I wrote was wrong, not the code: a `u64` of nanoseconds gives at most
+18.4e12 milliseconds, and a 48-bit field holds 281e12, so it cannot be overflowed from
+a `Timestamp`. The assertion was corrected to what is true, and it
+stayed as a test, because a defensive clamp looks significant and is not.
+
+### Chaining of segments (2026-07-29)
+
+The biggest debt the demo found is closed. **Shard segments are now one
+chain, across as many files as you like.**
+
+What it was: every journal started its chain from a genesis derived from its own header,
+so deleting a whole segment file left every other file internally valid and the
+shard's history silently shorter. The manifest has carried `chain_before`/`chain_after` for exactly
+this since stage 3, and nobody implemented them. Worse than the bug was that a test
+named `segments_chain_to_one_another` **asserted the opposite** and passed.
+
+What it is now: a continuation segment starts **literally** from the head on which the
+previous one ended. The first segment of a shard still starts from the genesis of its own
+header, so the file cannot be accepted as someone else's; and a continuation file cannot be
+redirected: reopening it under a different predecessor fails the very first record,
+and the bytes are discarded.
+
+I chose this form over the alternative "put the previous head into the header and derive the
+genesis from it". That variant kept the file's cryptographic binding to its own identity
+for all segments, but it dragged in a header format change, `created_at`
+in the manifest, a manifest version and a pack format version. The chosen variant **does not change the
+on-disk format at all**, and identity is held by the header check on open
+(`WrongOwner`), which already existed.
+
+`seal_segment` no longer takes the start of the chain as a parameter. A parameter that
+can have only one correct value is a parameter that can be wrong.
+
+The verifier got its second half. Deleting a segment from the middle of a shard breaks
+the pair; deleting the oldest or the newest does not, so numbering is checked too.
+And it now says outright what it **cannot** check: the first segment
+of a shard starts from a head derived from the journal header, which is not in the pack,
+so that one value is claimed, not proven. Truncating the newest segment
+is caught by the signed root and the witness, not by numbering, and that is already built.
+
+One bug turned up during the fix: `read_all` recomputed the genesis from the header
+instead of using the one the journal actually started from. That was correct while every file
+started from itself, and became wrong the moment a segment could continue
+the previous one.
+
+**Not done**: assembling records from the source (`Assembler`) still lives in the demo.
+
+### The demo, which is also the acceptance criterion (2026-07-29)
 
 ```
 cargo run --release --bin trailryx-demo -- --runs 2
 → ALL EIGHT STEPS PASSED, TWICE
 ```
 
-Вісім кроків, двічі поспіль, із порожньої теки. Нічого не нарисовано: кожен крок
-робить справу і валить прогін, якщо не зробив.
+Eight steps, twice in a row, from an empty directory. Nothing is faked: each step
+does the real work and fails the run if it did not.
 
-Два кроки з восьми **не є** тим, що просив план, і це сказано в самому демо.
-Крок 1 просить блокувати агента: блокування це робота движка політик, а це
-сховище записів, тож демо **записує** інцидент, а не забороняє його. Крок 8
-просить сканування чужим інструментом, якого в цьому проєкті немає; замість нього
-демо читає назад примітиви, які декларує кожен запис, і питає верифікатор, чи
-жоден із них не виведений з обігу.
+Two of the eight steps are **not** what the plan asked for, and the demo says so itself.
+Step 1 asks to block the agent: blocking is the job of a policy engine, and this is
+a record store, so the demo **records** the incident rather than forbidding it. Step 8
+asks for a scan by a third-party tool, which this project does not have; instead
+the demo reads back the primitives that every record declares and asks the verifier whether
+any of them has been withdrawn from use.
 
-**Написання демо знайшло чотири справжні дефекти**, і саме для цього прогін
-кінець-у-кінець існує.
+**Writing the demo found four real defects**, and that is exactly what an end-to-end run
+is for.
 
-Найгірший був тихий. Ланцюг журналу починається **не з нуля**, а з genesis,
-виведеного із заголовка файлу, а `seal_segment` брав будь-який `Hash`, який дасть
-викликач. `Hash::ZERO` компілювався, запечатувався, збирався в пакет і провалювався
-лише в офлайн-верифікаторі, чотири стадії пізніше. **Усі наявні тести запечатування
-передавали те саме хибне значення і проходили.** Тепер початок ланцюга це enum,
-чий простий випадок і є правильний, шов перевіряє, що записи з ним згодні, а тест
-під назвою «segments_chain_to_one_another» замінений на такий, що прямо каже: **сегменти
-шарда поки що не зчеплені між файлами**. Манiфест має `chain_before`/`chain_after`
-саме для цього, а журнал ще не переносить голову через межу файлу.
+The worst one was silent. The journal chain starts **not from zero** but from a genesis
+derived from the file header, while `seal_segment` took any `Hash` the
+caller gave it. `Hash::ZERO` compiled, sealed, got assembled into a pack and failed
+only in the offline verifier, four stages later. **All the existing sealing tests
+passed the same wrong value and stayed green.** Now the chain start is an enum,
+whose plain case is the correct one, the seam checks that the records agree with it, and the test
+named "segments_chain_to_one_another" is replaced by one that says outright: **shard
+segments are not yet chained between files**. The manifest has `chain_before`/`chain_after`
+for exactly this purpose, but the journal does not yet carry the head across a file boundary.
 
-Решта три: пейлоад із OTLP не діставало стирання суб'єкта (правильна поведінка,
-але демо мусило показати атрибуцію, яка це закриває, і тепер показує);
-`Algorithms::default()` казав `es256`, коли підписуємо P-384, тобто запис
-неправильно декларував власні алгоритми, що робить міграцію, для якої ці поля й
-існують, неможливою спланувати; і `Segment::seal` не мав де перевірити
-неперервність, бо канонічний кодек живе з іншого боку шва.
+The other three: subject erasure did not reach the OTLP payload (correct behaviour,
+but the demo had to show the attribution that closes this, and now it does);
+`Algorithms::default()` said `es256` when we sign P-384, so a record
+wrongly declared its own algorithms, which makes the migration those fields exist for
+impossible to plan; and `Segment::seal` had nowhere to check
+continuity, because the canonical codec lives on the other side of the seam.
 
-**Не зроблено**: зчеплення сегментів між файлами; складання записів із джерела
-(`Assembler`) живе в демо і має бути окремим крейтом, і це там написано.
+**Not done**: chaining segments between files; assembling records from the source
+(`Assembler`) lives in the demo and should be a separate crate, and it says so there.
 
-### Транспорт (2026-07-29)
+### Transport (2026-07-29)
 
-Сервер OTLP/HTTP без залежностей: парсер HTTP/1.1, декодер gzip і кодувальник
-protobuf-відповідей усе в крейті. Стокова OTel SDK або OpenTelemetry Collector
-пишуть у нас без змін.
+An OTLP/HTTP server with no dependencies: the HTTP/1.1 parser, the gzip decoder and the encoder
+of protobuf responses are all in the crate. The stock OTel SDK or OpenTelemetry Collector
+write to us unchanged.
 
-Перед першим рядком коду прогнав фан-аут із чотирьох дослідницьких лінз (RFC
-9110/9112, специфікація OTLP/HTTP, вичерпання ресурсів, обмеження нашої кодової
-бази) і синтез у єдиний чекліст на 57 пунктів. **Одне відкриття змінило рішення
-про gzip**: стокові SDK переважно не стискають, але `otlphttp` експортер
-Collector'а стискає за замовчуванням, а агент → колектор → сховище це звичайна
-продакшн-топологія. Відмова від gzip означала б, що стандартний форвардер до нас
-не достукається, а відмова ця 415, тобто неретраїбельна, тобто тиха втрата даних
-на емітенті.
+Before the first line of code I ran a fan-out of four research lenses (RFC
+9110/9112, the OTLP/HTTP specification, resource exhaustion, the constraints of our
+codebase) and a synthesis into a single 57-item checklist. **One finding changed the decision
+about gzip**: stock SDKs mostly do not compress, but the Collector's `otlphttp` exporter
+compresses by default, and agent → collector → store is a normal
+production topology. Refusing gzip would mean a standard forwarder could not
+reach us, and that refusal is a 415, i.e. not retryable, i.e. silent data loss
+at the emitter.
 
-**Чого немає і не буде**, і це написано в доках крейта, а не лишено на догадку:
-TLS, автентифікації, HTTP/2 і отже OTLP через gRPC, chunked-тіл, JSON, метрик і
-логів, пайплайнінгу. Хто дістає до порту, той пише записи, тому дефолтний бінд
-loopback, а маршрутизований оголошує себе на старті.
+**What is not there and will not be**, and this is written in the crate docs, not left to guesswork:
+TLS, authentication, HTTP/2 and hence OTLP over gRPC, chunked bodies, JSON, metrics and
+logs, pipelining. Whoever can reach the port writes records, so the default bind is
+loopback, and a routed one announces itself at startup.
 
-Звідси й строгість парсера: проксі спереду означає два HTTP-парсери підряд, і
-будь-яка їхня незгода про те, де закінчується повідомлення, це smuggling. Тому
-парсер відмовляється мати думку про будь-що двозначне. Тільки CRLF, ніколи
-одиночний LF, хоч RFC і дозволяє його розпізнавати. `Transfer-Encoding` у
-будь-якому вигляді це 501, що видаляє цілу родину замість захисту від неї. Другий
-`Content-Length` це відмова, а не вибір між двома.
+Hence the strictness of the parser: a proxy in front means two HTTP parsers in a row, and
+any disagreement between them about where a message ends is smuggling. So the
+parser refuses to have an opinion about anything ambiguous. CRLF only, never a
+bare LF, even though the RFC permits recognising it. `Transfer-Encoding` in
+any form is a 501, which removes a whole family instead of defending against it. A second
+`Content-Length` is a refusal, not a choice between the two.
 
-30 тестів написані з боку відправника: одиночний LF, другий запит у тому самому
-TCP-записі, тіло, що тече нижче порогу швидкості, кілобайт, що розпаковується в
-чотири мегабайти, більше з'єднань за ліміт, повна черга, обрізане тіло, яке не
-має стати половиною запису.
+30 tests are written from the sender's side: a bare LF, a second request in the same
+TCP write, a body trickling below the speed threshold, a kilobyte that decompresses into
+four megabytes, more connections than the limit, a full queue, a truncated body that
+must not become half a record.
 
-**Ворожий багатоагентний перегляд не відбувся**: усі 18 спроб (6 лінз × 3
-повтори) впали з 529 Overloaded. Перегляд зробив сам, одними очима замість шести,
-і знайшов чотири речі, усі виправлені з регресійними тестами:
+**The adversarial multi-agent review did not happen**: all 18 attempts (6 lenses × 3
+repeats) failed with 529 Overloaded. I did the review myself, with one pair of eyes instead of six,
+and found four things, all fixed with regression tests:
 
-1. `Content-Length: 0` і відсутній заголовок були злиті в одне значення через
-   `unwrap_or(0)`, тож SDK, який шле легітимний порожній експорт із Content-Type,
-   отримував 411 «немає довжини». Він сказав довжину. Довжина була нуль.
-2. Поріг швидкості тіла вимагав, щоб надійшло 8 КіБ, і обрізав час до цілих
-   секунд. Разом це означало, що він не міг спрацювати ~8 секунд, коли всю роботу
-   вже робив дедлайн. Поріг, який не може спрацювати, гірший за відсутній, бо
-   коментар над ним каже інше.
-3. Шлях невдалого spawn логував статус 503, якого нікому не відправляв.
-4. `Instant + Duration` панікує на переповненні, а тривалості приходять із
-   конфігурації.
+1. `Content-Length: 0` and a missing header were merged into one value through
+   `unwrap_or(0)`, so an SDK sending a legitimate empty export with a Content-Type
+   got 411 "no length". It had stated a length. The length was zero.
+2. The body speed threshold required 8 KiB to have arrived and truncated the time to whole
+   seconds. Together that meant it could not fire for ~8 seconds, when the deadline was
+   already doing all the work. A threshold that cannot fire is worse than none, because
+   the comment above it says otherwise.
+3. The failed-spawn path logged status 503, which it never sent to anyone.
+4. `Instant + Duration` panics on overflow, and the durations come from
+   configuration.
 
-**Не зроблено**: gRPC (це HTTP/2, тобто HPACK, кадри і flow control),
-NDJSON-джерела, автентифікації (контракт `AuthProvider` і `Action::Ingest` є,
-сервер їх ще не викликає).
+**Not done**: gRPC (that is HTTP/2, i.e. HPACK, frames and flow control),
+NDJSON sources, authentication (the `AuthProvider` contract and `Action::Ingest` exist,
+the server does not call them yet).
 
-### Підпис і якір (2026-07-29)
+### Signature and anchor (2026-07-29)
 
-Два різні питання, і підпис відповідає лише на перше.
+Two different questions, and the signature answers only the first.
 
-**Підпис каже, чий це корінь.** ECDSA P-384 над SHA-384: один хеш на всю
-систему замість двох, рівні стійкості збігаються, криву підтримують ключосховища
-всіх трьох хмар. Додано `SigAlg::Es384` новим дискримінантом, зміна адитивна.
-Приватний ключ нашого коду не торкається: `trailryx-sign` це сім, і реалізації
-трейта в репозиторії свідомо **немає** - тести ганяють OpenSSL.
+**The signature says whose root this is.** ECDSA P-384 over SHA-384: one hash for the whole
+system instead of two, the strength levels match, the key stores of
+all three clouds support the curve. `SigAlg::Es384` is added as a new discriminant, the change is additive.
+Our code never touches the private key: `trailryx-sign` is a seam, and there is deliberately
+**no** implementation of the trait in the repository - the tests drive OpenSSL.
 
-**Перевірку пишемо самі, і інакше не можна.** Верифікатор має власний P-384:
-близько 500 рядків модульної арифметики, редукція двійковим діленням, бо це та
-версія, яку людина перевіряє очима. Підписування працює з приватним ключем і
-нонсом і має жити за валідованим модулем; перевірка працює лише з публічними
-значеннями, тож витікати їй нічим. Без цього єдиний бінарник, яким аудитор
-перевіряє нас без нас, казав би «підпис є, я його не дивився».
+**We write the verification ourselves, and it cannot be otherwise.** The verifier has its own P-384:
+about 500 lines of modular arithmetic, reduction by binary division, because that is the
+version a person checks by eye. Signing works with the private key and a
+nonce and has to live behind a validated module; verification works only with public
+values, so there is nothing for it to leak. Without this, the single binary an auditor
+uses to check us without us would say "there is a signature, I did not look at it".
 
-Перевірено проти підписів без спільного походження: OpenSSL підписує дванадцятьма
-ключами, ми сходимось на всіх дванадцяти прийняттях і всіх тридцяти шести
-відмовах, і кожен із 768 бітів справжнього підпису перевертається по черзі і
-має бути відхилений.
+Checked against signatures with no common origin: OpenSSL signs with twelve
+keys, we agree on all twelve acceptances and all thirty-six
+rejections, and each of the 768 bits of a genuine signature is flipped in turn and
+must be rejected.
 
-**Свідок каже, коли.** Видавець сам обирає час, який підписує, тож історію можна
-зібрати сьогодні, підписати сьогодні і датувати минулим роком, і підпис
-перевіриться бездоганно. Виключає це лише незалежна сторона, яка каже, що бачила
-корінь. Свідчення це той самий підпис над іншим твердженням, тож верифікатору
-нічого нового вчити, а кілька незалежних свідків сильніші за один авторитет.
-RFC 3161 прийде пізніше ще одним видом квитанції: він потребує ASN.1, CMS і
-ланцюжка сертифікатів, а цьому не місце в крейті, вартість якого в тому, що його
-читають за один присід.
+**The witness says when.** The publisher chooses the time it signs, so a history can be
+assembled today, signed today and dated last year, and the signature will
+verify flawlessly. Only an independent party saying it saw the
+root rules that out. An attestation is the same signature over a different statement, so the verifier
+has nothing new to learn, and several independent witnesses are stronger than one authority.
+RFC 3161 will come later as another kind of receipt: it needs ASN.1, CMS and
+a certificate chain, and that does not belong in a crate whose value is that it
+is read in one sitting.
 
-Пакет із валідним підписом і без жодного свідка все одно отримує зауваження, і
-саме воно звучить як педантизм, поки хтось не спробує.
+A pack with a valid signature and no witness at all still gets a remark, and
+that remark sounds like pedantry until somebody tries it.
 
-Перевірено кінець-у-кінець: бінарник прочитав підписаний пакет і назвав ключі;
-зміна однієї літери лишила підпис валідним (видавець справді підписав той
-корінь) і завалила все під ним; зміна самого кореня завалила підпис.
+Checked end to end: the binary read a signed pack and named the keys;
+changing one letter left the signature valid (the publisher really did sign that
+root) and failed everything under it; changing the root itself failed the signature.
 
-**Не зроблено**: RFC 3161 TSA, мапінгу на ст. 12 AI Act / SR 11-7 / SOC 2,
-відтворюваних збірок.
+**Not done**: RFC 3161 TSA, a mapping to Art. 12 AI Act / SR 11-7 / SOC 2,
+reproducible builds.
 
-### Заморозка ядра (2026-07-29)
+### Core freeze (2026-07-29)
 
-Заморожено: формат журналу і кадрування, канонічний кодек, форма ланцюга,
-структури індексу, форми доказів (включення, узгодженість, повнота, композиція),
-набір доказових вимірів, формат маніфеста сегмента.
+Frozen: the journal format and framing, the canonical codec, the shape of the chain,
+the index structures, the proof shapes (inclusion, consistency, completeness, composition),
+the set of proof dimensions, the segment manifest format.
 
-Зміна будь-чого з цього це **зміна формату**: потрібна нова версія, міграція
-і окреме рішення. Причина не бюрократична: сегменти незмінні після запечатування,
-а корені публікуються й ідуть аудитору, тож зміна форми доказу означає, що вже
-видані докази перестають перевірятись.
+Changing any of this is a **format change**: it needs a new version, a migration
+and a separate decision. The reason is not bureaucratic: segments are immutable once sealed,
+and roots are published and go to the auditor, so changing the shape of a proof means that proofs already
+issued stop verifying.
 
-**Доказових вимірів п'ять**, і п'ятий (`id`) доданий свідомо на етапі 5, бо
-`caused_by` називає записи за id, і замикання, яке не може провести власні
-ребра доказово, це половина фічі.
+**There are five proof dimensions**, and the fifth (`id`) was added deliberately in stage 5, because
+`caused_by` names records by id, and a closure that cannot prove its own
+edges is half a feature.
 
-**Два свідомо відкладені борги**, обидва записані в коді:
+**Two deliberately deferred debts**, both recorded in the code:
 
-1. Діапазонна відповідь несе доказ включення на кожен запис, тобто повний
-   діапазон це O(n²) хешувань. Виправлення це мультидоказ по суміжному
-   діапазону, і воно чекає на бенчмарк, щоб було чим міряти, що воно допомогло.
-2. Відсортованість індексу припускається, а не доводиться. Закривається офлайн-
-   верифікатором на етапі 8: він перебудує індекс із записів сегмента і звірить
-   корені. Сегменти незмінні, тож один аудит діє вічно.
+1. A range response carries an inclusion proof for every record, so a full
+   range is O(n²) hashing. The fix is a multiproof over a contiguous
+   range, and it waits for a benchmark so there is something to measure that it helped.
+2. The sortedness of the index is assumed, not proven. It is closed by the offline
+   verifier in stage 8: it will rebuild the index from the segment's records and compare
+   the roots. Segments are immutable, so one audit holds forever.
 
 ---
 
-## Три віхи
+## Three milestones
 
-Чотирнадцять етапів не рівноправні. Групуються у три релізні точки:
+The fourteen stages are not equal. They are grouped into three release points:
 
-| Віха | Етапи | Що всередині | Критерій |
+| Milestone | Stages | What is inside | Criterion |
 |---|---|---|---|
-| **A. «Доказ»** (v0.1) | 0-5, 7, 8 + мінімальний NDJSON Source | один вузол, локальна ФС, без SQL і хмар | усі вісім кроків демо, двічі поспіль, з нуля |
-| **B. «Сумісність»** (v0.2) | 6, 9, 10 | OTLP і семконв, Parquet-проєкції, SQL із `WITH PROOF` | чужий агент пише без змін у ньому; Grafana підключається як до Postgres |
-| **C. «Масштаб»** (v0.3) | 11, 12, 13 | об'єктні сховища і WORM, федерація, мультихмарна валідація | запит через дві хмари дає коректний спільний доказ |
+| **A. "Proof"** (v0.1) | 0-5, 7, 8 + a minimal NDJSON Source | one node, local FS, no SQL and no clouds | all eight steps of the demo, twice in a row, from scratch |
+| **B. "Compatibility"** (v0.2) | 6, 9, 10 | OTLP and semconv, Parquet projections, SQL with `WITH PROOF` | a foreign agent writes into it without changes; Grafana connects as to Postgres |
+| **C. "Scale"** (v0.3) | 11, 12, 13 | object stores and WORM, federation, multi-cloud validation | a query across two clouds yields a correct joint proof |
 
-**Публікувати репозиторій після віхи A.** Вона самодостатня, а кроки 3 і 7 демо
-(запит із доказом повноти; стирання людини, після якого пакет далі верифікується)
-показують те, чого не покаже ніхто.
+**Publish the repository after milestone A.** It is self-sufficient, and steps 3 and 7 of the demo
+(a query with a completeness proof; erasure of a person, after which the pack still verifies)
+show what nobody else will show.
 
-Перші реальні витрати з'являються у віхі C (бокси на прогін), кожна за окремою згодою.
-
----
-
-## Три правила порядку
-
-1. **Спершу те, що не вкручується потім.** Каркас DST і модель шардингу
-   неможливо додати в готове ядро. Тому вони перші, до першого рядка журналу.
-2. **Спершу правда, потім зручність.** Журнал, індекс і докази робляться до
-   будь-яких адаптерів, SQL і хмар. Адаптер до незрілого ядра доводиться писати двічі.
-3. **Заморозка після етапу 5.** Далі формат журналу й індексу не змінюється без
-   окремого рішення й міграції.
-
-**Що наше, а що чуже** (детально в §«Межа» нижче): наш увесь движок (журнал,
-індекс, докази, шардинг, симулятор, стирання). Чужі три речі: криптопримітиви
-(валідовані за FIPS), рушій SQL (DataFusion) і формати обміну (Parquet, Arrow).
-Жодна з них не є фундаментом: вимкни їх, і база працює далі.
+The first real costs appear in milestone C (boxes per run), each one requiring separate consent.
 
 ---
 
-## Етап 0. Каркас детермінізму і шардів
+## Three ordering rules
 
-**Наше: 100%.**
+1. **What cannot be bolted on later comes first.** The DST skeleton and the sharding model
+   cannot be added to a finished core. So they come first, before the first line of the journal.
+2. **Truth first, then convenience.** The journal, index and proofs are built before
+   any adapters, SQL and clouds. An adapter for an immature core has to be written twice.
+3. **Freeze after stage 5.** After that the journal and index format does not change without
+   a separate decision and a migration.
 
-- Трейти `Clock`, `Rng`, `Io`, `Net` і `Shard`. Реальні реалізації і симульовані.
-- Свій тонкий реактор, **два рівноправні бекенди**: `io_uring` (де дозволено)
-  і `epoll` (hardened-ядра, керовані Kubernetes-платформи, seccomp-профілі
-  контейнерних рантаймів, розробка на macOS). Обидва за тим самим трейтом `Io`,
-  обидва проходять однакові тести довговічності.
-- Каркас **thread-per-core**: N однопотокових шардів, обмін lock-free повідомленнями.
-  Кількість шардів фіксується щедро при створенні store, міграція володіння між
-  ядрами дозволена, **ре-спліт ніколи** (ідентичність шарда входить у доказові шляхи).
-- Симулятор: керований seed, вставляння крашів і збоїв у довільній точці,
-  запис і відтворення seed'а однією командою.
-- Механіка assert'ів: інваріанти, що лишаються ввімкненими **в релізі**.
-
-**Готово, коли:** порожнє ядро з двома шардами проганяється симулятором;
-один seed дає **побайтово ідентичний** прогін двічі; краш у довільній точці
-відтворюється командою.
-
-**Чому тут:** ін'єктовані інтерфейси і межі шардів неможливо вкрутити пізніше.
+**What is ours and what is foreign** (details in §"Boundary" below): all of the engine is ours (journal,
+index, proofs, sharding, simulator, erasure). Three things are foreign: crypto primitives
+(FIPS-validated), the SQL engine (DataFusion) and the exchange formats (Parquet, Arrow).
+None of them is a foundation: switch them off and the database keeps working.
 
 ---
 
-## Етап 1. Модель запису і контракти
+## Stage 0. Determinism and shard skeleton
 
-**Наше: 100%.**
+**Ours: 100%.**
 
-- Канонічний **decision record**: чотири часи, `basis`, `caused_by[]`,
-  `payload_ref`, `outcome`, поля гнучкості алгоритмів (`hash_alg`, `sig_alg`,
+- Traits `Clock`, `Rng`, `Io`, `Net` and `Shard`. Real implementations and simulated ones.
+- Our own thin reactor, **two equal backends**: `io_uring` (where permitted)
+  and `epoll` (hardened kernels, managed Kubernetes platforms, seccomp profiles of
+  container runtimes, development on macOS). Both behind the same `Io` trait,
+  both pass the same durability tests.
+- A **thread-per-core** skeleton: N single-threaded shards, exchanging lock-free messages.
+  The number of shards is fixed generously when the store is created; migrating ownership between
+  cores is allowed, **re-split never** (a shard's identity is part of the proof paths).
+- Simulator: a controlled seed, injection of crashes and faults at an arbitrary point,
+  recording and replaying a seed with one command.
+- Assertion mechanics: invariants that stay enabled **in release**.
+
+**Done when:** an empty core with two shards runs through the simulator;
+one seed gives a **byte-identical** run twice; a crash at an arbitrary point
+is replayed by a command.
+
+**Why here:** injected interfaces and shard boundaries cannot be bolted on later.
+
+---
+
+## Stage 1. Record model and contracts
+
+**Ours: 100%.**
+
+- Canonical **decision record**: four times, `basis`, `caused_by[]`,
+  `payload_ref`, `outcome`, algorithm-agility fields (`hash_alg`, `sig_alg`,
   `kem_alg`, `key_id`), `seq` / `prev_hash` / `segment_id`.
-- JSON Schema + корпус конформанс-тестів.
-- **Контракти L1**: `Source`, `Sink`, `ObjectStore`, `KeyProvider`, `Anchor`,
+- JSON Schema + a corpus of conformance tests.
+- **L1 contracts**: `Source`, `Sink`, `ObjectStore`, `KeyProvider`, `Anchor`,
   `TableProvider`, `AuthProvider`, `Peer`.
-- Конформанс-набір **для адаптерів** (пишеться разом із контрактами, не після).
-- Фіксація **доказових вимірів**: час, `agent_id`, `run_id`, тип події.
-- **Межа площин** (§5.2 г плану): метадані тільки типізовані поля; будь-який вільний
-  текст, включно з нерозпізнаними атрибутами OTel, лише в шифрованій пейлоад-площині.
-- **Прохід у стилі DPIA по кожному полю канону**: що це, чи може бути персональним,
-  у якій площині лежить.
+- A conformance suite **for adapters** (written together with the contracts, not after).
+- Fixing the **proof dimensions**: time, `agent_id`, `run_id`, event type.
+- **Plane boundary** (§5.2 g of the plan): metadata is typed fields only; any free
+  text, including unrecognised OTel attributes, only in the encrypted payload plane.
+- **A DPIA-style pass over every field of the canon**: what it is, whether it can be personal,
+  which plane it lives in.
 
-**Готово, коли:** схема v1 заморожена; конформанс зелений, і в ньому є тест
-**«жодного поля вільного тексту в метаданій площині»**, який провалює збірку;
-набір доказових вимірів записаний як рішення (він визначає сортування сегментів,
-потім не змінюється); DPIA-таблиця по полях заповнена.
+**Done when:** schema v1 is frozen; conformance is green, and it contains a test
+**"no free-text field in the metadata plane"**, which fails the build;
+the set of proof dimensions is recorded as a decision (it determines the sorting of segments,
+and does not change afterwards); the per-field DPIA table is filled in.
 
-**Чому тут:** усе подальше залежить від форми запису; змінити її після етапу 3
-означає міграцію всіх даних.
-
----
-
-## Етап 2. Журнал: запис і відновлення
-
-**Наше: 100%. Це движок, частина перша.**
-
-- Формат запису: довжина, CRC, самоописність, версія формату в кожному сегменті.
-- Append-only шлях запису на шард, буферизація, батчинг.
-- **Письмовий контракт довговічності**: що саме, коли і як скидається; що ми
-  обіцяємо після `ack`. `fsync` **повз io_uring**, як у PostgreSQL.
-- Відновлення після краху: неповний хвіст відкидається **явно і гучно**.
-- Хеш-ланцюг на **SHA-384**, один ланцюг на шард, продовжується після рестарту.
-- Дедуплікація `(source, agent_id, run_id, seq)`, лічильник прогалин.
-
-**Готово, коли:** симулятор із крашами, частковими записами, збрехлим `fsync`,
-повним диском і побитим сектором **не знаходить втрати підтверджених записів**;
-прогалина в ланцюгу завжди стає записом, ніколи не тишею.
-
-**Чому тут:** журнал це джерело правди; усе решта похідне.
+**Why here:** everything that follows depends on the shape of the record; changing it after stage 3
+means migrating all the data.
 
 ---
 
-## Етап 3. Сегменти, Merkle, підписи
+## Stage 2. Journal: write and recovery
 
-**Наше: 100%, крім підписів (aws-lc-rs).**
+**Ours: 100%. This is the engine, part one.**
 
-- Закриття сегмента, Merkle-дерево, маніфест.
-- Підпис сегмента: ES256 зараз, ML-DSA-65 гібридно (за unstable-прапорцем aws-lc-rs).
-- Атомарна публікація локально (`rename` у межах тому).
-- Ущільнення (merge) сегментів **без зміни істини**: журнал недоторканий.
+- Record format: length, CRC, self-description, a format version in every segment.
+- An append-only write path per shard, buffering, batching.
+- **A written durability contract**: what exactly is flushed, when and how; what we
+  promise after `ack`. `fsync` **bypassing io_uring**, as in PostgreSQL.
+- Crash recovery: an incomplete tail is discarded **explicitly and loudly**.
+- A hash chain on **SHA-384**, one chain per shard, continued after restart.
+- Deduplication on `(source, agent_id, run_id, seq)`, a gap counter.
 
-**Готово, коли:** перевірка одного запису коштує log(n); зміна будь-якого байта
-в сегменті виявляється; ущільнення не змінює жодного доказу.
+**Done when:** a simulator with crashes, partial writes, a lying `fsync`,
+a full disk and a corrupted sector **finds no loss of acknowledged records**;
+a gap in the chain always becomes a record, never silence.
 
----
-
-## Етап 4. Автентифікований індекс
-
-**Наше: 100%. Це движок, частина друга, і головний диференціатор.**
-
-- **Merkle history tree** (модель CT, RFC 6962): доказ, що журнал тільки доповнювався.
-- **Відсортований Merkle-індекс на сегмент** по доказових вимірах: докази
-  включення **і не-включення** через сусідні листки.
-- Складання цих двох у **доказ повноти** відповіді.
-- **Одна рекурсія композиції** на всі рівні: `запис → сегмент → шард → store →
-  федерація`, корінь рівня це Merkle над коренями рівня нижче. Пишеться тут один раз;
-  федерація на етапі 12 лише додає транспорт і реєстр пірів.
-- **Корінь епохи = Merkle над коренями всіх шардів**, тому зовнішній якір потрібен
-  один на store, а не по одному на шард.
-
-**Готово, коли:** приховування одного запису **ламає доказ**; ворожі сценарії
-симулятора (вилучення, підміна, перестановка, повтор старого сегмента) не проходять
-непоміченими; запит по двох шардах дає коректний спільний доказ.
-
-**Чому тут:** це причина, з якої пишеться власний движок. Прикрутити пізніше неможливо.
+**Why here:** the journal is the source of truth; everything else is derived.
 
 ---
 
-## Етап 5. Наша поверхня читання (заморозка ядра)
+## Stage 3. Segments, Merkle, signatures
 
-**Наше: 100%.**
+**Ours: 100%, except signatures (aws-lc-rs).**
 
-- Точковий і діапазонний запит по доказових вимірах, з проштовхуванням у індекс.
-- **Реконструкція run**: обхід причинного DAG, причинне замикання.
-  **Обхід міжшардовий**: ланцюг делегування (`on_behalf_of`, `parent_run_id`)
-  з'єднує різних агентів, тобто різні шарди, тож `causal_closure()` композує
-  докази з кількох шардів. Це проєктується тут, а не виявляється на етапі 12.
-- `as_of`: бітемпоральна резолюція, рівно один активний рядок на (s, p) в будь-який момент.
-- Прапорець доказовості в **кожній** відповіді: `proof: full | partial` з переліком,
-  що доведено, а що ні.
+- Segment closing, Merkle tree, manifest.
+- Segment signature: ES256 now, ML-DSA-65 as a hybrid (behind the aws-lc-rs unstable flag).
+- Atomic local publication (`rename` within a volume).
+- Compaction (merge) of segments **without changing the truth**: the journal stays untouched.
+
+**Done when:** verifying a single record costs log(n); a change of any byte
+in a segment is detected; compaction changes no proof.
+
+---
+
+## Stage 4. Authenticated index
+
+**Ours: 100%. This is the engine, part two, and the main differentiator.**
+
+- **Merkle history tree** (the CT model, RFC 6962): proof that the journal was only appended to.
+- **Sorted Merkle index per segment** over the provable dimensions: proofs of
+  **inclusion and non-inclusion** via neighbouring leaves.
+- Composing these two into a **completeness proof** of the answer.
+- **One composition recursion** for all levels: `record → segment → shard → store →
+  federation`; a level's root is a Merkle tree over the roots of the level below. It is written here once;
+  federation at stage 12 only adds the transport and the peer registry.
+- **Epoch root = Merkle tree over the roots of all shards**, so one external anchor is needed
+  per store, not one per shard.
+
+**Done when:** hiding a single record **breaks the proof**; the simulator's hostile scenarios
+(removal, substitution, reordering, replay of an old segment) do not pass
+unnoticed; a query across two shards gives a correct joint proof.
+
+**Why here:** this is the reason a custom engine is being written. It cannot be bolted on later.
+
+---
+
+## Stage 5. Our read surface (core freeze)
+
+**Ours: 100%.**
+
+- Point and range queries over the provable dimensions, with pushdown into the index.
+- **Run reconstruction**: a walk of the causal DAG, causal closure.
+  **The walk is cross-shard**: the delegation chain (`on_behalf_of`, `parent_run_id`)
+  connects different agents, that is, different shards, so `causal_closure()` composes
+  proofs from several shards. This is designed here, not discovered at stage 12.
+- `as_of`: bitemporal resolution, exactly one active row per (s, p) at any moment.
+- Provability flag in **every** answer: `proof: full | partial` with a list of
+  what is proven and what is not.
 - REST + CLI.
 
-**Готово, коли:** реконструкція run на мільйоні записів < 1 с; жодна відповідь
-не виходить без прапорця доказовості.
+**Done when:** reconstruction of a run over a million records takes < 1 s; no answer
+leaves without a provability flag.
 
-**Далі формат журналу й індексу заморожено.**
-
----
-
-## Етап 6. Прийом даних
-
-**Наше: шлях прийому. Чуже: протоколи.**
-
-- Внутрішній API прийому → перший `Source`: HTTP + NDJSON.
-  **Перші живі дані для демо**: NDJSON-події TokenFuse через **той самий generic-адаптер**,
-  нарівні з будь-яким чужим джерелом. Зв'язності це не створює (адаптер не знає,
-  чий це потік), а демо отримує реальні дані замість синтетики.
-- Далі **OTLP** (gRPC + HTTP) як первинний зовнішній вхід.
-- Мапер OTel GenAI semconv: стабільна частина мапиться в типізовані поля, решта
-  **дослівно, але в шифровану пейлоад-площину** (§5.2 г плану). Мапер, який не знає,
-  куди покласти атрибут, кладе його в шифровану площину, ніколи в метадані.
-- Рівень довіри на джерело: `occurred_at` від емітента позначається недовіреним,
-  `recorded_at` завжди наш, розбіжність понад поріг стає подією.
-- Fail-open щодо трафіку емітента, але **втрата запису сама стає записом**.
-- **Автентифікація на поверхні прийому**: `AuthProvider` викликається до читання
-  тіла, `Action::Ingest` авторизується проти тенанта, deny by default. Зроблено
-  2026-07-30, деталі вище.
-
-**Готово, коли:** чужий агент зі стандартною OTel-інструментацією пише в нас
-**без жодної зміни в ньому**; конформанс на реальному OTLP-потоці зелений.
+**From here on, the journal and index format is frozen.**
 
 ---
 
-## Етап 7. Крипта, ключі, стирання
+## Stage 6. Ingestion
 
-**Наше: механіка. Чуже: примітиви (aws-lc-rs, FIPS 140-3).**
+**Ours: the ingestion path. Others': the protocols.**
 
-- Ієрархія ключів: **DEK на кожен пейлоад** (AES-256-GCM), DEK загорнутий під KEK
-  через **HPKE з гібридним X25519 + ML-KEM-768**.
-- **Суб'єкт у момент запису зазвичай невідомий**: KEK суб'єктний, якщо суб'єкт відомий,
-  інакше тенантний. Пізніша атрибуція це **re-wrap** DEK під суб'єктний KEK і знищення
-  старої обгортки, причому **обидві дії є подіями ланцюга**, не тихою операцією над KMS.
-- `KeyProvider`: файл (dev) і **AWS KMS** (референсна реалізація).
-- `forget`: знищення суб'єктного KEK + `erasure`-запис у ланцюг; пейлоади, що лишились
-  під тенантним KEK, стираються окремою операцією за списком, і список теж запис.
-- Ворожі тести: після `forget` спроба відновити пейлоад **усіма** шляхами
-  (проєкції, кеші, експорт, бекап, лог реплікації).
+- Internal ingestion API → first `Source`: HTTP + NDJSON.
+  **First live data for the demo**: TokenFuse NDJSON events through **the same generic adapter**,
+  on a par with any foreign source. This creates no coupling (the adapter does not know
+  whose stream it is), and the demo gets real data instead of synthetic data.
+- Then **OTLP** (gRPC + HTTP) as the primary external input.
+- OTel GenAI semconv mapper: the stable part maps into typed fields, the rest
+  **verbatim, but into the encrypted payload plane** (§5.2 g of the plan). A mapper that does not know
+  where to put an attribute puts it in the encrypted plane, never in the metadata.
+- Trust level per source: `occurred_at` from the emitter is marked untrusted,
+  `recorded_at` is always ours, a divergence beyond a threshold becomes an event.
+- Fail-open with respect to the emitter's traffic, but **the loss of a record itself becomes a record**.
+- **Authentication on the ingestion surface**: `AuthProvider` is called before the body
+  is read, `Action::Ingest` is authorized against the tenant, deny by default. Done
+  2026-07-30, details above.
 
-**Готово, коли:** стерте не відновлюється жодним шляхом; ланцюг після стирання
-**лишається верифіковним**; факт стирання сам є записом.
-
-**Чому тут, а не раніше:** поля схеми (`kem_alg`, `key_id`) стоять з етапу 1,
-але механіка спирається на стабільний журнал і сегменти.
-
----
-
-## Етап 8. Докази назовні
-
-**Наше: 100%.**
-
-- **Evidence pack**: самодостатній, самоописний, із усіма доказами й підписами.
-- **Офлайн-верифікатор** окремим бінарником, **без залежності від Trailryx**.
-  **Мінімізація TCB**: окремий crate з мінімумом залежностей, написаний так, щоб
-  людина прочитала його за годину. Це пряма відповідь на питання аудитора
-  «хто перевірив ваш код» (Р6 плану).
-- **Відтворювані збірки і опубліковані DST-сіди**: будь-хто відтворює наш прогін
-  і наш бінарник побайтово. **Зроблено 2026-07-30**: `sim/corpus.tsv`,
-  `scripts/reproduce.sh`, `docs/reproducing.md`; деталі вище.
-- Мапінг на ст. 12 AI Act / SR 11-7 / SOC 2 **окремим версіонованим шаром**.
-  **Зроблено 2026-07-30**, `trailryx-compliance`, плюс prEN ISO/IEC 24970 як
-  профільний документ; деталі вище.
-- `Anchor`: RFC 3161 TSA (референсна реалізація). **Зроблено 2026-07-30**, деталі
-  вище: довіра через закріплений ключ, повна перевірка поза верифікатором, а в
-  верифікаторі девʼяносто рядків на привʼязку до кореня.
-
-**Готово, коли:** пакет перевіряється на машині, де Trailryx ніколи не стояв;
-верифікатор ніколи не викидає підтримку старого алгоритму, лише позначає слабким.
+**Done when:** a third-party agent with standard OTel instrumentation writes to us
+**with no change in it**; conformance on a real OTLP stream is green.
 
 ---
 
-## Етап 9. Проєкції і експорт
+## Stage 7. Crypto, keys, erasure
 
-**Наше: генерація і перебудова. Чуже: формат (Parquet).**
+**Ours: the mechanics. Others': the primitives (aws-lc-rs, FIPS 140-3).**
 
-- Експорт у **Parquet без втрат**, сам по собі верифіковний.
-- Перебудова проєкції **з журналу з нуля**, детерміновано.
-- Рівні зберігання: гарячий (NVMe) → теплий → холодний.
+- Key hierarchy: **a DEK per payload** (AES-256-GCM), the DEK wrapped under a KEK
+  via **HPKE with hybrid X25519 + ML-KEM-768**.
+- **The subject is usually unknown at write time**: the KEK is per subject if the subject is known,
+  otherwise per tenant. Later attribution is a **re-wrap** of the DEK under the subject KEK and destruction of the
+  old wrapped key, and **both actions are chain events**, not a silent operation on the KMS.
+- `KeyProvider`: file (dev) and **AWS KMS** (reference implementation).
+- `forget`: destruction of the subject KEK + an `erasure` record in the chain; payloads that remained
+  under the tenant KEK are erased by a separate operation from a list, and the list is also a record.
+- Hostile tests: after `forget`, an attempt to recover the payload by **every** path
+  (projections, caches, export, backup, replication log).
 
-**Готово, коли:** проєкція, викинута цілком, відновлюється з журналу
-**побайтово однаково**; експорт читається чужим інструментом без нашого коду.
+**Done when:** what was erased cannot be recovered by any path; the chain after erasure
+**remains verifiable**; the fact of erasure is itself a record.
 
-**Чому тут:** SQL (етап 10) читає проєкції, тож вони мають існувати раніше.
-
----
-
-## Етап 10. SQL-фасад
-
-**Чуже: рушій (DataFusion). Наше: `TableProvider` і розширення.**
-
-- DataFusion + **наш `TableProvider`** з `supports_filters_pushdown`:
-  предикати по доказових вимірах ідуть **у наш індекс**, а не в скан.
-- **Фізична ізоляція рантаймів**: фасад на tokio живе у виділених потоках,
-  не на ядрах шардів, читає тільки проєкції і знімки, спілкується з ядром каналами.
-- **Друга незалежна реалізація верифікатора** іншою мовою (Go або Python), що читає
-  той самий пакет: дві реалізації, які сходяться, доводять формат, а не автора (Р6).
-- **pgwire**: протокол Postgres → Grafana, Metabase, Superset, DBeaver, psql,
-  будь-який драйвер у день релізу.
-- Розширення діалекту: `AS OF TIMESTAMP`, `WITH PROOF`, `causal_closure()`.
-- Заборонено: `INSERT` через SQL. Запис лише через `Source`.
-
-**Готово, коли:** Grafana підключається як до Postgres; `WITH PROOF` повертає доказ;
-**вимкнення SQL цілком не ламає ядро** (перевіряється тестом збірки без DataFusion).
+**Why here and not earlier:** the schema fields (`kem_alg`, `key_id`) have been in place since stage 1,
+but the mechanics rest on a stable journal and segments.
 
 ---
 
-## Етап 11. Об'єктне сховище і мультихмара
+## Stage 8. Proofs outward
 
-**Наше: логіка. Чуже: SDK хмар.**
+**Ours: 100%.**
 
-- `ObjectStore`: локальна ФС, **S3**, GCS, Azure Blob, MinIO.
-- **Атомарна публікація без координатора**: S3 `If-None-Match`,
-  GCS `ifGenerationMatch`, Azure ETag. Ні etcd, ні Consul.
-- WORM опційно: S3 Object Lock, retention policy GCS, immutable blobs Azure.
+- **Evidence pack**: self-contained, self-describing, with all proofs and signatures.
+- **Offline verifier** as a separate binary, **with no dependency on Trailryx**.
+  **TCB minimisation**: a separate crate with a minimum of dependencies, written so that
+  a person can read it in an hour. This is a direct answer to the auditor's question
+  "who verified your code" (R6 of the plan).
+- **Reproducible builds and published DST seeds**: anyone can reproduce our run
+  and our binary byte for byte. **Done 2026-07-30**: `sim/corpus.tsv`,
+  `scripts/reproduce.sh`, `docs/reproducing.md`; details above.
+- Mapping to Art. 12 of the AI Act / SR 11-7 / SOC 2 as a **separate versioned layer**.
+  **Done 2026-07-30**, `trailryx-compliance`, plus prEN ISO/IEC 24970 as a
+  profile document; details above.
+- `Anchor`: RFC 3161 TSA (reference implementation). **Done 2026-07-30**, details
+  above: trust via a pinned key, full verification outside the verifier, and in the
+  verifier ninety lines for binding to the root.
 
-**Готово, коли:** сегмент публікується атомарно в трьох хмарах; подвійна публікація
-неможлива; симулятор із помилками умовного запису не створює розбіжності.
-
----
-
-## Етап 12. Федерація
-
-**Наше: 100%.**
-
-- `Peer`, віяловий запит, **композиція доказів** (та сама конструкція, що між шардами).
-- **Підписаний реєстр пірів**: без нього відповідь `proof: partial (peer set unattested)`.
-- Verified replication: приймач **перевіряє ланцюг** перед прийняттям.
-- Обчислення їдуть до даних (міжхмарний egress це гроші).
-
-**Готово, коли:** запит через два середовища дає коректний спільний доказ;
-**«забутий» пір ламає доказ повноти**, а не проходить тихо.
+**Done when:** a pack is verified on a machine where Trailryx was never installed;
+the verifier never drops support for an old algorithm, it only marks it as weak.
 
 ---
 
-## Етап 13. Валідація і реліз
+## Stage 9. Projections and export
 
-- Тривалий DST-прогін: еквівалент років роботи без порушення інваріантів.
-- **Реальний kill-прогін на ext4 і xfs**: симулятор це модель, а справжній диск
-  бреше по-своєму. Доповнення до DST, не заміна.
-- Прогін на **обох бекендах вводу-виводу** (io_uring і epoll) з однаковим результатом.
-- Мультихмарний прогін демо (вісім кроків §9 плану) **двічі поспіль з нуля**.
-- `qryx scan --policy cnsa` на власному сховищі без порушень.
-- Фаззинг усіх парсерів; `cargo audit` у CI.
-- `VALIDATION.md` з реальними числами. README у стилі естейту.
+**Ours: generation and rebuild. Others': the format (Parquet).**
+
+- Lossless export to **Parquet**, itself verifiable.
+- Rebuilding a projection **from the journal from scratch**, deterministically.
+- Storage tiers: hot (NVMe) → warm → cold.
+
+**Done when:** a projection that is thrown away entirely is restored from the journal
+**byte for byte identically**; the export is read by a third-party tool without our code.
+
+**Why here:** SQL (stage 10) reads projections, so they must exist earlier.
 
 ---
 
-## Межа «наше / чуже», коротко
+## Stage 10. SQL facade
 
-| Шар | Хто пише | Чому |
+**Others': the engine (DataFusion). Ours: `TableProvider` and the extensions.**
+
+- DataFusion + **our `TableProvider`** with `supports_filters_pushdown`:
+  predicates over the provable dimensions go **into our index**, not into a scan.
+- **Physical isolation of runtimes**: the tokio-based facade lives on dedicated threads,
+  not on the shard cores, reads only projections and snapshots, and talks to the core over channels.
+- **A second independent implementation of the verifier** in another language (Go or Python), reading
+  the same pack: two implementations that agree prove the format, not the author (R6).
+- **pgwire**: the Postgres protocol → Grafana, Metabase, Superset, DBeaver, psql,
+  any driver on release day.
+- Dialect extensions: `AS OF TIMESTAMP`, `WITH PROOF`, `causal_closure()`.
+- Forbidden: `INSERT` through SQL. Writes only through `Source`.
+
+**Done when:** Grafana connects as to Postgres; `WITH PROOF` returns a proof;
+**turning SQL off entirely does not break the core** (verified by a build test without DataFusion).
+
+---
+
+## Stage 11. Object storage and multi-cloud
+
+**Ours: the logic. Others': the cloud SDKs.**
+
+- `ObjectStore`: local FS, **S3**, GCS, Azure Blob, MinIO.
+- **Atomic publication without a coordinator**: S3 `If-None-Match`,
+  GCS `ifGenerationMatch`, Azure ETag. No etcd, no Consul.
+- WORM optional: S3 Object Lock, GCS retention policy, Azure immutable blobs.
+
+**Done when:** a segment is published atomically in three clouds; double publication
+is impossible; the simulator with conditional-write errors creates no divergence.
+
+---
+
+## Stage 12. Federation
+
+**Ours: 100%.**
+
+- `Peer`, fan-out query, **proof composition** (the same construction as between shards).
+- **Signed peer registry**: without it the answer is `proof: partial (peer set unattested)`.
+- Verified replication: the receiver **verifies the chain** before accepting.
+- Computation travels to the data (cross-cloud egress is money).
+
+**Done when:** a query across two environments gives a correct joint proof;
+**a "forgotten" peer breaks the completeness proof** instead of passing silently.
+
+---
+
+## Stage 13. Validation and release
+
+- Long DST run: the equivalent of years of operation with no invariant violated.
+- **Real kill run on ext4 and xfs**: the simulator is a model, and a real disk
+  lies in its own way. A supplement to DST, not a replacement.
+- Run on **both I/O backends** (io_uring and epoll) with the same result.
+- Multi-cloud demo run (the eight steps of §9 of the plan) **twice in a row from scratch**.
+- `qryx scan --policy cnsa` on our own storage with no violations.
+- Fuzzing of all parsers; `cargo audit` in CI.
+- `VALIDATION.md` with real numbers. README in the estate style.
+
+---
+
+## Boundary: ours and others', in brief
+
+| Layer | Who writes it | Why |
 |---|---|---|
-| Журнал, сегменти, ущільнення | **ми** | це і є движок |
-| Автентифікований індекс, докази | **ми** | такого немає ні в кого |
-| Шардинг, реактор, DST-симулятор | **ми** | від них залежать усі гарантії |
-| Бітемпоральність, причинність, стирання | **ми** | семантика продукту |
-| Evidence pack, верифікатор | **ми** | наша відповідальність перед аудитором |
-| Криптопримітиви | aws-lc-rs | власна крипта = катастрофа; цінність саме у **валідації FIPS** |
-| Рушій SQL | DataFusion | 740 комітів і 139 контриб'юторів на 11 тижнів; наша перевага не тут |
-| Parquet, Arrow | Apache | це формати **обміну**; свій рідер зруйнував би сенс |
+| Journal, segments, compaction | **us** | this is the engine itself |
+| Authenticated index, proofs | **us** | nobody else has this |
+| Sharding, reactor, DST simulator | **us** | all the guarantees depend on them |
+| Bitemporality, causality, erasure | **us** | product semantics |
+| Evidence pack, verifier | **us** | our responsibility to the auditor |
+| Crypto primitives | aws-lc-rs | own crypto = catastrophe; the value lies precisely in **FIPS validation** |
+| SQL engine | DataFusion | 740 commits and 139 contributors in 11 weeks; our edge is not here |
+| Parquet, Arrow | Apache | these are **exchange** formats; our own reader would defeat the point |
 
-Жодне із запозиченого не є фундаментом. Вимкни SQL, Parquet і зовнішній KMS,
-і база далі пише, доводить і стирає. Це і є перевірка того, що движок наш.
+None of the borrowed parts is a foundation. Turn off SQL, Parquet and the external KMS,
+and the database still writes, proves and erases. That is the check that the engine is ours.

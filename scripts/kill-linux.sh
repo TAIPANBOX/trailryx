@@ -24,12 +24,12 @@
 # has been done.
 set -e
 
-echo "=== встановлюю інструменти файлових систем"
+echo "=== installing the filesystem tools"
 apt-get update -qq >/dev/null 2>&1
 apt-get install -y -qq xfsprogs e2fsprogs cmake clang >/dev/null 2>&1
 echo "    ok: $(mkfs.xfs -V 2>&1 | head -1), $(mkfs.ext4 -V 2>&1 | head -1)"
 
-echo "=== збираю trailryx-kill під linux/aarch64"
+echo "=== building trailryx-kill for linux/aarch64"
 cd /src
 cargo build --release --bin trailryx-kill 2>&1 | tail -3
 
