@@ -1035,6 +1035,61 @@ fn a_shadowed_budget_refusal_is_a_policy_decision_that_allowed_the_call() {
     assert_eq!(unit.meta.run_id.as_str(), "run-web-1");
 }
 
+/// The DLP scanner in shadow mode: personal data found in a prompt that went
+/// through (agent-passport SPEC 6.2, `dlp_shadow`, 2026-10-14). Kinds and
+/// counts only; the producer never puts a matched span in the event.
+const TOKENFUSE_DLP_SHADOW: &str = concat!(
+    r#"{"schema":"taipanbox.dev/agent-event/v0.2","ts":"2026-10-14T13:40:13Z","#,
+    r#""source":"tokenfuse","type":"dlp_shadow","severity":"medium","#,
+    r#""agent_id":"agent://acme.example/lab/pii-prompt","run_id":"run-pii-1","#,
+    r#""data":{"summary":"2 pii finding(s): pii_card, pii_email","#,
+    r#""counts":{"pii_card":1,"pii_email":1},"mode":"shadow","unit":"lab"}}"#,
+);
+
+/// The DLP finding on a prompt the gateway let through maps the way the
+/// firewall's and the Breaker's shadow findings do: the call went through.
+#[test]
+fn a_shadow_dlp_finding_is_a_policy_decision_that_allowed_the_call() {
+    let unit = map(OURS, TOKENFUSE_DLP_SHADOW).expect("a dlp shadow finding must map");
+    assert_eq!(unit.meta.event_type, EventType::PolicyDecision);
+    assert_eq!(
+        unit.meta.verdict,
+        Some(Verdict::Allowed),
+        "the prompt reached the provider; a record saying it was refused would be false"
+    );
+    assert_eq!(unit.meta.error, None, "nothing was refused");
+    assert_eq!(unit.meta.severity, Severity::Warning, "`medium` is Warning");
+    assert_eq!(unit.meta.mapper, MAPPER_VERSION);
+    assert_eq!(unit.meta.run_id.as_str(), "run-pii-1");
+    let payload = payload_text(&unit);
+    assert!(
+        payload.contains("pii_email") && payload.contains("\"mode\":\"shadow\""),
+        "kinds, counts and mode travel in the payload plane: {payload}"
+    );
+}
+
+/// The reserved subject for a caller that named no agent (SPEC 6.2,
+/// 2026-10-14) is no agent: it is refused as `NoAgent`, never as a foreign
+/// trust domain, which would hold the cursor and send an operator to fix a
+/// configuration that is not wrong (invariant 42).
+#[test]
+fn the_reserved_unidentified_caller_is_no_agent_rather_than_a_foreign_domain() {
+    let refused_key = concat!(
+        r#"{"schema":"taipanbox.dev/agent-event/v0.2","ts":"2026-10-14T13:00:00Z","#,
+        r#""source":"tokenfuse","type":"identity_mismatch","severity":"high","#,
+        r#""agent_id":"agent://unidentified.invalid/caller","run_id":"run-scan","#,
+        r#""data":{"reason":"unknown_key","key_fingerprint":"sha256:0123456789abcdef","#,
+        r#""agent_id":null,"unreported_since_last":0}}"#,
+    );
+    for domain in [OURS, SPEC_DOMAIN] {
+        assert_eq!(
+            map(domain, refused_key).map(|_| ()),
+            Err(Rejection::NoAgent),
+            "under {domain}"
+        );
+    }
+}
+
 /// Same band, different verdict: `breaker_tripped` and `breaker_shadow` are
 /// both `medium` at the producer, so volume does not tell them apart here and
 /// the verdict has to. A reader counting refusals reads `Denied`; one sizing a
