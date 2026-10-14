@@ -400,7 +400,22 @@ use trailryx_record::{
 /// past it, so the trail of money waiting on a person starts at 112. A reader
 /// who finds no hold before it is looking at a reader that could not write one
 /// down, not at a gateway that never lost an answer.
-pub const MAPPER_VERSION: MapperVersion = MapperVersion(112);
+///
+/// 113 is the reading that maps `dlp_shadow`, the DLP scanner's finding on a
+/// prompt the gateway let through (agent-passport SPEC 6.2, 2026-10-14), the
+/// `taint_shadow` and `breaker_shadow` reading for a third family. The same
+/// argument once more: a shadow DLP finding written before this reading was an
+/// unknown type, refused and counted, so the trail of prompts that carried a
+/// secret or personal data to a provider starts at 113.
+pub const MAPPER_VERSION: MapperVersion = MapperVersion(113);
+
+/// The one subject agent-passport SPEC 6.2 reserves for a caller that named no
+/// agent (2026-10-14), e.g. a key scan TokenFuse refused for its client key.
+/// It is refused here as [`Rejection::NoAgent`], which is the fact: the line
+/// names no agent, and the trust domain under `.invalid` is no tenant's, so it
+/// must not read as [`Rejection::ForeignTrustDomain`], the refusal that holds a
+/// cursor (invariant 42) and sends an operator to fix `--trust-domain`.
+pub const UNIDENTIFIED_CALLER: &str = "agent://unidentified.invalid/caller";
 
 /// The schema values this reader accepts.
 ///
@@ -727,6 +742,21 @@ fn mapping_for(kind: &str) -> Option<Mapping> {
             None,
             Severity::Warning,
         ),
+        // The DLP scanner found a secret or personal data in a prompt and the
+        // gateway let it through, as written (`shadow`) or redacted (`mask`)
+        // (agent-passport SPEC 6.2, `dlp_shadow`, 2026-10-14). The
+        // `taint_shadow` reading for the scanner: a control was consulted and
+        // the call went through, so `Allowed` is the fact and `Denied` would
+        // tell an auditor the prompt never left. The kinds and counts, the
+        // mode and the unit stay in the payload plane; the producer never puts
+        // a matched span in the event at all. `medium` is `Warning`, the band
+        // tokenfuse fixes, one below `dlp_block`'s.
+        "dlp_shadow" => m(
+            EventType::PolicyDecision,
+            Some(Verdict::Allowed),
+            None,
+            Severity::Warning,
+        ),
         "dlp_block" | "taint_block" => m(
             EventType::PolicyDecision,
             Some(Verdict::Denied),
@@ -1038,6 +1068,12 @@ pub fn map_line(cfg: &EnvelopeConfig, line: &[u8], cursor: Cursor) -> Result<Ing
         && AgentId::parse_strict(inner).is_ok()
     {
         return Err(Rejection::ClaimedSubject);
+    }
+
+    // The reserved subject for a caller that named no agent is no agent, and is
+    // counted as one before the trust-domain comparison could call it foreign.
+    if parsed.agent_id.as_deref() == Some(UNIDENTIFIED_CALLER) {
+        return Err(Rejection::NoAgent);
     }
 
     // Strict, because this is the ingest door and not the journal reading back
