@@ -63,6 +63,19 @@ pub enum Method {
     Other,
 }
 
+impl Method {
+    /// The method as it was spelled on the wire. `Other` has no single
+    /// spelling and answers the empty string, which no proof of possession
+    /// names: a credential bound to a method is never bound to that one.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Post => "POST",
+            Self::Get => "GET",
+            Self::Other => "",
+        }
+    }
+}
+
 /// A parsed head. The body is read separately, after the caller has decided
 /// whether it wants one.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -70,6 +83,11 @@ pub struct Head {
     pub method: Method,
     /// Percent-decoded once, after grammar validation.
     pub path: String,
+    /// The same path as the request line carried it, still percent-encoded and
+    /// without the query. What a proof of possession is signed over: decoding
+    /// first would make `/v1%2Ftraces` and `/v1/traces` one URL, and they are
+    /// two.
+    pub raw_path: String,
     /// `None` when the request carried no `Content-Length` at all.
     ///
     /// Deliberately not collapsed into zero. "I am sending nothing" and "I
@@ -86,6 +104,9 @@ pub struct Head {
     /// what stops the HTTP layer growing an opinion about credential formats.
     /// It is also why nothing in this crate ever logs it.
     pub authorization: Option<Vec<u8>>,
+    /// The `DPoP` field value (RFC 9449), verbatim, opaque here for the same
+    /// reason the credential is.
+    pub dpop: Option<Vec<u8>>,
     pub expect_continue: bool,
     pub close_requested: bool,
 }
@@ -553,12 +574,13 @@ fn parse_head(head: &[u8], config: &Config) -> Result<Head, Reject> {
     if !method.iter().copied().all(is_tchar) || method.is_empty() {
         return Err(Reject::new(Status::BadRequest, "the method is not a token"));
     }
-    let path = parse_target(target)?;
+    let (path, raw_path) = parse_target(target)?;
 
     let mut content_length: Option<u64> = None;
     let mut content_type: Option<Vec<u8>> = None;
     let mut content_encoding: Option<Vec<u8>> = None;
     let mut authorization: Option<Vec<u8>> = None;
+    let mut dpop: Option<Vec<u8>> = None;
     let mut expect: Option<Vec<u8>> = None;
     let mut host_seen = 0usize;
     let mut close_requested = false;
@@ -655,6 +677,17 @@ fn parse_head(head: &[u8], config: &Config) -> Result<Head, Reject> {
                 ));
             }
             authorization = Some(value.to_vec());
+        } else if name.eq_ignore_ascii_case(b"dpop") {
+            // RFC 9449 section 4.3, check one: not more than one. The same
+            // reasoning as two credentials: choosing is how a proof the sender
+            // did not mean gets read.
+            if dpop.is_some() {
+                return Err(Reject::new(
+                    Status::BadRequest,
+                    "two DPoP fields; a request carries one proof",
+                ));
+            }
+            dpop = Some(value.to_vec());
         } else if name.eq_ignore_ascii_case(b"expect") {
             if expect.is_some() {
                 return Err(Reject::new(Status::ExpectationFailed, "two Expect fields"));
@@ -709,12 +742,14 @@ fn parse_head(head: &[u8], config: &Config) -> Result<Head, Reject> {
             Method::Other
         },
         path,
+        raw_path,
         // Never inferred from the method, from Content-Type, or from bytes
         // sitting in the buffer.
         declared_length: content_length,
         content_type,
         content_encoding,
         authorization,
+        dpop,
         expect_continue,
         close_requested,
     })
@@ -754,7 +789,7 @@ fn split_request_line(line: &[u8]) -> Result<RequestLine<'_>, Reject> {
 /// Asterisk-form is for `OPTIONS *` and authority-form is for `CONNECT`, and
 /// this server implements neither, so accepting either shape would be accepting
 /// a request it has no code to answer.
-fn parse_target(target: &[u8]) -> Result<String, Reject> {
+fn parse_target(target: &[u8]) -> Result<(String, String), Reject> {
     let path_and_query: &[u8] = if target[0] == b'/' {
         target
     } else {
@@ -787,8 +822,13 @@ fn parse_target(target: &[u8]) -> Result<String, Reject> {
     // traversal sequence cannot reach anything: it simply matches nothing and
     // becomes a 404. That is why there is no normalisation step here, and there
     // must not be one added.
-    String::from_utf8(decoded)
-        .map_err(|_| Reject::new(Status::BadRequest, "the request target is not valid UTF-8"))
+    let decoded = String::from_utf8(decoded)
+        .map_err(|_| Reject::new(Status::BadRequest, "the request target is not valid UTF-8"))?;
+    // Printable ASCII by the loop above, so this cannot fail and is not a
+    // second decoding: the bytes are kept as they arrived.
+    let raw = String::from_utf8(path.to_vec())
+        .map_err(|_| Reject::new(Status::BadRequest, "the request target is not ASCII"))?;
+    Ok((decoded, raw))
 }
 
 fn strip_scheme(target: &[u8]) -> Result<&[u8], Reject> {

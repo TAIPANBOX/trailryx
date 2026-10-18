@@ -34,7 +34,7 @@ reason, and read by nothing. The eighteenth arrived on 6 August, for a scratch
 directory two runs of one test binary were sharing without either of them knowing.
 
 What a row may state, and it is a narrow licence: **what the check is set to do, and
-what it refuses to see.** A parameter (200 seeds, 300 cases, 13 targets, 16 corpus
+what it refuses to see.** A parameter (200 seeds, 300 cases, 16 targets, 16 corpus
 rows) moves only when somebody edits the check, and a zero the check refuses to move
 past is the check itself. An *output* moves on its own, so a test count and a digest
 are named here rather than quoted, and live where something owns them. Two rows below
@@ -61,7 +61,7 @@ violation, the exact opposite of the 0 standing beside it.
 | Durability sweep | 200 seeds, 0 violations | `./scripts/durability-sweep.sh` |
 | Two verifiers, one verdict | agree on every pack | `cargo test -p trailryx-store --test it two_verifiers::` |
 | Verifier build reproducibility | same binary from two paths | `./scripts/reproduce.sh` |
-| Parsers under hostile bytes | 13 targets, 300 cases each, 0 panics | `cargo test -p trailryx-fuzz` |
+| Parsers under hostile bytes | 16 targets, 300 cases each, 0 panics, and for the P-256 verifier and the agent-token verifier, no input but the exact corpus bytes accepted | `cargo test -p trailryx-fuzz` |
 | The durability check can fail | a lying `fsync` is caught | `cargo test -p trailryx-core --test determinism` |
 | README numbers | the badge, the quoted total, every crate row, the rows' sum, the dependency count for the host it runs on, the image tag it tells people to pull, the stage badge against the roadmap, and no other tracked file stating a dependency count of its own | `./scripts/readme-numbers.sh` |
 | Configuration fields nothing reads | 0, across every `Config`, `Limits` and `Policy` struct in the workspace. How many fields that is moves on its own, so the check prints it rather than this page quoting it | `./scripts/config-fields.sh` |
@@ -1437,6 +1437,15 @@ Stated so the absence is visible rather than inferred:
   is something a deployer reads rather than infers.
 - **An external audit of the cryptographic layer.** Planned before the first
   compliance contract, and not started.
+- **The agent-token door against a token vouchryx itself minted.** Every token and
+  proof this repository has verified came from the estate's shared table (minted by
+  agent-stack-go's test signer), from `tests/make_door_fixtures.py`, or from the
+  live run's own pure-Python signer. Agreement with vouchryx is inferred from the
+  table, which vouchryx's verifiers also answer, and has not been run.
+- **Two agent-token doors behind one balancer.** The replay cache is per process,
+  so a proof used at one can be presented once at the other inside its sixty
+  seconds. Stated where the cache is defined and in `SECURITY.md`; not measured,
+  because there is nothing to measure until a deployment shares state.
 
 ---
 

@@ -21,7 +21,7 @@
 //! those two is the entire trust model.
 
 use crate::otlp::{Dropped, Limits, decode_trace_request};
-use crate::semconv::{MAPPER_VERSION, MapperConfig, Report, map_span};
+use crate::semconv::{MAPPER_VERSION, MapperConfig, Rejection, Report, map_span};
 use std::collections::VecDeque;
 use trailryx_contracts::contracts::{
     AdapterResult, Delivery, Ordering, Source, SourceDescriptor, Trust,
@@ -84,6 +84,35 @@ impl OtlpSource {
     /// emitter is told its batch was accepted whatever we made of it, and what
     /// we made of it is in the counters.
     pub fn accept(&mut self, encoded: &[u8], recorded_at: Timestamp) -> usize {
+        self.accept_as(encoded, recorded_at, None)
+    }
+
+    /// [`Self::accept`], from a caller whose identity the door has verified.
+    ///
+    /// `caller` is the agent the transport proved is sending: at the agent-token
+    /// door, the `sub` of that agent's own access token. A span whose agent is
+    /// anybody else is refused, because the attributes that name a span's agent
+    /// are the sender's to choose, and writing them as given would let one
+    /// agent's credential put records in every other agent's name. That
+    /// includes the deployment's default agent, so a span that names nobody is
+    /// not a way past the check either.
+    ///
+    /// The refusal is not silent, twice over. It is counted as
+    /// [`crate::semconv::Report::not_the_caller`], which [`Self::anomaly_event`]
+    /// writes down with every other loss. And it becomes one record of its own
+    /// per batch, under the caller's name, in the run the first refused span
+    /// named, so a reader following that agent or that run finds the attempt
+    /// where it happened (invariant 34's rule for a plane that will not keep
+    /// something).
+    ///
+    /// `None` is the fleet door: no caller is known, and every span is mapped
+    /// as it always was.
+    pub fn accept_as(
+        &mut self,
+        encoded: &[u8],
+        recorded_at: Timestamp,
+        caller: Option<&AgentId>,
+    ) -> usize {
         let Ok(request) = decode_trace_request(encoded, self.limits) else {
             self.wire.malformed_batches = self.wire.malformed_batches.saturating_add(1);
             return 0;
@@ -100,6 +129,7 @@ impl OtlpSource {
         self.merge_dropped(request.dropped);
 
         let mut produced = 0;
+        let mut refused: Vec<(AgentId, RunId)> = Vec::new();
         for resource_spans in &request.resource_spans {
             for scope in &resource_spans.scopes {
                 for span in &scope.spans {
@@ -111,6 +141,12 @@ impl OtlpSource {
                         span,
                         cursor,
                     ) {
+                        Ok(ingest)
+                            if caller.is_some_and(|caller| ingest.meta.agent_id != *caller) =>
+                        {
+                            self.report.note(Rejection::NotTheCaller);
+                            refused.push((ingest.meta.agent_id, ingest.meta.run_id));
+                        }
                         Ok(ingest) => {
                             self.next_cursor += 1;
                             self.report.mapped = self.report.mapped.saturating_add(1);
@@ -131,7 +167,69 @@ impl OtlpSource {
                 }
             }
         }
+        if let Some(caller) = caller
+            && !refused.is_empty()
+        {
+            let note = self.refusal_note(caller, &refused, recorded_at);
+            self.pending.push_back(note);
+        }
         produced
+    }
+
+    /// One record saying a batch was refused spans that named somebody else.
+    ///
+    /// Typed fields only in the metadata plane, as invariant 5 requires: the
+    /// caller, the run, the event type, a severity and a verdict. The names the
+    /// refused spans claimed, and their runs, go to the payload plane with
+    /// everything else a sender chose, identifiers or not.
+    fn refusal_note(
+        &mut self,
+        caller: &AgentId,
+        refused: &[(AgentId, RunId)],
+        recorded_at: Timestamp,
+    ) -> Ingest {
+        let mut detail = format!(
+            "spans_refused\t{}\nreason\tnot_the_caller\ncaller\t{}\n",
+            refused.len(),
+            caller.as_str()
+        );
+        for (agent, run) in refused {
+            detail.push_str(&format!("named\t{}\t{}\n", agent.as_str(), run.as_str()));
+        }
+        detail.push_str(&format!("mapper_version\t{}\n", MAPPER_VERSION.0));
+
+        let cursor = Cursor(self.next_cursor);
+        self.next_cursor += 1;
+        Ingest {
+            meta: MetaDraft {
+                mapper: MAPPER_VERSION,
+                tenant: self.cfg.tenant().clone(),
+                agent_id: caller.clone(),
+                // The run the first refused span named, so the attempt is found
+                // where it was aimed. Never empty: `refused` is not.
+                run_id: refused[0].1.clone(),
+                parent_run_id: None,
+                on_behalf_of: Vec::new(),
+                // The store speaking, so the clock is ours.
+                occurred_at: Untrusted::new(recorded_at),
+                decided_at: None,
+                event_type: EventType::StoreEvent,
+                severity: Severity::Warning,
+                basis: Basis::default(),
+                verdict: Some(Verdict::Denied),
+                error: None,
+                latency_micros: None,
+                tokens_in: None,
+                tokens_out: None,
+                cost_micros: None,
+            },
+            payload: vec![PayloadPart::new(
+                PayloadClass::Diagnostic,
+                detail.into_bytes(),
+            )],
+            correlation: None,
+            cursor,
+        }
     }
 
     fn merge_dropped(&mut self, other: Dropped) {
@@ -203,6 +301,7 @@ impl OtlpSource {
              unknown_operation\t{}\n\
              no_run_id\t{}\n\
              no_agent\t{}\n\
+             not_the_caller\t{}\n\
              excessive_clock_skew\t{}\n\
              malformed_batches\t{}\n\
              dropped_spans\t{}\n\
@@ -216,6 +315,7 @@ impl OtlpSource {
             self.report.unknown_operation,
             self.report.no_run_id,
             self.report.no_agent,
+            self.report.not_the_caller,
             self.report.excessive_skew,
             self.wire.malformed_batches,
             self.dropped.spans,

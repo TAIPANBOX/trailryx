@@ -4240,6 +4240,7 @@ dependencies = [
  "trailryx-azure",
  "trailryx-http",
  "trailryx-index",
+ "trailryx-ingest",
  "trailryx-journal",
  "trailryx-json",
  "trailryx-otlp",
@@ -4272,8 +4273,10 @@ version = "1.2.1"
 dependencies = [
  "trailryx-contracts",
  "trailryx-crypto",
+ "trailryx-json",
  "trailryx-otlp",
  "trailryx-record",
+ "trailryx-verify",
 ]
 
 [[package]]
@@ -4408,6 +4411,9 @@ dependencies = [
 [[package]]
 name = "trailryx-verify"
 version = "1.2.1"
+dependencies = [
+ "trailryx-json",
+]
 
 [[package]]
 name = "try-lock"

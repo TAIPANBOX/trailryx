@@ -30,13 +30,24 @@
 //! open door, and it is the reason the poisoned arm is written out rather than
 //! reached with `unwrap`.
 //!
+//! # Binding records to the caller
+//!
+//! A gate built with [`Gate::binding_records_to_the_caller`] does one more
+//! thing once a request is allowed: it reads the principal as an agent and
+//! hands that agent onward, and every record the request produces must be
+//! that agent's. It is the agent-token door's gate. A provider whose principal
+//! names a fleet, like the shared secret, is never behind one: its principal
+//! is not an agent, so a binding gate would refuse every request it allowed,
+//! which is the safe direction for a misconfiguration to fail in.
+//!
 //! [`Config::max_body`]: crate::config::Config::max_body
 //! [`Config::max_inflight_body`]: crate::config::Config::max_inflight_body
 
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
-use trailryx_contracts::contracts::{Action, AdapterError, AuthProvider, Decision};
+use trailryx_contracts::contracts::{Action, AdapterError, AuthProvider, Decision, RequestContext};
+use trailryx_record::AgentId;
 
 use crate::response::{Response, Status};
 
@@ -49,11 +60,13 @@ use crate::response::{Response, Status};
 pub enum Outcome {
     /// Authenticated and permitted. The caller carries on to the body.
     ///
-    /// The principal is deliberately not returned. Nothing on the ingest path
-    /// needs it: a record's identity comes from the OTLP resource attributes
-    /// through the mapper, and letting the transport supply an identity instead
-    /// would put a second, unattested source of truth next to the first.
-    Allow,
+    /// `caller` is set only by a gate that binds records to their caller, and
+    /// then it is the agent every record in this request must belong to. It is
+    /// a check on the identity the mapper derives from the spans, never a
+    /// replacement for it: a span naming someone else is refused, not
+    /// renamed, because a renamed record would carry an attribution nobody
+    /// made.
+    Allow { caller: Option<AgentId> },
     /// Refused. The response is final and the connection closes with it.
     Refuse(Response),
 }
@@ -75,6 +88,11 @@ pub struct Gate {
     denied: AtomicU64,
     unavailable: AtomicU64,
     poisoned: AtomicBool,
+    /// Whether an allowed principal must be an agent, and every record in the
+    /// request that agent's.
+    binds: bool,
+    /// The `WWW-Authenticate` value a 401 carries.
+    challenge: &'static str,
 }
 
 impl std::fmt::Debug for Gate {
@@ -86,6 +104,7 @@ impl std::fmt::Debug for Gate {
             .field("denied", &self.denied.load(Ordering::Relaxed))
             .field("unavailable", &self.unavailable.load(Ordering::Relaxed))
             .field("poisoned", &self.poisoned.load(Ordering::Relaxed))
+            .field("binds", &self.binds)
             .finish()
     }
 }
@@ -111,7 +130,30 @@ impl Gate {
             denied: AtomicU64::new(0),
             unavailable: AtomicU64::new(0),
             poisoned: AtomicBool::new(false),
+            binds: false,
+            challenge: "Bearer",
         }
+    }
+
+    /// Require every allowed principal to be an agent, and hand it onward so
+    /// that every record the request produces is that agent's.
+    ///
+    /// Consuming, like [`crate::handler::Ingest::with_auth`]: a gate whose
+    /// binding could be switched off while it runs is a gate that can be
+    /// talked out of it.
+    pub fn binding_records_to_the_caller(mut self) -> Self {
+        self.binds = true;
+        self
+    }
+
+    /// The scheme a 401 names. `Bearer` unless a provider takes another one.
+    pub fn with_challenge(mut self, challenge: &'static str) -> Self {
+        self.challenge = challenge;
+        self
+    }
+
+    pub fn binds_records(&self) -> bool {
+        self.binds
     }
 
     pub fn scope(&self) -> &str {
@@ -128,23 +170,39 @@ impl Gate {
         }
     }
 
+    /// [`Self::decide_request`] for a request that carried nothing but an
+    /// `Authorization` field, for the callers and tests that have only that.
+    pub fn decide(&self, credential: Option<&[u8]>) -> Outcome {
+        let fields: Vec<(&str, &[u8])> = credential
+            .map(|value| ("authorization", value))
+            .into_iter()
+            .collect();
+        self.decide_request(&RequestContext {
+            method: "POST",
+            path: "/",
+            headers: &fields,
+        })
+    }
+
     /// Authenticate, then authorise `Ingest` against the fixed scope.
     ///
-    /// The credential is the `Authorization` field value verbatim, undecoded.
-    /// This crate does not parse it and no message here ever quotes it: an error
-    /// body that echoed a credential would write it into whatever log collects
-    /// exporter failures.
-    pub fn decide(&self, credential: Option<&[u8]>) -> Outcome {
-        let credential = match credential {
-            Some(bytes) if !bytes.is_empty() => bytes,
+    /// The provider sees the request through [`RequestContext`]; one written
+    /// before that existed sees the `Authorization` field value verbatim,
+    /// undecoded, exactly as it did. This crate does not parse a credential and
+    /// no message here ever quotes one: an error body that echoed a credential
+    /// would write it into whatever log collects exporter failures.
+    pub fn decide_request(&self, request: &RequestContext<'_>) -> Outcome {
+        match request.header("authorization") {
+            Some(bytes) if !bytes.is_empty() => {}
             // Absent, or present and empty. Both mean nothing was offered.
             _ => {
                 self.no_credential.fetch_add(1, Ordering::Relaxed);
-                return Outcome::Refuse(Response::unauthorized(
+                return Outcome::Refuse(Response::unauthorized_with(
                     "this endpoint requires an Authorization field",
+                    self.challenge,
                 ));
             }
-        };
+        }
 
         let Ok(mut provider) = self.provider.lock() else {
             self.poisoned.store(true, Ordering::Relaxed);
@@ -155,7 +213,7 @@ impl Gate {
             ));
         };
 
-        let principal = match provider.authenticate(credential) {
+        let principal = match provider.authenticate_request(request) {
             Ok(principal) => principal,
             // Transient, and ours rather than the caller's. 503 is retryable and
             // says so, which is what an exporter should do while a token service
@@ -173,17 +231,35 @@ impl Gate {
             // neither answer says which of the two it was.
             Err(AdapterError::Rejected(_) | AdapterError::Unsupported(_)) => {
                 self.rejected.fetch_add(1, Ordering::Relaxed);
-                return Outcome::Refuse(Response::unauthorized("the credential was not accepted"));
+                return Outcome::Refuse(Response::unauthorized_with(
+                    "the credential was not accepted",
+                    self.challenge,
+                ));
             }
         };
 
-        match provider.authorize(&principal, Action::Ingest, &self.scope) {
-            Decision::Allow => Outcome::Allow,
-            Decision::Deny => {
+        if provider.authorize(&principal, Action::Ingest, &self.scope) == Decision::Deny {
+            self.denied.fetch_add(1, Ordering::Relaxed);
+            return Outcome::Refuse(Response::error(
+                Status::Forbidden,
+                "this principal may not write records to this scope",
+            ));
+        }
+        if !self.binds {
+            return Outcome::Allow { caller: None };
+        }
+        // Parsed at the strictness of the ingest door (invariant 23): the
+        // provider vouched for the principal, and this store still decides
+        // what it can hold as an agent.
+        match AgentId::parse_strict(principal.id.as_str()) {
+            Ok(agent) => Outcome::Allow {
+                caller: Some(agent),
+            },
+            Err(_) => {
                 self.denied.fetch_add(1, Ordering::Relaxed);
                 Outcome::Refuse(Response::error(
                     Status::Forbidden,
-                    "this principal may not write records to this scope",
+                    "this door writes records under their caller's name, and this principal is not an agent",
                 ))
             }
         }
@@ -242,12 +318,12 @@ mod tests {
     }
 
     fn allowed(outcome: &Outcome) -> bool {
-        matches!(outcome, Outcome::Allow)
+        matches!(outcome, Outcome::Allow { .. })
     }
 
     fn status(outcome: &Outcome) -> Option<Status> {
         match outcome {
-            Outcome::Allow => None,
+            Outcome::Allow { .. } => None,
             Outcome::Refuse(r) => Some(r.status()),
         }
     }
@@ -324,7 +400,7 @@ mod tests {
         for credential in [b"Bearer wrong".as_slice(), b"Bearer s3cret".as_slice()] {
             match g.decide(Some(credential)) {
                 Outcome::Refuse(r) => assert!(!r.status().is_retryable()),
-                Outcome::Allow => panic!("expected a refusal"),
+                Outcome::Allow { .. } => panic!("expected a refusal"),
             }
         }
         assert!(status(&g.decide(None)).is_some_and(|s| !s.is_retryable()));
@@ -355,7 +431,7 @@ mod tests {
                 assert_eq!(r.status(), Status::ServiceUnavailable);
                 assert!(r.status().is_retryable());
             }
-            Outcome::Allow => panic!("an outage must not admit a write"),
+            Outcome::Allow { .. } => panic!("an outage must not admit a write"),
         }
         assert_eq!(g.refusals().unavailable, 1);
     }
@@ -375,7 +451,7 @@ mod tests {
         for _ in 0..3 {
             match g.decide(Some(b"Bearer s3cret")) {
                 Outcome::Refuse(r) => assert_eq!(r.status(), Status::ServiceUnavailable),
-                Outcome::Allow => panic!("a poisoned gate must never allow"),
+                Outcome::Allow { .. } => panic!("a poisoned gate must never allow"),
             }
         }
         assert!(g.refusals().poisoned);
@@ -414,6 +490,67 @@ mod tests {
 
     fn contains(haystack: &[u8], needle: &[u8]) -> bool {
         haystack.windows(needle.len()).any(|w| w == needle)
+    }
+
+    /// A fleet gate hands nothing onward: the shared secret names no agent, and
+    /// the mapper's reading of the spans stands as it always did.
+    #[test]
+    fn a_gate_that_does_not_bind_names_no_caller() {
+        let g = gate("acme");
+        assert!(!g.binds_records());
+        assert!(matches!(
+            g.decide(Some(b"Bearer s3cret")),
+            Outcome::Allow { caller: None }
+        ));
+    }
+
+    /// A binding gate names the caller, and refuses a principal that is not an
+    /// agent rather than letting its records through unbound.
+    #[test]
+    fn a_binding_gate_names_the_caller_or_refuses() {
+        struct As(&'static str);
+        impl AuthProvider for As {
+            fn authenticate(&mut self, _credential: &[u8]) -> AdapterResult<Principal> {
+                Ok(Principal {
+                    id: PrincipalId::parse(self.0).map_err(|_| AdapterError::Rejected("id"))?,
+                    via: "test",
+                })
+            }
+            fn authorize(&mut self, _p: &Principal, _a: Action, _s: &str) -> Decision {
+                Decision::Allow
+            }
+        }
+        let agent = Gate::new(Box::new(As("agent://acme.example/billing")), "acme")
+            .binding_records_to_the_caller();
+        match agent.decide(Some(b"anything")) {
+            Outcome::Allow { caller: Some(a) } => {
+                assert_eq!(a.as_str(), "agent://acme.example/billing");
+            }
+            other => panic!("expected the caller, got {other:?}"),
+        }
+        for not_an_agent in ["user://acme.example/alice", "agent://acme.example", "fleet"] {
+            let g = Gate::new(Box::new(As(not_an_agent)), "acme").binding_records_to_the_caller();
+            assert_eq!(
+                status(&g.decide(Some(b"anything"))),
+                Some(Status::Forbidden),
+                "{not_an_agent}"
+            );
+            assert_eq!(g.refusals().denied, 1);
+        }
+    }
+
+    #[test]
+    fn a_gate_names_the_scheme_it_was_given_in_its_challenge() {
+        let g = gate("acme").with_challenge("DPoP algs=\"ES256\"");
+        let Outcome::Refuse(r) = g.decide(None) else {
+            panic!("expected a refusal");
+        };
+        let mut wire = Vec::new();
+        r.write_to(&mut wire).expect("write");
+        assert!(contains(
+            &wire,
+            b"WWW-Authenticate: DPoP algs=\"ES256\"\r\n"
+        ));
     }
 
     /// RFC 9110 requires the challenge on a 401, and an exporter that reads it

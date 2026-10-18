@@ -370,6 +370,46 @@ pub enum Decision {
     Deny,
 }
 
+/// What a transport knows about the request a credential arrived on.
+///
+/// Added after the contracts were frozen, and added without breaking them:
+/// [`AuthProvider::authenticate_request`] has a default that reads the
+/// `Authorization` field from here and calls [`AuthProvider::authenticate`], so
+/// every adapter written against the credential alone keeps working unchanged.
+/// It exists because some credentials cannot be checked without the request. A
+/// proof of possession (RFC 9449) is signed over a method and a URL, so a
+/// provider handed only the token could verify the token and nothing else, and a
+/// proof captured from one request would then work for any other.
+#[derive(Debug, Clone, Copy)]
+pub struct RequestContext<'a> {
+    /// The method as received. Case matters: RFC 9110 methods are
+    /// case-sensitive, and a proof bound to `POST` is not a proof for `post`.
+    pub method: &'a str,
+    /// The path as received, still percent-encoded, without the query. A
+    /// provider that needs a whole URL joins it to an origin it was configured
+    /// with: the scheme and authority a caller used are not something a request
+    /// can be trusted to say about itself.
+    pub path: &'a str,
+    /// The fields the transport passes on, name then value, in arrival order.
+    ///
+    /// A transport is not obliged to pass every field it received, and a
+    /// provider that needs one it was not given finds it absent and refuses.
+    /// That is deny by default reaching the seam itself.
+    pub headers: &'a [(&'a str, &'a [u8])],
+}
+
+impl<'a> RequestContext<'a> {
+    /// The first field with this name, compared without case as RFC 9110
+    /// requires. A transport that let a name repeat where it must not has
+    /// already refused the request before a provider sees it.
+    pub fn header(&self, name: &str) -> Option<&'a [u8]> {
+        self.headers
+            .iter()
+            .find(|(n, _)| n.eq_ignore_ascii_case(name))
+            .map(|(_, v)| *v)
+    }
+}
+
 /// Who is asking, and what they may do.
 ///
 /// **Guarantee to preserve:** deny by default, and decide deterministically.
@@ -379,6 +419,17 @@ pub enum Decision {
 pub trait AuthProvider {
     fn authenticate(&mut self, credential: &[u8]) -> AdapterResult<Principal>;
     fn authorize(&mut self, principal: &Principal, action: Action, scope: &str) -> Decision;
+
+    /// Authenticate with the whole request in view.
+    ///
+    /// The default is today's behaviour exactly: the `Authorization` field, or
+    /// the empty credential when there is none, handed to
+    /// [`Self::authenticate`]. The empty credential is the one every conforming
+    /// provider must refuse, so a request that carries nothing is refused by a
+    /// provider that never heard of this method.
+    fn authenticate_request(&mut self, request: &RequestContext<'_>) -> AdapterResult<Principal> {
+        self.authenticate(request.header("authorization").unwrap_or_default())
+    }
 }
 
 // ---------------------------------------------------------------------------

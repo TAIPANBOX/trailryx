@@ -289,10 +289,16 @@ impl Response {
     /// The challenge names the scheme and nothing else. A `realm` would echo
     /// deployment naming to an unauthenticated caller for no benefit.
     pub fn unauthorized(message: &str) -> Self {
+        Self::unauthorized_with(message, "Bearer")
+    }
+
+    /// A 401 naming the scheme this server takes. `challenge` is the gate's,
+    /// fixed in code: nothing a client sent ever reaches it.
+    pub fn unauthorized_with(message: &str, challenge: &'static str) -> Self {
         let mut response = Response::error(Status::Unauthorized, message);
         response
             .headers
-            .push(("WWW-Authenticate".to_owned(), "Bearer".to_owned()));
+            .push(("WWW-Authenticate".to_owned(), challenge.to_owned()));
         response
     }
 

@@ -9,6 +9,13 @@ description = "Offline verifier for a Trailryx evidence pack. Depends on nothing
 
 [dependencies]
 
+# Test-only, and it never reaches the shipped crate: the reader the Wycheproof
+# file is walked with. A strict reader from this tree rather than a third-party
+# one, so even the test edge adds nothing an auditor has not already been asked
+# to read.
+[dev-dependencies]
+trailryx-json = { path = "../trailryx-json" }
+
 [lints]
 workspace = true
 

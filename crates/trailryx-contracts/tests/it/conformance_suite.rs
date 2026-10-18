@@ -61,6 +61,39 @@ fn reference_auth_conforms() {
     assert!(r.passed(), "{}", r.summary());
 }
 
+/// An adapter written before the request seam existed keeps working through it
+/// unchanged: the default reads the `Authorization` field, by a name compared
+/// without case, and hands it to `authenticate`. A request with none hands over
+/// the empty credential, which every conforming provider refuses.
+#[test]
+fn the_request_seam_falls_back_to_the_credential_one() {
+    use trailryx_contracts::contracts::{AuthProvider, RequestContext};
+    let mut a = StaticAuth;
+    let headers: [(&str, &[u8]); 2] = [
+        ("dpop", b"ignored by a provider that never asked for it"),
+        ("AUTHORIZATION", b"valid-credential"),
+    ];
+    let request = RequestContext {
+        method: "POST",
+        path: "/v1/traces",
+        headers: &headers,
+    };
+    assert_eq!(
+        request.header("authorization"),
+        Some(&b"valid-credential"[..])
+    );
+    assert_eq!(
+        a.authenticate_request(&request),
+        a.authenticate(b"valid-credential")
+    );
+    let bare = RequestContext {
+        method: "POST",
+        path: "/v1/traces",
+        headers: &[],
+    };
+    assert!(a.authenticate_request(&bare).is_err());
+}
+
 #[test]
 fn reference_peer_conforms() {
     let mut p = LocalPeer;

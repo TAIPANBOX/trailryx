@@ -18,6 +18,7 @@ use std::time::Duration;
 
 use trailryx_contracts::contracts::Source;
 use trailryx_index::completeness::Dimension;
+use trailryx_ingest::agent_door::{AgentTokenFlags, FLAGS_HELP, gate_from_flags};
 use trailryx_ingest::auth::Gate;
 use trailryx_ingest::bearer::SharedSecret;
 use trailryx_ingest::config::Config;
@@ -31,6 +32,8 @@ use trailryx_store::query::{Query, query_segment};
 
 const USAGE: &str = "\
 trailryx-node run  [--data DIR] [--bind ADDR:PORT] [--token-file PATH]
+                   [--agent-token-issuer URL --agent-token-audience AUD
+                    --agent-token-jwks PATH --agent-token-origin URL]
                    [--tenant NAME] [--trust-domain DOMAIN] [--shard N]
                    [--seal-records N] [--seal-seconds S] [--sync-every N]
                    [--drain-ms MS]
@@ -71,11 +74,20 @@ fn main() -> ExitCode {
         Some("read") => read(args.collect()),
         Some("events") => events(args.collect()),
         Some("--help") | Some("-h") | None => {
-            println!("{USAGE}");
+            println!("{USAGE}\n\nThe agent-token door, for run:\n\n{FLAGS_HELP}");
             ExitCode::SUCCESS
         }
         Some(other) => fail(&format!("unknown command {other}; try --help")),
     }
+}
+
+/// Whole seconds for the agent-token door's clock, read here: the ingest
+/// library never reads a clock of its own.
+fn unix_seconds() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| i64::try_from(d.as_secs()).unwrap_or(i64::MAX))
+        .unwrap_or(0)
 }
 
 fn fail(why: &str) -> ExitCode {
@@ -144,7 +156,7 @@ fn run(args: Vec<String>) -> ExitCode {
         Err(why) => return fail(&why),
     };
     if value(&flags, "--help").is_some() {
-        println!("{USAGE}");
+        println!("{USAGE}\n\nThe agent-token door, for run:\n\n{FLAGS_HELP}");
         return ExitCode::SUCCESS;
     }
 
@@ -153,6 +165,17 @@ fn run(args: Vec<String>) -> ExitCode {
         Ok(shard) => shard,
         Err(why) => return fail(&why),
     };
+    let agent_flags = AgentTokenFlags {
+        issuer: value(&flags, "--agent-token-issuer"),
+        audience: value(&flags, "--agent-token-audience"),
+        jwks: value(&flags, "--agent-token-jwks"),
+        origin: value(&flags, "--agent-token-origin"),
+    };
+    // One door, one way in, and said before anything is opened: a door that
+    // also took the fleet secret would let any holder of it write as any agent.
+    if agent_flags.any() && value(&flags, "--token-file").is_some() {
+        return fail("pass --token-file or the --agent-token-* flags, not both");
+    }
     let tenant_name = value(&flags, "--tenant").unwrap_or("acme").to_owned();
     let trust_domain = value(&flags, "--trust-domain")
         .unwrap_or("acme.example")
@@ -232,6 +255,17 @@ fn run(args: Vec<String>) -> ExitCode {
         )
     });
     let mut ingest = Ingest::new(OtlpSource::new(mapper), config, clock);
+    let agent_tokens = agent_flags.any();
+    match gate_from_flags(
+        agent_flags,
+        &tenant_name,
+        &trust_domain,
+        Box::new(unix_seconds),
+    ) {
+        Ok(Some(gate)) => ingest = ingest.with_auth(gate),
+        Ok(None) => {}
+        Err(why) => return fail(&why),
+    }
     if let Some(path) = value(&flags, "--token-file") {
         let secret = match std::fs::read(path) {
             Ok(bytes) => bytes,
@@ -246,17 +280,23 @@ fn run(args: Vec<String>) -> ExitCode {
     let ingest = Arc::new(ingest);
     let server = match Server::bind(Arc::clone(&ingest)) {
         Ok(server) => Arc::new(server),
-        Err(e) if value(&flags, "--token-file").is_none() => {
+        Err(e) if value(&flags, "--token-file").is_none() && !agent_tokens => {
             return fail(&format!(
                 "cannot bind: {e}\n\
                  trailryx-node: from this binary, that means: pass --token-file PATH, where \
-                 PATH holds one shared secret, or keep the port private with \
-                 --bind 127.0.0.1:4318"
+                 PATH holds one shared secret, or the four --agent-token-* flags, or keep the \
+                 port private with --bind 127.0.0.1:4318"
             ));
         }
         Err(e) => return fail(&format!("cannot bind: {e}")),
     };
     println!("listening on {}", server.address());
+    if agent_tokens {
+        println!(
+            "each agent writes with its own token and proof; a span naming another agent is \
+             refused, and the refusal is written down as a record"
+        );
+    }
     println!(
         "sealing at {} records or {} seconds, syncing every {} records",
         policy.seal_after_records,

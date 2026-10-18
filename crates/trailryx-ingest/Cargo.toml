@@ -12,6 +12,12 @@ trailryx-contracts = { path = "../trailryx-contracts" }
 trailryx-crypto = { path = "../trailryx-crypto" }
 trailryx-otlp = { path = "../trailryx-otlp" }
 trailryx-record = { path = "../trailryx-record" }
+# The strict reader a token's JSON is read with, and the P-256 verifier its
+# signatures are checked with. Both from this tree and both depending on
+# nothing, so the door still takes no third-party code between a stranger's
+# bytes and a decision about who they are.
+trailryx-json = { path = "../trailryx-json" }
+trailryx-verify = { path = "../trailryx-verify" }
 
 [[bin]]
 name = "trailryx-ingest"

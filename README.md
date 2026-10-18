@@ -7,7 +7,7 @@
 ![Stage](https://img.shields.io/badge/stage-13%20of%2013-blue.svg)
 ![Core](https://img.shields.io/badge/core-frozen-success.svg)
 ![Rust](https://img.shields.io/badge/rust-1.88%2B%2C%20SQL%20facade%201.89%2B-orange.svg)
-![Tests](https://img.shields.io/badge/tests-1229-success.svg)
+![Tests](https://img.shields.io/badge/tests-1295-success.svg)
 ![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)
 ![Dependencies](https://img.shields.io/badge/deps-0%20in%20the%20verifier-success.svg)
 ![Unsafe](https://img.shields.io/badge/unsafe-forbidden-success.svg)
@@ -266,7 +266,7 @@ harmonised standards that would say *how* are still not cited in the Official Jo
 | **Crypto-erasure** | A record commits to four fields about a payload it does not hold, so destroying the key removes the person while every chain, root and proof stays exactly as it was. The object interface has no delete method at all | The acceptance demo's steps 6 and 7: the same pack verifies byte for byte after the erasure, and the erasure is sealed as its own record |
 | **Decision context** | `basis` carries the policy version, the budget state at each step, the model and its parameters, the prompt hash and the tools in scope: what the system knew, not only what it did | Records written by the mapper from the estate's own envelope, and by the OTLP receiver |
 | **Bitemporal reading** | `as_of` answers what was believed at a time, not only what a row was | The SQL facade and `read`, both marking an answer full, partial with a reason, or none |
-| **A verifier anybody can read** | Its own SHA-384, its own ECDSA P-384, its own reader, about 3,600 lines including tests and zero third-party dependencies | `trailryx-verify`, a static binary that needs no config, no network and no state |
+| **A verifier anybody can read** | Its own SHA-384, its own ECDSA P-384, its own reader, about 4,900 lines including tests and zero third-party dependencies | `trailryx-verify`, a static binary that needs no config, no network and no state |
 
 ### It is the estate's record, not only its own
 
@@ -311,15 +311,15 @@ migration. What stage 13 still wants is measured absence rather than a guess, an
 | `trailryx-record` | the canonical record, its schema, and the plane boundary | 31 |
 | `trailryx-crypto` | SHA-384 and the hash chain | 22 |
 | `trailryx-core` | the simulated store the determinism criterion runs against | 15 |
-| `trailryx-contracts` | eight adapter traits and a conformance suite | 26 |
+| `trailryx-contracts` | eight adapter traits and a conformance suite | 27 |
 | `trailryx-journal` | wire format, append-only write path, recovery | 36 |
 | `trailryx-index` | Merkle history tree, completeness proofs, segment composition | 58 |
 | `trailryx-store` | sealing, the read surface, causal reconstruction, hot and cold tiering | 88 |
 | `trailryx-json` | a strict bounded RFC 8259 reader and a JSON Lines framer. Depends on nothing | 117 |
-| `trailryx-otlp` | two OTLP transports, one mapper: protobuf and JSON, the GenAI semconv, the file source | 140 |
+| `trailryx-otlp` | two OTLP transports, one mapper: protobuf and JSON, the GenAI semconv, the file source | 147 |
 | `trailryx-assemble` | what a source handed over, made into records | 29 |
 | `trailryx-erasure` | payload envelopes, the key hierarchy, erasure | 44 |
-| `trailryx-verify` | the offline verifier, including its own ECDSA and an RFC 3161 token reader. Depends on nothing | 33 |
+| `trailryx-verify` | the offline verifier, including its own ECDSA and an RFC 3161 token reader, and the P-256 the ingest door checks agent tokens with. Depends on nothing | 55 |
 | `trailryx-projection` | Thrift, a Parquet writer with real lists, and columnar projections | 19 |
 | `trailryx-sign` | what gets signed, and what a witness attests to | 4 |
 | `trailryx-http` | the workspace's one HTTP/1.1 client. No TLS, no redirects, no reuse | 14 |
@@ -332,7 +332,7 @@ migration. What stage 13 still wants is measured absence rather than a guess, an
 | `trailryx-crypto-aws` | the validated cipher, the hybrid X25519 + ML-KEM-768 exchange, and the two custodians that wrap a payload key with it: one that keeps its keys in memory and one that keeps them on a disk an operator holds the root key for. The one adapter with a dependency | 50 |
 | `trailryx-asn1` | a bounded DER reader, enough for RFC 3161 and nothing more. Depends on nothing | 30 |
 | `trailryx-anchor` | RFC 3161 timestamping: TSP, the CMS subset, and RSA over Montgomery arithmetic | 52 |
-| `trailryx-ingest` | the OTLP/HTTP server: HTTP/1.1, gzip, bearer auth, all hand-written | 128 |
+| `trailryx-ingest` | the OTLP/HTTP server: HTTP/1.1, gzip, bearer auth and the agent-token door, all hand-written | 164 |
 | `trailryx-compliance` | a versioned map from what is proved to what a framework asks, and what it does not | 12 |
 | `trailryx-sql` | the SQL facade: DataFusion and the Postgres wire protocol, predicates pushed into the index, statements gated, reads authorised, connections bounded, four dialect extensions | 64 |
 | `trailryx-agentevent` | the estate's shared agent-event envelope, mapped into records: the same `agent://` grammar, the same run and delegation chain | 52 |
@@ -751,7 +751,7 @@ not repeated here: a number written twice is a number that will disagree with it
 ## Try it
 
 ```bash
-cargo test                                    # 1229 tests
+cargo test                                    # 1295 tests
 cargo run --bin trailryx-sim-run -- --help
 ```
 
@@ -1213,8 +1213,10 @@ The usual answer is `cargo-fuzz`, which needs a nightly compiler and produces a
 corpus that lives in one directory on one machine. This project already had the
 better half of that machinery: a seeded generator whose whole purpose is that a
 failure is **a number somebody else can rerun**. So the fuzzer is that generator
-pointed at thirteen parsers, and it runs in the gate, which a nightly-only tool
-cannot.
+pointed at sixteen targets, and it runs in the gate, which a nightly-only tool
+cannot. Two of them hold more than "does not panic": the P-256 verifier and the
+agent-token verifier must accept nothing but the exact bytes of their corpus, so a
+mutated signature, token or proof that verified would fail the run.
 
 Most of the value is not in random bytes, which any parser rejects at its first
 field. It is in mutating something valid: flip a bit, truncate anywhere, replace a
@@ -1226,7 +1228,7 @@ limits live.
 suite whose inputs all die at byte one runs fast and proves nothing, and that is
 exactly what the first version did: several targets accepted nothing, because their
 corpora were made of zero bytes. With real corpora built from the project's own
-encoders, most of the thirteen now reach past the first check. The two that do not are
+encoders, most of the sixteen now reach past the first check. The two that do not are
 the timestamp token and the evidence pack, whose valid inputs need an authority and a
 sealing run respectively; they are exercised for rejection only, and the number is
 printed so that stays visible.
@@ -1409,13 +1411,53 @@ bind the server **refuses to start** rather than opening an unauthenticated writ
 path into an audit store. It used to only warn, which meant the operator who most
 needed to notice was the one reading the least.
 
+### Each agent writes as itself, and as nobody else
+
+The shared secret has a limit that is the shape of the credential rather than a
+flaw in it: every exporter holding the secret is one principal, and which agent a
+record is about comes from attributes the exporter wrote, so any holder of the
+secret can write records in any agent's name. The agent-token door closes that,
+opt-in, with four flags that go together:
+
+```bash
+trailryx-ingest --bind 0.0.0.0:4318 --tenant acme --trust-domain acme \
+  --agent-token-issuer https://vouchryx.acme.example \
+  --agent-token-audience https://ingest.acme.example \
+  --agent-token-jwks /etc/trailryx/vouchryx-jwks.json \
+  --agent-token-origin https://ingest.acme.example
+```
+
+Each agent then presents the access token vouchryx issued it, as
+`Authorization: DPoP <token>`, with a `DPoP` proof it signs for that request
+(RFC 9068 and RFC 9449). Both are verified offline against the issuer's key set,
+by the same rules tokenfuse and agent-stack-go apply: the estate's shared vectors
+table is vendored byte for byte and every case of it is answered as stated. The
+signatures are ES256, checked by a P-256 verifier written in `trailryx-verify` and
+held to every Project Wycheproof P-256 case, so the door still takes no
+third-party code. The principal is the token's `sub`, and every record the
+request produces must be that agent's: a span naming any other agent, including
+the deployment's default one, is refused, the exporter is told so in the partial
+success, and the refusal is written down as a record under the caller's own name
+in the run the span named. A token for an agent outside `--trust-domain` is a
+403. `trailryx-node run` takes the same four flags, through the same code.
+
+Startup refuses a door that could not do its job: an empty audience (which would
+accept a token minted for any resource), a key set with no EC P-256 key or with a
+private member in it, an origin that is anything but `scheme://authority`, and
+`--token-file` given as well, because a door that also took the fleet secret
+would let any holder of it write as any agent. What it does not do is stated as
+plainly: there is no revocation list, so a token is good for its five minutes;
+proofs are single use per process and in memory, so two doors behind one
+balancer each remember their own, and a restart forgets one generation; and
+there is no server nonce.
+
 **What it deliberately is not**, stated in the crate's own docs rather than left
 to be discovered: no TLS, no HTTP/2 and so no OTLP over gRPC, no chunked bodies,
-no JSON, no metrics or logs, no pipelining. The shipped provider is one shared
-secret, which authenticates a fleet and not an agent; a deployment that needs more
-supplies its own behind the same seam. A deployment that needs the network puts a
-proxy in front to terminate TLS, because on a plaintext hop the secret is readable
-on the wire.
+no JSON, no metrics or logs, no pipelining. Two providers ship: one shared
+secret, which authenticates a fleet and not an agent, and the agent-token door
+above; a deployment that needs something else supplies its own behind the same
+seam. A deployment that needs the network puts a proxy in front to terminate TLS,
+because on a plaintext hop a credential is readable on the wire.
 
 That has a consequence worth saying in the same breath, and it is why the parser
 is as strict as it is: a proxy means two HTTP parsers in a row, and any
@@ -1833,8 +1875,11 @@ the FIPS 140-3 module, so the seam still refuses to be told what it wants to hea
 ## Handing an auditor something they can check without us
 
 `trailryx-verify` is a separate crate with **no dependencies at all**, not even
-on the rest of Trailryx, about 3,600 lines including its tests. It reads an
-evidence pack and says whether it holds. It exists because the question an
+on the rest of Trailryx, about 4,900 lines including its tests. It reads an
+evidence pack and says whether it holds. Part of that is ECDSA P-256 with its own
+SHA-256, which no pack is signed with: the ingest door checks agents' tokens with
+it, and keeping it here is what lets the door do that without a cryptography
+crate. Nothing in the pack verifier calls it. It exists because the question an
 auditor actually asks is not "is your code good" but "who checked it", and the
 answer has to be something they can run.
 
