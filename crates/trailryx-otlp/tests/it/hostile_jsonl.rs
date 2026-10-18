@@ -332,6 +332,9 @@ fn every_counter_is_either_a_loss_or_declared_not_one() {
         ("unknown_operation", |c| c.mapping.unknown_operation += 1),
         ("no_run_id", |c| c.mapping.no_run_id += 1),
         ("no_agent", |c| c.mapping.no_agent += 1),
+        // Unreachable from a file, which has no caller; named for the reason
+        // `invalid_utf8` is below.
+        ("not_the_caller", |c| c.mapping.not_the_caller += 1),
         ("excessive_clock_skew", |c| c.mapping.excessive_skew += 1),
         ("malformed_lines", |c| c.lines.malformed_lines += 1),
         ("oversize_lines", |c| c.lines.oversize_lines += 1),

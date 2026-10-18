@@ -9,6 +9,7 @@
 use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use trailryx_contracts::contracts::Source;
+use trailryx_ingest::agent_door::{AgentTokenFlags, FLAGS_HELP, gate_from_flags};
 use trailryx_ingest::auth::Gate;
 use trailryx_ingest::bearer::SharedSecret;
 use trailryx_ingest::config::Config;
@@ -22,6 +23,7 @@ fn main() -> std::process::ExitCode {
     let mut tenant = "acme".to_owned();
     let mut trust_domain = "acme.example".to_owned();
     let mut token_file: Option<String> = None;
+    let (mut issuer, mut audience, mut jwks, mut origin) = (None, None, None, None);
 
     let mut args = std::env::args().skip(1);
     while let Some(flag) = args.next() {
@@ -34,10 +36,14 @@ fn main() -> std::process::ExitCode {
             ("--tenant", Some(v)) => tenant = v,
             ("--trust-domain", Some(v)) => trust_domain = v,
             ("--token-file", Some(v)) => token_file = Some(v),
+            ("--agent-token-issuer", Some(v)) => issuer = Some(v),
+            ("--agent-token-audience", Some(v)) => audience = Some(v),
+            ("--agent-token-jwks", Some(v)) => jwks = Some(v),
+            ("--agent-token-origin", Some(v)) => origin = Some(v),
             ("--help", _) => {
                 println!(
                     "trailryx-ingest [--bind ADDR:PORT] [--tenant NAME] [--trust-domain DOMAIN]\n\
-                     \x20               [--token-file PATH]\n\
+                     \x20               [--token-file PATH | --agent-token-* (all four)]\n\
                      \n\
                      Accepts OTLP/HTTP traces.\n\
                      \n\
@@ -49,7 +55,11 @@ fn main() -> std::process::ExitCode {
                      \n\
                      There is no TLS here either way. A routable bind belongs behind a\n\
                      terminating proxy: on a plaintext hop the secret is readable on the\n\
-                     wire by anything between the exporter and this port."
+                     wire by anything between the exporter and this port.\n\
+                     \n\
+                     Instead of the shared secret, each agent's own access token:\n\
+                     \n\
+                     {FLAGS_HELP}"
                 );
                 return std::process::ExitCode::SUCCESS;
             }
@@ -74,6 +84,24 @@ fn main() -> std::process::ExitCode {
         )
     });
     let mut ingest = Ingest::new(OtlpSource::new(mapper), config, clock);
+    let flags = AgentTokenFlags {
+        issuer: issuer.as_deref(),
+        audience: audience.as_deref(),
+        jwks: jwks.as_deref(),
+        origin: origin.as_deref(),
+    };
+    // One door, one way in. A door that took the fleet secret as well would let
+    // any holder of the secret write as any agent, which is what the agent
+    // token is there to end.
+    if flags.any() && token_file.is_some() {
+        return fail("pass --token-file or the --agent-token-* flags, not both");
+    }
+    let agent_tokens = flags.any();
+    match gate_from_flags(flags, &tenant, &trust_domain, Box::new(unix_seconds)) {
+        Ok(Some(gate)) => ingest = ingest.with_auth(gate),
+        Ok(None) => {}
+        Err(why) => return fail(&why),
+    }
     if let Some(path) = &token_file {
         // Read here and not stored: the file's bytes live in this scope, and
         // what the gate keeps is a digest of them.
@@ -99,12 +127,12 @@ fn main() -> std::process::ExitCode {
         // Found on 2026-08-04 by running the published image, whose default
         // command binds 0.0.0.0 and therefore hits exactly this path. The
         // operator was told to call a Rust function.
-        Err(e) if token_file.is_none() => {
+        Err(e) if token_file.is_none() && !agent_tokens => {
             return fail(&format!(
                 "cannot bind: {e}\n\
                  trailryx-ingest: from this binary, that means: pass --token-file PATH, where \
-                 PATH holds one shared secret, or keep the port private with \
-                 --bind 127.0.0.1:4318"
+                 PATH holds one shared secret, or the four --agent-token-* flags, or keep \
+                 the port private with --bind 127.0.0.1:4318"
             ));
         }
         Err(e) => return fail(&format!("cannot bind: {e}")),
@@ -112,10 +140,23 @@ fn main() -> std::process::ExitCode {
     println!("listening on {}", server.address());
     // Said in full, because these are the two questions an operator has about
     // this port and the answers are independent of each other.
-    match (server.address().ip().is_loopback(), token_file.is_some()) {
+    match (
+        server.address().ip().is_loopback(),
+        token_file.is_some() || agent_tokens,
+    ) {
         (true, false) => {
             println!("loopback only, and no authentication: whatever runs on this host can write.");
         }
+        (loopback, true) if agent_tokens => println!(
+            "{}an agent's own token and proof are required, and a span naming another agent is \
+             refused. No TLS{}.",
+            if loopback { "loopback only, and " } else { "" },
+            if loopback {
+                ""
+            } else {
+                ": terminate TLS in front of this port"
+            }
+        ),
         (true, true) => println!("loopback only, and a shared secret is required. No TLS."),
         (false, true) => println!(
             "WARNING: {} is reachable from the network. A shared secret is required, but there \
@@ -170,6 +211,15 @@ fn main() -> std::process::ExitCode {
 
     server.serve(stderr_log());
     std::process::ExitCode::SUCCESS
+}
+
+/// Whole seconds for the agent-token door's clock, read here: the library
+/// never reads a clock of its own.
+fn unix_seconds() -> i64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| i64::try_from(d.as_secs()).unwrap_or(i64::MAX))
+        .unwrap_or(0)
 }
 
 fn fail(why: &str) -> std::process::ExitCode {

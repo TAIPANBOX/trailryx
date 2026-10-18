@@ -224,9 +224,9 @@ pub struct Counters {
 }
 
 impl Counters {
-    /// How many counters there are. Six from the mapper, thirteen from the
+    /// How many counters there are. Seven from the mapper, thirteen from the
     /// framing, five from the bounds, thirteen from the shape.
-    pub const COUNT: usize = 6 + 13 + 5 + 13;
+    pub const COUNT: usize = 7 + 13 + 5 + 13;
 
     /// Every counter, named and classified.
     ///
@@ -252,6 +252,7 @@ impl Counters {
             unknown_operation,
             no_run_id,
             no_agent,
+            not_the_caller,
             excessive_skew,
         } = self.mapping;
         let LineReport {
@@ -302,6 +303,9 @@ impl Counters {
             counter("unknown_operation", unknown_operation, Loss),
             counter("no_run_id", no_run_id, Loss),
             counter("no_agent", no_agent, Loss),
+            // Always zero from a file, which has no caller to be unlike: listed
+            // because the destructuring above makes every counter a decision.
+            counter("not_the_caller", not_the_caller, Loss),
             // Not a lost record: the record is written with both times. It is
             // still a loss of the one thing an audit trail is ordered by.
             counter("excessive_clock_skew", excessive_skew, Loss),

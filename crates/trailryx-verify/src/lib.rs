@@ -29,6 +29,15 @@
 //! - shard roots follow from segment manifests, and the store root from shards;
 //! - a shard's segments form one chain, so a whole segment cannot be dropped.
 //!
+//! # What else lives here, and why
+//!
+//! [`p256`] and [`sha256`] verify ES256, which no evidence pack is signed with.
+//! The ingest door needs them to check an agent's own access token and its
+//! proof of possession, and the door may not take a cryptography crate for the
+//! same reason this crate may not: the people who have to trust a check are
+//! asked to read it. So the check is written here, once, and nothing in the
+//! pack verifier calls it.
+//!
 //! # What it cannot check
 //!
 //! That the history is real rather than a consistent invention. That takes a
@@ -36,9 +45,11 @@
 //! so plainly when it has neither, rather than reporting a clean bill.
 
 pub mod merkle;
+pub mod p256;
 pub mod p384;
 pub mod pack;
 pub mod record;
+pub mod sha256;
 pub mod sha384;
 pub mod tsp;
 pub mod verify;

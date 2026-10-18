@@ -379,7 +379,11 @@ fn serve_connection(
                 let close_after = head.close_requested;
                 let response = match ingest.inspect(&head) {
                     Verdict::Answer(response) => response,
-                    Verdict::ReadBody { length, gzip } => {
+                    Verdict::ReadBody {
+                        length,
+                        gzip,
+                        caller,
+                    } => {
                         // What may actually be held, not what was declared. A
                         // compressed body is charged the ceiling it can inflate
                         // to: charging the declared length let two hundred and
@@ -413,7 +417,7 @@ fn serve_connection(
                             .unwrap_or(connection_deadline)
                             .min(connection_deadline);
                         match wire.read_body(length, config, body_deadline) {
-                            Ok(body) => ingest.submit(body, gzip),
+                            Ok(body) => ingest.submit(body, gzip, caller.as_ref()),
                             Err(BodyError::Truncated) => {
                                 // Nothing is handed onward and nothing is
                                 // answered: there is no message to answer.

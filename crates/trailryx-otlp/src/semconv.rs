@@ -155,6 +155,10 @@ pub enum Rejection {
     /// Nothing in the span or its resource parses as an agent identifier, and
     /// the deployment set no default.
     NoAgent,
+    /// The span names an agent other than the one whose own verified token
+    /// carried the batch. Never produced by [`map_span`], which does not know
+    /// who is calling: [`crate::OtlpSource::accept_as`] does, and refuses here.
+    NotTheCaller,
 }
 
 impl fmt::Display for Rejection {
@@ -164,6 +168,7 @@ impl fmt::Display for Rejection {
             Self::UnknownOperation => write!(f, "unknown gen_ai.operation.name"),
             Self::NoRunId => write!(f, "no trace id"),
             Self::NoAgent => write!(f, "no usable agent identifier"),
+            Self::NotTheCaller => write!(f, "names an agent other than the caller"),
         }
     }
 }
@@ -179,6 +184,10 @@ pub struct Report {
     pub unknown_operation: u32,
     pub no_run_id: u32,
     pub no_agent: u32,
+    /// Spans refused because they named an agent other than the authenticated
+    /// caller. A loss like the three above it, and written down twice: here,
+    /// with every other loss, and as a record under the caller's own name.
+    pub not_the_caller: u32,
     /// Spans whose own clock disagreed with ours by more than
     /// [`trailryx_record::CLOCK_SKEW_THRESHOLD_NANOS`].
     ///
@@ -195,6 +204,7 @@ impl Report {
             Rejection::UnknownOperation => &mut self.unknown_operation,
             Rejection::NoRunId => &mut self.no_run_id,
             Rejection::NoAgent => &mut self.no_agent,
+            Rejection::NotTheCaller => &mut self.not_the_caller,
         };
         *slot = slot.saturating_add(1);
     }
@@ -207,6 +217,7 @@ impl Report {
         self.unknown_operation
             .saturating_add(self.no_run_id)
             .saturating_add(self.no_agent)
+            .saturating_add(self.not_the_caller)
     }
 }
 

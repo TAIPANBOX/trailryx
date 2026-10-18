@@ -152,10 +152,17 @@ Stated here so nobody spends their time on it:
   built with no dependencies, and it says so at startup. On a routable bind the
   credential is readable on the wire, so a routable bind belongs behind a terminating
   proxy.
-- **The in-tree `AuthProvider` is one shared secret.** `bearer::SharedSecret`
-  authenticates a fleet, not an agent, and says so. A deployment that needs per-agent
-  authorisation supplies its own provider behind the same seam. A way past the gate is
-  a report; the fact that one secret is one identity is not.
+- **The default in-tree `AuthProvider` is one shared secret.** `bearer::SharedSecret`
+  authenticates a fleet, not an agent, and says so. The agent-token door
+  (`agent_door::AgentTokenDoor`, opt-in with the `--agent-token-*` flags) authenticates
+  each agent by its own vouchryx token and proof, and refuses a record that names any
+  other agent. A way past either gate, or a record written under an agent other than
+  the one whose token carried it, is a report; the fact that one secret is one
+  identity is not.
+- **The agent-token door has no revocation list and a per-process replay cache.** A
+  token is good for its five minutes once issued, and a proof used at one process
+  can be presented once more at another inside its sixty seconds. Both are stated
+  limits, not reports; a proof accepted twice by one process is a report.
 - **No gRPC.** OTLP over HTTP is the specification's default protocol. That is written
   in the README's own list of what is unfinished.
 - **An RFC 3161 anchor is trusted by a pinned key, not by a certificate chain.** No

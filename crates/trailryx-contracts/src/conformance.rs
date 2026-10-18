@@ -11,7 +11,8 @@
 
 use crate::contracts::{
     Action, Anchor, AuthProvider, Decision, Delivery, Destroyed, ForeignTable, KeyId, KeyProvider,
-    Lossiness, ObjectStore, Ordering, Peer, ProofStatus, PutOutcome, Sink, Source, Trust,
+    Lossiness, ObjectStore, Ordering, Peer, ProofStatus, PutOutcome, RequestContext, Sink, Source,
+    Trust,
 };
 use crate::ingest::Cursor;
 use trailryx_record::Hash;
@@ -370,6 +371,20 @@ pub fn auth_provider<A: AuthProvider>(a: &mut A) -> Report {
         "an empty credential is refused",
         bad.is_err(),
         "authenticated an empty credential",
+    );
+
+    // The same refusal through the request seam, whichever of the two a
+    // provider implements: a request that carries no credential at all is the
+    // empty credential, wearing different clothes.
+    let bare = a.authenticate_request(&RequestContext {
+        method: "POST",
+        path: "/",
+        headers: &[],
+    });
+    r.check(
+        "a request carrying no credential is refused",
+        bare.is_err(),
+        "authenticated a request that carried nothing",
     );
 
     let p = a.authenticate(b"valid-credential");

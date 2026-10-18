@@ -8,6 +8,7 @@
 
 mod common;
 
+mod caller;
 mod differential;
 mod hostile;
 mod hostile_jsonl;
