@@ -181,10 +181,12 @@
             "required": false
           },
           "TRAILRYX_KEYRYX_CREDENTIAL_FILE": {
-            "required": false
+            "required": false,
+            "why": "The file holding the consumer credential this node presents to Keyryx when TRAILRYX_SIGNER=keyryx. Read only in that case; unset means no signer."
           },
           "TRAILRYX_KEYRYX_URL": {
-            "required": false
+            "required": false,
+            "why": "The http origin of the Keyryx that signs sealed roots when TRAILRYX_SIGNER=keyryx. Read only in that case; unset means no signer."
           },
           "TRAILRYX_S3_ADDRESSING": {
             "required": false
@@ -205,10 +207,12 @@
             "required": false
           },
           "TRAILRYX_SIGNER": {
-            "required": false
+            "required": false,
+            "why": "Selects the signer for sealed roots. Unset means none, and the only value this build accepts is keyryx; any other value refuses at start."
           },
           "TRAILRYX_WITNESS_ATTESTATIONS": {
-            "required": false
+            "required": false,
+            "why": "The folder Keyryx's witness writes attestations to, read by read --pack to attach witnesses to the pack for the root it packs. Unset attaches none."
           }
         }
       },
