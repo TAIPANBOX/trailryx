@@ -11,10 +11,10 @@
 //! them. See the crate documentation for why the payload plane is absent rather
 //! than stubbed.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use trailryx_contracts::contracts::Source;
 use trailryx_index::completeness::Dimension;
@@ -24,7 +24,9 @@ use trailryx_ingest::bearer::SharedSecret;
 use trailryx_ingest::config::Config;
 use trailryx_ingest::handler::Ingest;
 use trailryx_ingest::server::{Server, stderr_log};
+use trailryx_node::keyryx::KeyryxSigner;
 use trailryx_node::plane::{Plane, SealPolicy, seed_from_process};
+use trailryx_node::signing::{self, Outcome};
 use trailryx_node::{Resume, Ship, reader, ship};
 use trailryx_otlp::{MapperConfig, OtlpSource};
 use trailryx_record::{ShardIx, TenantId, Timestamp};
@@ -61,6 +63,12 @@ events reads a file of the estate's shared agent-event NDJSON envelope
       each seal, so a run that is killed costs a re-import of the records it
       had written and not sealed, and of nothing before them. A smaller number
       is a smaller window and one more fsync per segment.
+
+Signing is optional. With TRAILRYX_SIGNER=keyryx, TRAILRYX_KEYRYX_URL (an http origin)
+and TRAILRYX_KEYRYX_CREDENTIAL_FILE (the consumer credential), each sealed root is signed
+by Keyryx. A root that cannot be signed is queued beside the data and signed when Keyryx
+answers, and the records are sealed either way. read --pack attaches the signature for
+the root it packs, and any witness attestation filed under TRAILRYX_WITNESS_ATTESTATIONS.
 
 This process keeps the metadata plane only. It has no key custodian, so payload
 parts a source hands over are declined and counted, and the count is written
@@ -146,6 +154,73 @@ fn shard_of(flags: &[(String, String)]) -> Result<ShardIx, String> {
         .map_err(|_| format!("--shard {n} is past the number of shards a store can have"))
 }
 
+fn now_timestamp() -> Timestamp {
+    Timestamp(
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos() as u64)
+            .unwrap_or(0),
+    )
+}
+
+/// How long a queued root waits before the next attempt after one that failed. An attempt
+/// costs at most the connect and I/O timeouts, once, and never once per record.
+const SIGN_RETRY: Duration = Duration::from_secs(30);
+
+/// The signer the seal uses, from the environment. Unset means no signer, and the seal
+/// stays as it was. `keyryx` takes the Keyryx at TRAILRYX_KEYRYX_URL and presents the
+/// consumer credential in the file TRAILRYX_KEYRYX_CREDENTIAL_FILE. Anything else, or a
+/// setting missing, is refused at start rather than sealing unsigned.
+fn keyryx_signer() -> Result<Option<KeyryxSigner>, String> {
+    let kind = match std::env::var("TRAILRYX_SIGNER") {
+        Ok(kind) => kind,
+        Err(std::env::VarError::NotPresent) => return Ok(None),
+        Err(e) => return Err(format!("TRAILRYX_SIGNER: {e}")),
+    };
+    if kind != "keyryx" {
+        return Err(format!(
+            "TRAILRYX_SIGNER={kind} is not a signer this build has; the one it has is keyryx"
+        ));
+    }
+    let origin = std::env::var("TRAILRYX_KEYRYX_URL").map_err(|_| {
+        "TRAILRYX_SIGNER=keyryx needs TRAILRYX_KEYRYX_URL, such as http://keyryx:4340".to_owned()
+    })?;
+    let credential_path = std::env::var("TRAILRYX_KEYRYX_CREDENTIAL_FILE").map_err(|_| {
+        "TRAILRYX_SIGNER=keyryx needs TRAILRYX_KEYRYX_CREDENTIAL_FILE, the file holding the consumer credential"
+            .to_owned()
+    })?;
+    let credential = std::fs::read_to_string(&credential_path)
+        .map_err(|e| format!("cannot read {credential_path}: {e}"))?;
+    let bearer = credential.trim();
+    if bearer.is_empty() {
+        return Err(format!("{credential_path} holds no credential"));
+    }
+    KeyryxSigner::new(&origin, bearer)
+        .map(Some)
+        .map_err(|e| format!("TRAILRYX_KEYRYX_URL {origin}: {e}"))
+}
+
+/// Queue what the seal left and sign it, saying what happened. Returns when the next
+/// attempt is due.
+fn sign_and_report(
+    dir: &Path,
+    shard: ShardIx,
+    tenant: &TenantId,
+    signer: &mut KeyryxSigner,
+    now: Timestamp,
+) -> Instant {
+    match signing::sign_sealed(dir, shard, tenant, signer, now) {
+        Ok(Outcome::Clear) => {}
+        Ok(Outcome::Signed(count)) => println!("keyryx signed {count} root(s)"),
+        Ok(Outcome::Queued { waiting, why }) => eprintln!(
+            "trailryx-node: keyryx did not sign; {waiting} root(s) are queued and the \
+             records stay sealed: {why}"
+        ),
+        Err(why) => eprintln!("trailryx-node: the signing queue could not be written: {why}"),
+    }
+    Instant::now() + SIGN_RETRY
+}
+
 // ---------------------------------------------------------------------------
 // run
 // ---------------------------------------------------------------------------
@@ -213,6 +288,10 @@ fn run(args: Vec<String>) -> ExitCode {
 
     let Ok(mapper) = MapperConfig::new(tenant.clone(), &trust_domain) else {
         return fail(&format!("--trust-domain {trust_domain} is not usable"));
+    };
+    let mut signer = match keyryx_signer() {
+        Ok(signer) => signer,
+        Err(why) => return fail(&why),
     };
 
     // The plane first, so a directory that will not open is reported before a
@@ -307,6 +386,9 @@ fn run(args: Vec<String>) -> ExitCode {
         "metadata plane only: payload parts are declined and counted. No object store, \
          no SQL port, no TLS."
     );
+    if signer.is_some() {
+        println!("roots are signed by keyryx, and queued while it cannot sign");
+    }
 
     let serving = Arc::clone(&server);
     let thread = std::thread::Builder::new()
@@ -319,6 +401,7 @@ fn run(args: Vec<String>) -> ExitCode {
     // The drain loop is the store's half, and it owns the plane: one writer per
     // shard, with no lock, because two writers would be two minters of one
     // sequence.
+    let mut sign_again = Instant::now();
     loop {
         std::thread::sleep(drain);
         let now = plane.now();
@@ -358,18 +441,29 @@ fn run(args: Vec<String>) -> ExitCode {
             }
         }
 
+        let mut sealed_now = false;
         match plane.tick(now) {
-            Ok(Some(sealed)) => println!(
-                "sealed {} with {} record(s); manifest {}",
-                sealed.segment,
-                sealed.records,
-                sealed.manifest_path.display()
-            ),
+            Ok(Some(sealed)) => {
+                println!(
+                    "sealed {} with {} record(s); manifest {}",
+                    sealed.segment,
+                    sealed.records,
+                    sealed.manifest_path.display()
+                );
+                sealed_now = true;
+            }
             Ok(None) => {}
             Err(why) => {
                 eprintln!("trailryx-node: sealing failed: {why}");
                 return ExitCode::FAILURE;
             }
+        }
+        // A seal is signed as soon as it is made. Until Keyryx answers, a queued root is
+        // retried on the retry interval, so an outage costs one attempt per interval.
+        if let Some(signer) = signer.as_mut()
+            && (sealed_now || Instant::now() >= sign_again)
+        {
+            sign_again = sign_and_report(plane.dir(), plane.shard(), plane.tenant(), signer, now);
         }
     }
 }
@@ -411,6 +505,11 @@ fn events(args: Vec<String>) -> ExitCode {
         sync_every: 64,
     };
 
+    let mut signer = match keyryx_signer() {
+        Ok(signer) => signer,
+        Err(why) => return fail(&why),
+    };
+    let signing_tenant = tenant.clone();
     let shipped = match ship(&Ship {
         dir: &dir,
         shard,
@@ -423,6 +522,11 @@ fn events(args: Vec<String>) -> ExitCode {
         Ok(shipped) => shipped,
         Err(why) => return fail(&format!("{file}: {why}")),
     };
+    // What this run sealed is signed before the run reports, so a timer that runs this
+    // command leaves nothing it sealed waiting for the next run.
+    if let Some(signer) = signer.as_mut() {
+        sign_and_report(&dir, shard, &signing_tenant, signer, now_timestamp());
+    }
 
     // Why this run read what it read, before what it read. A run that started at
     // byte zero because a file was rotated and a run that started there because
@@ -626,13 +730,25 @@ fn read(args: Vec<String>) -> ExitCode {
         let Some(tenant) = tenant else {
             return fail("there is nothing sealed here to pack");
         };
-        let at = Timestamp(
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .map(|d| d.as_nanos() as u64)
-                .unwrap_or(0),
-        );
-        let bytes = reader::pack(&held, &tenant, at);
+        // The pack carries what Keyryx made of this root, if it made anything of it: the
+        // signature over exactly this root, and the witnesses filed for it. A root still
+        // in the queue is packed unsigned, and the verifier says so.
+        let root = reader::trees(&held).1.root();
+        let signed = match signing::signed_root(&dir, root) {
+            Ok(signed) => signed,
+            Err(why) => return fail(&format!("{}: {why}", dir.display())),
+        };
+        let witnesses = match std::env::var_os("TRAILRYX_WITNESS_ATTESTATIONS") {
+            Some(folder) => match signing::witnesses_for(Path::new(&folder), &tenant, root) {
+                Ok(witnesses) => witnesses,
+                Err(why) => return fail(&format!("{}: {why}", folder.to_string_lossy())),
+            },
+            None => Vec::new(),
+        };
+        if signed.is_none() {
+            println!("this root has no keyryx signature yet, so the pack is unsigned");
+        }
+        let bytes = reader::pack_attested(&held, &tenant, signed, witnesses, now_timestamp());
         if let Err(e) = std::fs::write(path, &bytes) {
             return fail(&format!("cannot write {path}: {e}"));
         }
