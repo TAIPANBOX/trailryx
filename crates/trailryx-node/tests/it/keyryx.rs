@@ -55,7 +55,12 @@ fn skip(what: &str) {
 }
 
 fn hex(bytes: &[u8]) -> String {
-    bytes.iter().map(|b| format!("{b:02x}")).collect()
+    use std::fmt::Write;
+    let mut out = String::with_capacity(bytes.len() * 2);
+    for b in bytes {
+        let _ = write!(out, "{b:02x}");
+    }
+    out
 }
 
 /// A data directory this process alone names (invariant 29), removed when the test
@@ -273,7 +278,7 @@ impl Keyryx {
     }
 
     fn set_reply(&self, change: impl FnOnce(&mut Reply)) {
-        change(&mut *self.reply.lock().expect("the reply lock"));
+        change(&mut self.reply.lock().expect("the reply lock"));
     }
 
     /// Every statement keyryx was sent to sign, in arrival order.
@@ -396,7 +401,8 @@ fn answer_signature(
     current: &Reply,
     statements: &Mutex<Vec<Vec<u8>>>,
 ) -> (&'static str, String) {
-    if request.header("authorization") != Some(format!("Bearer {}", current.bearer).as_str()) {
+    let authorised = format!("Bearer {}", current.bearer);
+    if request.header("authorization") != Some(authorised.as_str()) {
         return ("401 Unauthorized", r#"{"error":"Unauthorized"}"#.to_owned());
     }
     let Some(statement) = field_value(&request.body, "statement_b64").and_then(decode_base64)
@@ -568,7 +574,7 @@ fn a_witness_attestation_keyryx_writes_reads_back_as_the_statement_keyryx_witnes
     assert_eq!(a.seen_at, Timestamp(seen));
     assert_eq!(a.algorithm, SigAlg::Es384);
     assert_eq!(a.public_key, public);
-    assert_eq!(a.signature, vec![0u8; 96]);
+    assert_eq!(a.signature, [0u8; 96]);
 
     // The bytes keyryx's witness signed: its WitnessStatement, the same fields in the
     // same order. Each is behind its length except the time, which is eight bytes.
@@ -639,7 +645,7 @@ fn keyryx_signs_exactly_the_statement_it_is_given_and_answers_with_its_key() {
     let statement = root_statement(&tenant(), root, 1, Timestamp(T1), SigAlg::Es384, &public);
     assert_eq!(
         keyryx.statements(),
-        vec![statement],
+        [statement],
         "keyryx was sent trailryx-sign's statement, and nothing else"
     );
 }
@@ -656,7 +662,7 @@ fn a_keyryx_outage_leaves_the_root_queued_and_the_records_sealed() {
     assert_eq!(queued, root);
     assert_eq!(
         queued_roots(dir.path()).expect("the queue reads"),
-        vec![root],
+        [root],
         "the root is queued, not dropped"
     );
 
@@ -667,10 +673,7 @@ fn a_keyryx_outage_leaves_the_root_queued_and_the_records_sealed() {
         matches!(outcome, Outcome::Queued { waiting: 1, .. }),
         "{outcome:?}"
     );
-    assert_eq!(
-        queued_roots(dir.path()).expect("the queue reads"),
-        vec![root]
-    );
+    assert_eq!(queued_roots(dir.path()).expect("the queue reads"), [root]);
     assert!(
         signed_root(dir.path(), root)
             .expect("the signatures read")
@@ -736,7 +739,7 @@ fn a_queued_root_is_signed_under_the_time_it_was_queued_once_keyryx_answers() {
     );
     assert_eq!(signed.signature.public_key, public);
     let statement = root_statement(&tenant(), root, 1, Timestamp(T1), SigAlg::Es384, &public);
-    assert_eq!(keyryx.statements(), vec![statement]);
+    assert_eq!(keyryx.statements(), [statement]);
 }
 
 #[test]
@@ -888,10 +891,7 @@ fn a_signature_of_the_wrong_size_is_refused_and_its_root_stays_queued() {
             .expect("the signatures read")
             .is_none()
     );
-    assert_eq!(
-        queued_roots(dir.path()).expect("the queue reads"),
-        vec![root]
-    );
+    assert_eq!(queued_roots(dir.path()).expect("the queue reads"), [root]);
 
     // The control: once keyryx answers at full size, the same root is signed.
     keyryx.set_reply(|r| r.short_signature = false);
