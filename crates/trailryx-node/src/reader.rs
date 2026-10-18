@@ -28,9 +28,11 @@ use std::path::Path;
 use trailryx_index::segment::{Segment, ShardTree, StoreTree};
 use trailryx_journal::journal::{ChainStart, Journal};
 use trailryx_record::{Hash, Record, ShardIx, TenantId, Timestamp};
+use trailryx_sign::WitnessAttestation;
 use trailryx_store::evidence::PackBuilder;
 
 use crate::plane::{PlaneError, journal_name, sealed_manifests};
+use crate::signing::SignedRoot;
 
 #[derive(Debug)]
 pub enum ReadError {
@@ -145,4 +147,22 @@ pub fn pack(held: &Sealed, tenant: &TenantId, at: Timestamp) -> Vec<u8> {
     PackBuilder::new(tenant.clone(), at)
         .shard(&shard, &segments)
         .build(&store)
+}
+
+/// An evidence pack that carries what Keyryx made of the store root: the root's
+/// signature when one exists, and every witness attestation filed for the root.
+///
+/// The pack takes the signature's own time when it has one, because the signature
+/// covers the pack's `generated_at`; `now` is used only for an unsigned pack.
+///
+/// Red-first scaffold: the signature and the attestations are not attached yet.
+pub fn pack_attested(
+    held: &Sealed,
+    tenant: &TenantId,
+    signed: Option<SignedRoot>,
+    witnesses: Vec<WitnessAttestation>,
+    now: Timestamp,
+) -> Vec<u8> {
+    let _ = (signed, witnesses);
+    pack(held, tenant, now)
 }
