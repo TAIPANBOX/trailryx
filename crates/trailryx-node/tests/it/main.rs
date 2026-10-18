@@ -8,4 +8,5 @@
 
 mod cursor;
 mod events;
+mod keyryx;
 mod plane;

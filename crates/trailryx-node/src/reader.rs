@@ -28,9 +28,11 @@ use std::path::Path;
 use trailryx_index::segment::{Segment, ShardTree, StoreTree};
 use trailryx_journal::journal::{ChainStart, Journal};
 use trailryx_record::{Hash, Record, ShardIx, TenantId, Timestamp};
+use trailryx_sign::WitnessAttestation;
 use trailryx_store::evidence::PackBuilder;
 
 use crate::plane::{PlaneError, journal_name, sealed_manifests};
+use crate::signing::SignedRoot;
 
 #[derive(Debug)]
 pub enum ReadError {
@@ -145,4 +147,32 @@ pub fn pack(held: &Sealed, tenant: &TenantId, at: Timestamp) -> Vec<u8> {
     PackBuilder::new(tenant.clone(), at)
         .shard(&shard, &segments)
         .build(&store)
+}
+
+/// An evidence pack that carries what Keyryx made of the store root: the root's
+/// signature when one exists for this very root, and the witness attestations given.
+///
+/// A signature covers one root and one time. It is attached only when it is over the
+/// root this pack holds, and then the pack takes the signature's own time, because the
+/// verifier checks the signature against the pack's `generated_at`. Otherwise the pack
+/// is unsigned at `now`, and the verifier says so.
+pub fn pack_attested(
+    held: &Sealed,
+    tenant: &TenantId,
+    signed: Option<SignedRoot>,
+    witnesses: Vec<WitnessAttestation>,
+    now: Timestamp,
+) -> Vec<u8> {
+    let (shard, store) = trees(held);
+    let segments: Vec<&Segment> = held.segments.iter().collect();
+    let signed = signed.filter(|s| s.store_root == store.root());
+    let at = signed.as_ref().map_or(now, |s| s.generated_at);
+    let mut builder = PackBuilder::new(tenant.clone(), at).shard(&shard, &segments);
+    if let Some(signed) = signed {
+        builder = builder.signed_with(signed.signature);
+    }
+    for witness in witnesses {
+        builder = builder.witnessed_by(witness);
+    }
+    builder.build(&store)
 }

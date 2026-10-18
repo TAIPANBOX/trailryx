@@ -47,8 +47,10 @@
 
 pub mod cursor;
 pub mod events;
+pub mod keyryx;
 pub mod plane;
 pub mod reader;
+pub mod signing;
 
 pub use cursor::{Cursor, Remembered, Resume};
 pub use events::{Ingested, Ship, Shipped, ingest_bytes, ingest_file, ship};
