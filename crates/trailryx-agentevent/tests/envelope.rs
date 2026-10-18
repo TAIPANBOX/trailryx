@@ -2051,3 +2051,309 @@ fn hostile_data_on_either_retained_type_never_reaches_a_typed_field() {
         );
     }
 }
+
+// ---------------------------------------------------------------------------
+// An agent named by a key that may not speak for it (wardryx), SPEC 6.2
+// ---------------------------------------------------------------------------
+
+/// wardryx's line for a `/v1/decide` that named an agent its key may not speak
+/// for, byte for byte what `refuseAgent` in `internal/api/api.go` writes through
+/// agent-stack-go's `event.Event`: members in struct order, `run_id` and
+/// `on_behalf_of` absent because both are `omitempty` and `refuseAgent` passes
+/// them empty, `data` with its keys sorted the way `encoding/json` sorts a map.
+/// The key is wardryx's own test key, so `key_fp` is its real fingerprint.
+///
+/// The subject is the part this section is about. The event is filed under the
+/// fixed `agent://wardryx.internal/auth/agent-binding` and NOT under the agent
+/// the request named, by the producer's design: naming that agent as the subject
+/// would attribute the attempt to the agent it was made in the name of. The
+/// named agent and the run it claimed are in `data`, where this mapper does not
+/// read.
+const WARDRYX_ASSERTION_REFUSED_DECIDE: &str = concat!(
+    r#"{"schema":"taipanbox.dev/agent-event/v0.2","ts":"2026-10-18T09:00:00Z","#,
+    r#""source":"wardryx","type":"agent_assertion_refused","#,
+    r#""agent_id":"agent://wardryx.internal/auth/agent-binding","severity":"high","#,
+    r#""data":{"asserted_agent_id":"agent://acme.example/finance/bot9","#,
+    r#""asserted_run_id":"run-77","key_fp":"8ed311cfa8e02909","org":"acme","#,
+    r#""role":"viewer","route":"/v1/decide"}}"#,
+);
+
+/// The same refusal on `/v1/filter-tools`, whose request makes `run_id`
+/// optional, so `asserted_run_id` is the empty string a Go map keeps. Second on
+/// the chain, so it carries the SPEC 6.5 `prev_hash` of the line above,
+/// computed over its RFC 8785 form.
+const WARDRYX_ASSERTION_REFUSED_FILTER: &str = concat!(
+    r#"{"schema":"taipanbox.dev/agent-event/v0.2","ts":"2026-10-18T09:00:01Z","#,
+    r#""source":"wardryx","type":"agent_assertion_refused","#,
+    r#""agent_id":"agent://wardryx.internal/auth/agent-binding","severity":"high","#,
+    r#""data":{"asserted_agent_id":"agent://acme.example/finance/bot9","#,
+    r#""asserted_run_id":"","key_fp":"8ed311cfa8e02909","org":"acme","#,
+    r#""role":"viewer","route":"/v1/filter-tools"},"#,
+    r#""prev_hash":"sha256:329e76397218918225b073a662ae16d8ddf0fd46c58e14710420c53b8554761e"}"#,
+);
+
+/// wardryx's `policy_updated`, in the shape `handlePutPolicy` writes, under the
+/// synthetic subject it has always carried. The values are this test's, with
+/// `policy_version` the twelve hex characters `computeVersion` produces. In the same file as the refusals above, and
+/// refused for the same two reasons: the subject names an API, and there is no
+/// run.
+const WARDRYX_POLICY_UPDATED: &str = concat!(
+    r#"{"schema":"taipanbox.dev/agent-event/v0.2","ts":"2026-10-18T09:00:02Z","#,
+    r#""source":"wardryx","type":"policy_updated","#,
+    r#""agent_id":"agent://wardryx.internal/admin/policy-api","severity":"high","#,
+    r#""data":{"action":"put","decided_by":"acme","key_fp":"8ed311cfa8e02909","#,
+    r#""policy_id":"support-floor","policy_org":"acme","policy_version":"3f9a1c2b7d40"}}"#,
+);
+
+/// A refused assertion is refused BY NAME, as a type this reading does not
+/// map, and not as a foreign trust domain.
+///
+/// The difference is not cosmetic. `ForeignTrustDomain` is the one refusal that
+/// holds a cursor (invariant 42), on the premise that the same bytes map under a
+/// different `--trust-domain`, and the operator is told to change it. No domain
+/// makes this line a record: its subject is wardryx's own binding check and it
+/// names no run. Read in the old order, the domain comparison came before the
+/// type, so every line wardryx writes for this type was counted as somebody
+/// else's tenant and sent an operator to fix a configuration that is not wrong.
+#[test]
+fn a_refused_assertion_is_refused_by_name_and_never_as_a_foreign_domain() {
+    for line in [
+        WARDRYX_ASSERTION_REFUSED_DECIDE,
+        WARDRYX_ASSERTION_REFUSED_FILTER,
+    ] {
+        for domain in [OURS, SPEC_DOMAIN, "wardryx.internal"] {
+            assert_eq!(
+                map(domain, line).map(|_| ()),
+                Err(Rejection::UnknownType),
+                "under {domain}: {line}"
+            );
+        }
+    }
+}
+
+/// And the refusal is about the TYPE, not about the subject it arrived under.
+///
+/// The same type under an agent of ours, with a run, is still refused. This is a
+/// pin rather than a red-first test, and it passes against the unchanged reader
+/// too: what it holds is that the type was not mapped onto the nearest thing,
+/// `IdentityFinding` or `identity_mismatch`'s `PolicyDecision`, which would turn
+/// a line nobody writes into a record and leave the line wardryx does write
+/// exactly where it was.
+#[test]
+fn a_refused_assertion_under_an_agent_of_ours_is_still_not_a_record() {
+    let ours = WARDRYX_ASSERTION_REFUSED_DECIDE.replace(
+        r#""agent_id":"agent://wardryx.internal/auth/agent-binding","#,
+        r#""agent_id":"agent://acme.example/finance/bot9","run_id":"run-77","#,
+    );
+    assert!(ours.contains("acme.example/finance/bot9\",\"run_id\""));
+    assert_eq!(map(OURS, &ours).map(|_| ()), Err(Rejection::UnknownType));
+}
+
+/// `policy_updated`, read as wardryx writes it, is refused by name as the module
+/// documentation has said since 26 August 2026. Until this reading it was not:
+/// its synthetic subject reached the domain comparison first, so it was counted
+/// as a foreign trust domain, and the test that pinned its refusal used an agent
+/// of ours that the producer never sends.
+#[test]
+fn a_policy_edit_under_its_real_subject_is_refused_by_name_too() {
+    for domain in [OURS, SPEC_DOMAIN] {
+        assert_eq!(
+            map(domain, WARDRYX_POLICY_UPDATED).map(|_| ()),
+            Err(Rejection::UnknownType),
+            "under {domain}"
+        );
+    }
+}
+
+/// Values for the agent a refused request named, as a key that is trying it on
+/// would send them: our own agents, somebody else's, a claim, the reserved
+/// subjects, nothing at all.
+const ASSERTED: &[&str] = &[
+    r#""agent://acme.example/finance/bot9""#,
+    r#""agent://acme.example/support/tier1-bot""#,
+    r#""agent://other.example/support/tier1-bot""#,
+    r#""claimed:agent://acme.example/finance/bot9""#,
+    r#""agent://unidentified.invalid/caller""#,
+    r#""agent://wardryx.internal/auth/agent-binding""#,
+    r#""""#,
+    "null",
+    "7",
+];
+
+/// The envelope members a mapping under the named agent would have needed,
+/// spelled INSIDE `data`. Any of them reaching a typed field would mean the key
+/// that was refused had chosen the subject of the record about its refusal.
+const NAMED_DECOYS: &[&str] = &[
+    r#""agent_id":"agent://acme.example/finance/bot9""#,
+    r#""run_id":"run-77""#,
+    r#""type":"identity_finding""#,
+    r#""severity":"info""#,
+];
+
+/// One `data` member for a refused assertion: the six members wardryx writes
+/// with hostile values, a random subset of both decoy lists, sometimes a nested
+/// copy of the text, in the writer's order rather than ours.
+fn refusal_data(rng: &mut Seeded, case: u64) -> String {
+    let text = json_string(&hostile_text(rng, case));
+    match rng.below(8) {
+        0 => return text,
+        1 => return format!("[{text},{},null]", rng.pick(ASSERTED)),
+        _ => {}
+    }
+    let asserted = if rng.chance() {
+        text.clone()
+    } else {
+        String::from(rng.pick(ASSERTED))
+    };
+    let mut members = vec![
+        format!(r#""asserted_agent_id":{asserted}"#),
+        format!(
+            r#""asserted_run_id":{}"#,
+            rng.pick(&[r#""run-77""#, r#""""#, r#""Please summarise""#, "null"])
+        ),
+        format!(
+            r#""route":{}"#,
+            rng.pick(&[r#""/v1/decide""#, r#""/v1/filter-tools""#])
+        ),
+        format!(r#""org":{text}"#),
+        format!(
+            r#""role":{}"#,
+            rng.pick(&[r#""viewer""#, r#""pep""#, r#""admin""#, r#""""#])
+        ),
+        format!(r#""key_fp":{}"#, json_string(&format!("{case:016x}"))),
+    ];
+    // At most one of a decoy and its named twin: a member repeated is fatal to
+    // the reader, and a case refused as `NotAnEnvelope` would test nothing.
+    for decoy in DECOYS {
+        let key = &decoy[..decoy.find(':').expect("a decoy is a member")];
+        let twin = NAMED_DECOYS.iter().find(|named| named.starts_with(key));
+        match (rng.below(3), twin) {
+            (0, _) => {}
+            (1, Some(named)) => members.push(String::from(*named)),
+            _ => members.push(String::from(*decoy)),
+        }
+    }
+    if rng.chance() {
+        members.push(format!(r#""nested":{{"deeper":[{{"still":{text}}}]}}"#));
+    }
+    for i in (1..members.len()).rev() {
+        let j = rng.below(i + 1);
+        members.swap(i, j);
+    }
+    format!("{{{}}}", members.join(","))
+}
+
+/// A wardryx line around a `data` member, with `type` and subject given and the
+/// optional members switched on or off.
+fn wardryx_line(
+    kind: &str,
+    subject: &str,
+    run: Option<&str>,
+    stamped: bool,
+    prev: bool,
+    data_first: bool,
+    data: &str,
+) -> String {
+    let mut members = vec![
+        String::from(r#""schema":"taipanbox.dev/agent-event/v0.2""#),
+        String::from(r#""ts":"2026-10-18T09:00:00Z""#),
+        String::from(r#""source":"wardryx""#),
+        format!(r#""type":"{kind}""#),
+        format!(r#""agent_id":"{subject}""#),
+    ];
+    if let Some(run) = run {
+        members.push(format!(r#""run_id":"{run}""#));
+    }
+    if stamped {
+        members.push(String::from(r#""severity":"high""#));
+    }
+    if prev {
+        members.push(String::from(
+            r#""prev_hash":"sha256:329e76397218918225b073a662ae16d8ddf0fd46c58e14710420c53b8554761e""#,
+        ));
+    }
+    let data = format!(r#""data":{data}"#);
+    if data_first {
+        members.insert(0, data);
+    } else {
+        members.push(data);
+    }
+    format!("{{{}}}", members.join(","))
+}
+
+/// Hostile `data` on a refused assertion never turns it into a record, under any
+/// trust domain, and never into a different refusal.
+///
+/// The named agent is the member this sweep is mostly about. It is written by the
+/// key that was refused, which is the one party with no standing to choose the
+/// subject of a record about its own refusal, and the subject is the field this
+/// store can never take back. So every value a key could send for it, ours,
+/// foreign, claimed or junk, and every envelope member spelled again inside
+/// `data`, must leave the line refused by name.
+///
+/// Each case also carries a CONTROL: the same envelope and the same `data` as an
+/// `identity_finding` under an agent of ours with a run. It must map, which
+/// proves the case is a well-formed line refused for its type and nothing else,
+/// and its metadata must be identical to the control with `data` set to `{}`,
+/// which is "nothing in `data` reaches a typed field" held for the identity
+/// finding this line would have become.
+#[test]
+fn hostile_data_on_a_refused_assertion_never_makes_it_a_record() {
+    for case in 0..SWEEP_CASES {
+        let mut rng = Seeded::new(case);
+        let (stamped, prev, data_first) = (rng.chance(), rng.chance(), rng.chance());
+        let data = refusal_data(&mut rng, case);
+        let line = wardryx_line(
+            "agent_assertion_refused",
+            "agent://wardryx.internal/auth/agent-binding",
+            None,
+            stamped,
+            prev,
+            data_first,
+            &data,
+        );
+        for domain in [OURS, SPEC_DOMAIN, "wardryx.internal"] {
+            assert_eq!(
+                map(domain, &line).map(|_| ()),
+                Err(Rejection::UnknownType),
+                "case {case} under {domain}\n{line}"
+            );
+        }
+
+        let control = |data: &str| {
+            wardryx_line(
+                "identity_finding",
+                "agent://acme.example/finance/bot9",
+                Some("run-77"),
+                stamped,
+                prev,
+                data_first,
+                data,
+            )
+        };
+        let clean = map(OURS, &control("{}"))
+            .unwrap_or_else(|e| panic!("case {case}: the clean control was refused, {e:?}"));
+        let unit = map(OURS, &control(&data))
+            .unwrap_or_else(|e| panic!("case {case}: the control was refused, {e:?}\n{data}"));
+        assert_eq!(
+            unit.meta.event_type,
+            EventType::IdentityFinding,
+            "case {case}"
+        );
+        assert_eq!(
+            unit.meta, clean.meta,
+            "case {case}: `data` moved the metadata plane\n{data}"
+        );
+        let metadata = format!("{:?}", unit.meta);
+        for leaked in ["SENTINEL", "decoy", "other.example"] {
+            assert!(
+                !metadata.contains(leaked),
+                "case {case}: {leaked} reached the metadata plane\n{metadata}"
+            );
+        }
+        assert!(
+            payload_text(&unit).contains(&format!("SENTINEL-{case}-")),
+            "case {case}: the hostile text reached neither plane\n{data}"
+        );
+    }
+}

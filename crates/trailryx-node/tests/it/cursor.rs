@@ -843,3 +843,62 @@ fn a_run_refused_for_a_missing_run_id_still_moves_on() {
 
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// A wardryx bus that carried only what this reading refuses by name moves on,
+/// and does not blame the trust domain it was given.
+///
+/// THE DEFECT, measured against this branch's parent before the fix. wardryx
+/// files its refusals of an agent a key may not speak for under
+/// `agent://wardryx.internal/auth/agent-binding`, and its policy edits under
+/// `agent://wardryx.internal/admin/policy-api`, both by design, neither with a
+/// run. The reader compared the domain before it looked at the type, so a quiet
+/// hour in which wardryx refused two requests and an administrator edited a
+/// policy, and decided nothing, read as three lines of somebody else's tenant:
+/// the position was held, and the run printed that `--trust-domain` should be
+/// given the domain this bus mints under. Every domain is wrong for those lines,
+/// because no domain makes either type a record.
+#[test]
+fn a_bus_of_types_refused_by_name_moves_on_whatever_domain_their_subject_names() {
+    let dir = scratch("wardryx-refusals");
+    let file = dir.join("wardryx.ndjson");
+    let bus = concat!(
+        r#"{"schema":"taipanbox.dev/agent-event/v0.2","ts":"2026-10-18T09:00:00Z","source":"wardryx","type":"agent_assertion_refused","agent_id":"agent://wardryx.internal/auth/agent-binding","severity":"high","data":{"asserted_agent_id":"agent://acme.example/finance/bot9","asserted_run_id":"run-77","key_fp":"8ed311cfa8e02909","org":"acme","role":"viewer","route":"/v1/decide"}}"#,
+        "\n",
+        r#"{"schema":"taipanbox.dev/agent-event/v0.2","ts":"2026-10-18T09:00:01Z","source":"wardryx","type":"agent_assertion_refused","agent_id":"agent://wardryx.internal/auth/agent-binding","severity":"high","data":{"asserted_agent_id":"agent://acme.example/finance/bot9","asserted_run_id":"","key_fp":"8ed311cfa8e02909","org":"acme","role":"viewer","route":"/v1/filter-tools"},"prev_hash":"sha256:329e76397218918225b073a662ae16d8ddf0fd46c58e14710420c53b8554761e"}"#,
+        "\n",
+        r#"{"schema":"taipanbox.dev/agent-event/v0.2","ts":"2026-10-18T09:00:02Z","source":"wardryx","type":"policy_updated","agent_id":"agent://wardryx.internal/admin/policy-api","severity":"high","data":{"action":"put","decided_by":"acme","key_fp":"8ed311cfa8e02909","policy_id":"support-floor","policy_org":"acme","policy_version":"3f9a1c2b7d40"}}"#,
+        "\n",
+    );
+    std::fs::write(&file, bus).expect("a journal");
+
+    let first = run(&dir, &file);
+    assert_eq!(
+        first.ingested.accepted.written, 0,
+        "nothing here is a record"
+    );
+    assert_eq!(
+        (
+            first.ingested.report.unknown_type,
+            first.ingested.report.foreign_trust_domain
+        ),
+        (3, 0),
+        "refused by name, all three, and none of them as another tenant's"
+    );
+    assert!(
+        !first.held_for_trust_domain,
+        "a run must not tell the operator to change a domain no value of which \
+         would map these lines"
+    );
+    assert!(
+        first.cursor_written,
+        "and it has finished with them, as with any type this reading refuses"
+    );
+
+    let again = run(&dir, &file);
+    assert!(
+        again.nothing_new(),
+        "so an unchanged file is not offered a second time"
+    );
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
