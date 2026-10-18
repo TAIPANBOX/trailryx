@@ -84,7 +84,7 @@
 //! `generated_estate_replaced`, `option_refused`, `option_applied`,
 //! `decision_requested`, `cadence_set`, `crew_ran`, `plan_asked`,
 //! `anomaly_hinted`, `typed_answer`, `typed_unanswered`, `typed_refused`,
-//! `calibration_drift`, `chain_broken` and `chain_unchained`.
+//! `calibration_drift`, `chain_broken`, `chain_unchained` and `chain_restarted`.
 //!
 //! They are six kinds and the sentence that used to cover them named one.
 //! Most are a finding or an observation about infrastructure rather than a
@@ -211,12 +211,14 @@
 //! would record one act twice. The fourth, `calibration_drift`, is a finding
 //! about a template and a model over many answers, the first kind above.
 //!
-//! The two from `agent-conform` are the sixth kind, registered in SPEC 6.2 when
-//! `agent-conform watch-dir` was added. A verifier's finding about a stream is
-//! not a decision an agent took: `chain_broken` says a `prev_hash` in somebody's
-//! event file does not match the line before it, and `chain_unchained` says a
-//! file carries events and not one `prev_hash`, so nobody can verify it. Both
-//! are about a file on a box. Neither names a run, and each carries the
+//! The three from `agent-conform` are the sixth kind, the first two registered in
+//! SPEC 6.2 when `agent-conform watch-dir` was added and the third with the
+//! checkpoint sidecar. A verifier's finding about a stream is not a decision an
+//! agent took: `chain_broken` says a `prev_hash` in somebody's event file does
+//! not match the line before it, `chain_unchained` says a file carries events
+//! and not one `prev_hash`, so nobody can verify it, and `chain_restarted` says a
+//! stream's chain began again at a line that does not continue the one before
+//! it. All three are about a file on a box. None names a run, and each carries the
 //! synthetic identity of the verifier rather than an agent, which is the
 //! subject-axis problem the paragraph on `policy_updated` describes. This store
 //! seals what agents decided, and a chain the verifier could not follow is a

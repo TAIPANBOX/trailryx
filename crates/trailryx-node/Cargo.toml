@@ -17,12 +17,17 @@ trailryx-contracts = { path = "../trailryx-contracts" }
 # journal already chains with. One primitive rather than a second one chosen for
 # a smaller job.
 trailryx-crypto = { path = "../trailryx-crypto" }
+# The HTTP client the seal's signer reaches Keyryx over. Plain HTTP only: Keyryx
+# is on the private network, and this build links no TLS.
+trailryx-http = { path = "../trailryx-http" }
 trailryx-index = { path = "../trailryx-index" }
 trailryx-ingest = { path = "../trailryx-ingest" }
 trailryx-journal = { path = "../trailryx-journal" }
 trailryx-json = { path = "../trailryx-json" }
 trailryx-otlp = { path = "../trailryx-otlp" }
 trailryx-record = { path = "../trailryx-record" }
+# What a root signature and a witness attestation are, and the statements they sign.
+trailryx-sign = { path = "../trailryx-sign" }
 trailryx-sim = { path = "../trailryx-sim" }
 trailryx-store = { path = "../trailryx-store" }
 
