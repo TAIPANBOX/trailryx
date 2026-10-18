@@ -6,5 +6,7 @@
 //! file was, with its tests under the same names, so a run of one file is
 //! `cargo test -p trailryx-ingest --test it <module>::`.
 
+mod agent_door;
+mod agent_token_vectors;
 mod inflate;
 mod wire;

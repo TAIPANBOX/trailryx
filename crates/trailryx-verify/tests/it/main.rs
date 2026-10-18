@@ -7,4 +7,5 @@
 //! `cargo test -p trailryx-verify --test it <module>::`.
 
 mod cli;
+mod p256;
 mod p384;

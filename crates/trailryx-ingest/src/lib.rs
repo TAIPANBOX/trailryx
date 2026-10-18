@@ -20,7 +20,9 @@
 //!   [`server::Server::bind`] refuses to start rather than opening an
 //!   unauthenticated write path into an audit store. [`bearer::SharedSecret`] is
 //!   the reference provider: one secret for a fleet, which is not an identity
-//!   system and says so.
+//!   system and says so. [`agent_door::AgentTokenDoor`] is the other: each
+//!   agent's own vouchryx token and proof of possession, verified offline with
+//!   [`agent_token`], and every record bound to the agent that sent it.
 //! - **No HTTP/2, no h2c, and so no OTLP over gRPC.** HTTP/2 is HPACK, frames
 //!   and flow control, a larger surface than the rest of this crate put
 //!   together. OTLP over HTTP is the specification's default protocol and is
@@ -72,11 +74,14 @@
 //! client retries and one it throws away, [`auth`] for a check that runs late
 //! enough to be free.
 
+pub mod agent_door;
+pub mod agent_token;
 pub mod auth;
 pub mod bearer;
 pub mod config;
 pub mod handler;
 pub mod inflate;
+pub mod jose;
 pub mod request;
 pub mod response;
 pub mod server;

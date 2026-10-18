@@ -6,11 +6,12 @@
 //! secret is the same principal, so it answers "may anything write to this
 //! tenant" and nothing finer. That is enough for the deployment this crate was
 //! written for, an exporter and a store on the same private network behind a
-//! terminating proxy, and it is not an identity system. A deployment that needs
-//! to know which agent wrote a record gets that from the OTLP resource
-//! attributes through the mapper, which is where record identity has always come
-//! from; a deployment that needs per-agent *authorisation* supplies its own
-//! provider behind the same seam.
+//! terminating proxy, and it is not an identity system. Under it, which agent a
+//! record is about comes from the OTLP attributes through the mapper, which the
+//! exporter wrote, so any holder of the secret can write in any agent's name.
+//! A deployment that needs to know which agent is writing uses
+//! [`crate::agent_door`] instead, which takes each agent's own token and refuses
+//! a record that names anybody else.
 //!
 //! It is here rather than in a test because a seam with no implementation is a
 //! seam nobody has run. The same argument as the in-tree AEAD, with one

@@ -18,6 +18,7 @@ trailryx-asn1 = { path = "../trailryx-asn1" }
 trailryx-azure = { path = "../trailryx-azure" }
 trailryx-http = { path = "../trailryx-http" }
 trailryx-index = { path = "../trailryx-index" }
+trailryx-ingest = { path = "../trailryx-ingest" }
 trailryx-journal = { path = "../trailryx-journal" }
 trailryx-json = { path = "../trailryx-json" }
 trailryx-otlp = { path = "../trailryx-otlp" }

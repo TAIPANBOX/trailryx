@@ -49,8 +49,9 @@ use crate::request::{Head, Method};
 use crate::response::{ContentType, Response, Status, encode_export_response};
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicBool, Ordering};
+use trailryx_contracts::contracts::RequestContext;
 use trailryx_otlp::OtlpSource;
-use trailryx_record::Timestamp;
+use trailryx_record::{AgentId, Timestamp};
 
 /// The one GET route this server answers, checked before `path_prefix` and
 /// the OTLP routing below it. Not part of `compat/1.0.json`'s frozen
@@ -62,7 +63,15 @@ const READINESS_PATH: &str = "/healthz";
 #[derive(Debug)]
 pub enum Verdict {
     /// Read this many bytes, decompress if asked, then submit.
-    ReadBody { length: u64, gzip: bool },
+    ///
+    /// `caller` is the agent a binding gate admitted, and it goes to
+    /// [`Ingest::submit`] with the body: every record the body produces must be
+    /// that agent's. `None` at a fleet door and on an open port.
+    ReadBody {
+        length: u64,
+        gzip: bool,
+        caller: Option<AgentId>,
+    },
     /// Answer now. The body, if any, is never read: draining an oversized or
     /// rejected body to keep a connection alive is how a cap becomes free.
     Answer(Response),
@@ -225,11 +234,30 @@ impl Ingest {
         // export. Before the media type, the size test and the queue look too,
         // so an unauthorised caller learns nothing about this server's limits
         // and reserves none of its budget.
-        if let Some(gate) = &self.auth
-            && let auth::Outcome::Refuse(response) = gate.decide(head.authorization.as_deref())
-        {
-            return Verdict::Answer(response);
-        }
+        //
+        // The gate sees the request through the contract's own type, with the
+        // two fields a provider may need and nothing else this server read.
+        let caller = match &self.auth {
+            None => None,
+            Some(gate) => {
+                let mut fields: Vec<(&str, &[u8])> = Vec::with_capacity(2);
+                if let Some(credential) = head.authorization.as_deref() {
+                    fields.push(("authorization", credential));
+                }
+                if let Some(proof) = head.dpop.as_deref() {
+                    fields.push(("dpop", proof));
+                }
+                let request = RequestContext {
+                    method: head.method.as_str(),
+                    path: &head.raw_path,
+                    headers: &fields,
+                };
+                match gate.decide_request(&request) {
+                    auth::Outcome::Refuse(response) => return Verdict::Answer(response),
+                    auth::Outcome::Allow { caller } => caller,
+                }
+            }
+        };
 
         // Three cases, and they are three because collapsing the first two
         // told an SDK posting a legitimate empty export that its length was
@@ -242,6 +270,7 @@ impl Ingest {
                 return Verdict::ReadBody {
                     length: 0,
                     gzip: false,
+                    caller,
                 };
             }
             // It said nothing at all and described no content either, so there
@@ -250,6 +279,7 @@ impl Ingest {
                 return Verdict::ReadBody {
                     length: 0,
                     gzip: false,
+                    caller,
                 };
             }
             // It described a body and did not say how long. There is no
@@ -320,11 +350,16 @@ impl Ingest {
         Verdict::ReadBody {
             length: head.body_length(),
             gzip,
+            caller,
         }
     }
 
     /// Decompress if needed, hand the bytes to the source, and answer.
-    pub fn submit(&self, body: Vec<u8>, gzip: bool) -> Response {
+    ///
+    /// `caller` is the one [`Verdict::ReadBody`] carried, passed back unchanged:
+    /// a span naming any other agent is refused by the source and written down
+    /// there, and the emitter is told how many, and why, in the partial success.
+    pub fn submit(&self, body: Vec<u8>, gzip: bool, caller: Option<&AgentId>) -> Response {
         let body = if gzip {
             let bounds = inflate::Bounds {
                 max_output: self.config.max_body,
@@ -372,15 +407,17 @@ impl Ingest {
             // thousand spans got a bare two hundred with sixty-four of them
             // gone. The emitter was told everything landed.
             let dropped_before = source.dropped().spans;
-            source.accept(&body, recorded_at);
+            let not_the_caller_before = source.report().not_the_caller;
+            source.accept_as(&body, recorded_at, caller);
             Ok((
                 source.wire_report().malformed_batches - malformed_before,
                 source.report().lost() - lost_before,
                 source.dropped().spans - dropped_before,
+                source.report().not_the_caller - not_the_caller_before,
             ))
         });
 
-        let (malformed, lost, dropped) = match outcome {
+        let (malformed, lost, dropped, not_the_caller) = match outcome {
             Some(Ok(deltas)) => deltas,
             Some(Err(())) => {
                 return self.unavailable("the ingest queue is full; the batch is still yours");
@@ -401,6 +438,11 @@ impl Ingest {
         let rejected = u64::from(lost) + u64::from(dropped);
         if rejected > 0 {
             let why = match (lost, dropped) {
+                // First, because it is the one the emitter's own operator must
+                // hear about: the batch said some other agent did something.
+                _ if not_the_caller > 0 => {
+                    "some spans name another agent than the one whose token sent them; they were refused and the refusal was recorded"
+                }
                 (0, _) => "some spans were dropped at this server's decode limits",
                 (_, 0) => "some spans could not be mapped; see the store's ingest counters",
                 _ => "some spans were dropped at the decode limits and others could not be mapped",

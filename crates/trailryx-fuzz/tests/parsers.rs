@@ -183,6 +183,65 @@ fn targets() -> Vec<Target> {
             },
         },
         Target {
+            name: "verify::p256::verify",
+            corpus: vec![p256_case()],
+            run: |bytes| {
+                // A public key, a signature, and the message is the rest.
+                if bytes.len() < 129 {
+                    return false;
+                }
+                let (key, rest) = bytes.split_at(65);
+                let (sig, msg) = rest.split_at(64);
+                let ok = trailryx_verify::p256::verify(key, msg, sig).is_ok();
+                // The property that matters more than not panicking: nothing but
+                // the exact bytes a signer produced verifies.
+                assert!(!ok || bytes == p256_case(), "a mutated signature verified");
+                ok
+            },
+        },
+        Target {
+            name: "ingest::agent_token::verify",
+            corpus: vec![agent_presentation()],
+            run: |bytes| {
+                use trailryx_ingest::agent_token::{self, KeySet, Policy, ReplayCache, Request};
+                // A token and its proof, one line each, as two header fields
+                // would carry them.
+                let Ok(text) = std::str::from_utf8(bytes) else {
+                    return false;
+                };
+                let (token, proof) = text.split_once('\n').unwrap_or((text, ""));
+                let policy = Policy {
+                    keys: KeySet::from_jwks(AGENT_JWKS.as_bytes()).expect("a key set"),
+                    issuer: "https://vouchryx.acme.example".to_owned(),
+                    audience: "https://tokenfuse.acme.example".to_owned(),
+                };
+                let request = Request {
+                    token,
+                    proof: (!proof.is_empty()).then_some(proof),
+                    method: "POST",
+                    url: "https://tokenfuse.acme.example/v1/messages",
+                    now: 1_800_000_000,
+                };
+                let ok = agent_token::verify(
+                    &policy,
+                    &request,
+                    &mut ReplayCache::new(16),
+                    &|_, _, _| false,
+                )
+                .is_ok();
+                assert!(
+                    !ok || bytes == agent_presentation(),
+                    "a mutated token or proof verified"
+                );
+                ok
+            },
+        },
+        Target {
+            name: "ingest::agent_token::KeySet",
+            corpus: vec![AGENT_JWKS.as_bytes().to_vec()],
+            run: |bytes| trailryx_ingest::agent_token::KeySet::from_jwks(bytes).is_ok(),
+        },
+        Target {
             name: "s3::xml",
             corpus: vec![
                 b"<ListBucketResult><Contents><Key>a</Key></Contents></ListBucketResult>".to_vec(),
@@ -200,6 +259,42 @@ fn targets() -> Vec<Target> {
             },
         },
     ]
+}
+
+/// Wycheproof's ECDSA P-256 case 1, a plain valid signature, laid out the way
+/// the target above reads it: key, then signature, then message.
+fn p256_case() -> Vec<u8> {
+    let hex = concat!(
+        "042927b10512bae3eddcfe467828128bad2903269919f7086069c8c4df6c732838",
+        "c7787964eaac00e5921fb1498a60f4606766b3d9685001558d1a974e7341513e",
+        "2ba3a8be6b94d5ec80a6d9d1190a436effe50d85a1eee859b8cc6af9bd5c2e18",
+        "4cd60b855d442f5b3c7b11eb6c4e0ae7525fe710fab9aa7c77a67f79e6fadd76",
+        "313233343030",
+    );
+    (0..hex.len())
+        .step_by(2)
+        .map(|i| u8::from_str_radix(&hex[i..i + 2], 16).expect("hex"))
+        .collect()
+}
+
+/// The issuer keys of the estate's shared agent-token table (public halves,
+/// TEST-ONLY), which `crates/trailryx-ingest/tests/vectors/` vendors.
+const AGENT_JWKS: &str = r#"{"keys":[{"kid":"v-1","kty":"EC","crv":"P-256","x":"gMC-krcdA4Sf3PAKbQmV7932Yz-ld_OaQOFkiJjoMD8","y":"iLBNXvD8azso5GnNU_MKdpOyxYxLkJ0yzgkCME9Ijzk"},{"kid":"v-2","kty":"EC","crv":"P-256","x":"wUWcuRk-nomNkMBd3GAPtQyLLpwIppaRga1Ydaxevls","y":"YtwdBh4Ae2Im291EgS98KlXY7Mo7YGQuC-Uv-YYFLXs"}]}"#;
+
+/// The first case of that table, a good token and its holder's proof, as one
+/// token line and one proof line.
+fn agent_presentation() -> Vec<u8> {
+    use std::sync::OnceLock;
+    static CASE: OnceLock<Vec<u8>> = OnceLock::new();
+    CASE.get_or_init(|| {
+        let table = include_str!("../../trailryx-ingest/tests/vectors/agent-token-vectors.json");
+        let member = |name: &str| -> String {
+            let at = table.find(&format!("\"{name}\": \"")).expect("a member") + name.len() + 5;
+            table[at..at + table[at..].find('"').expect("a closing quote")].to_owned()
+        };
+        format!("{}\n{}", member("jws"), member("dpop")).into_bytes()
+    })
+    .clone()
 }
 
 /// The suite, at the size the gate runs it.
@@ -223,22 +318,22 @@ fn no_parser_panics_on_anything() {
     );
     // A suite that ran nothing passes vacuously, which is the failure mode of every
     // test harness that stops finding its own inputs.
-    assert!(report.targets >= 13, "targets: {}", report.targets);
-    assert!(report.cases >= 13 * 300, "cases: {}", report.cases);
+    assert!(report.targets >= 16, "targets: {}", report.targets);
+    assert!(report.cases >= 16 * 300, "cases: {}", report.cases);
 
     // The measurement that keeps this suite honest. Random bytes die at byte one,
     // so if nothing is accepted anywhere, the mutations are not reaching past the
     // first check and the run proves only that a rejection does not panic.
     let reaching: Vec<&(&str, u64)> = report.accepted.iter().filter(|(_, n)| *n > 0).collect();
     println!("accepted per target: {:?}", report.accepted);
-    // Eleven of the thirteen reach past the first check. The two that do not are
+    // Fourteen of the sixteen reach past the first check. The two that do not are
     // `verify::tsp::read` and `verify::Pack`, whose valid inputs are a real CMS
     // token and a real evidence pack: one needs an authority and the other needs
     // the trees that only exist at sealing time. Both are exercised for their
     // rejection path, which is worth something and is not the same thing, and this
     // number is here so that fact stays visible rather than being discovered later.
     assert!(
-        reaching.len() >= 11,
+        reaching.len() >= 14,
         "only {} of {} targets ever accepted an input, so this suite is testing \
          first rejections rather than parsers: {:?}",
         reaching.len(),

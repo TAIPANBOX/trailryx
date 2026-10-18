@@ -20,7 +20,7 @@ use trailryx_ingest::server::{Server, Stopper, silent_log};
 use trailryx_otlp::{Limits, MapperConfig, OtlpSource};
 use trailryx_record::{TenantId, Timestamp};
 
-const NOW: u64 = 1_700_000_000_000_000_000;
+pub(crate) const NOW: u64 = 1_700_000_000_000_000_000;
 
 // ---------------------------------------------------------------------------
 // A server on a throwaway port
@@ -34,7 +34,7 @@ struct Harness {
     handle: Option<std::thread::JoinHandle<()>>,
 }
 
-fn quick_config() -> Config {
+pub(crate) fn quick_config() -> Config {
     Config {
         bind: "127.0.0.1:0".parse().expect("a literal address parses"),
         // Short enough that the timing tests take a moment rather than a minute,
@@ -161,7 +161,7 @@ impl Drop for Harness {
     }
 }
 
-fn read_all(stream: &mut TcpStream) -> String {
+pub(crate) fn read_all(stream: &mut TcpStream) -> String {
     let mut out = Vec::new();
     let mut chunk = [0u8; 4096];
     loop {
@@ -174,7 +174,7 @@ fn read_all(stream: &mut TcpStream) -> String {
     String::from_utf8_lossy(&out).into_owned()
 }
 
-fn status_of(response: &str) -> u16 {
+pub(crate) fn status_of(response: &str) -> u16 {
     response
         .split_whitespace()
         .nth(1)
@@ -186,7 +186,7 @@ fn status_of(response: &str) -> u16 {
 // A valid OTLP body
 // ---------------------------------------------------------------------------
 
-fn varint(mut v: u64) -> Vec<u8> {
+pub(crate) fn varint(mut v: u64) -> Vec<u8> {
     let mut out = Vec::new();
     loop {
         let byte = (v & 0x7f) as u8;
@@ -199,14 +199,14 @@ fn varint(mut v: u64) -> Vec<u8> {
     }
 }
 
-fn field(number: u32, body: &[u8]) -> Vec<u8> {
+pub(crate) fn field(number: u32, body: &[u8]) -> Vec<u8> {
     let mut out = varint((u64::from(number) << 3) | 2);
     out.extend_from_slice(&varint(body.len() as u64));
     out.extend_from_slice(body);
     out
 }
 
-fn string_attr(key: &str, value: &str) -> Vec<u8> {
+pub(crate) fn string_attr(key: &str, value: &str) -> Vec<u8> {
     let mut any = field(1, value.as_bytes());
     any = field(2, &any);
     let mut kv = field(1, key.as_bytes());
@@ -216,7 +216,7 @@ fn string_attr(key: &str, value: &str) -> Vec<u8> {
 
 /// One span, mappable or not. A span with no trace id is one `map_span`
 /// rejects, which is how the partial-success path gets exercised.
-fn span(trace_id: Option<[u8; 16]>, span_id: u8) -> Vec<u8> {
+pub(crate) fn span(trace_id: Option<[u8; 16]>, span_id: u8) -> Vec<u8> {
     let mut out = Vec::new();
     if let Some(id) = trace_id {
         out.extend_from_slice(&field(1, &id));
