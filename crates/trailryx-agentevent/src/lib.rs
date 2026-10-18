@@ -60,6 +60,12 @@
 //! trust domain is refused rather than recorded. One valid producer could
 //! otherwise write records about every agent in the estate.
 //!
+//! The comparison runs after the type is read, not before, because
+//! [`Rejection::ForeignTrustDomain`] holds a cursor on the premise that the same
+//! bytes would map under a different domain, and that is only true of a type this
+//! reading maps. A type refused by name is refused under every domain, and it is
+//! counted as that. Every type this reading maps is compared exactly as before.
+//!
 //! # What is mapped, and what is refused by name
 //!
 //! An event type becomes a [`trailryx_record::EventType`] only where the record
@@ -84,9 +90,10 @@
 //! `generated_estate_replaced`, `option_refused`, `option_applied`,
 //! `decision_requested`, `cadence_set`, `crew_ran`, `plan_asked`,
 //! `anomaly_hinted`, `typed_answer`, `typed_unanswered`, `typed_refused`,
-//! `calibration_drift`, `chain_broken` and `chain_unchained`.
+//! `calibration_drift`, `chain_broken`, `chain_unchained` and
+//! `agent_assertion_refused`.
 //!
-//! They are six kinds and the sentence that used to cover them named one.
+//! They are seven kinds and the sentence that used to cover them named one.
 //! Most are a finding or an observation about infrastructure rather than a
 //! decision an agent took (`run_stalled`, the control plane's finding that a
 //! run stopped calling, registered 2026-09-18, is the newest of those: the
@@ -223,6 +230,32 @@
 //! reason to look at the stream, not an entry in anyone's history. The event is
 //! not lost: it is on the shared bus with its own hash chain, where the notifier
 //! and the console already read it.
+//!
+//! `agent_assertion_refused` is the seventh kind, in SPEC 6.2's wardryx row as
+//! read on 18 October 2026, and it is the one this vocabulary came nearest to
+//! taking, because it already has a type for the question it answers. wardryx
+//! refused a request whose key named an agent the key may not speak for, with a
+//! 403 and no decision, and "was this identity questioned, and when" is what
+//! `IdentityFinding` was cut for. It is refused because a record needs a subject
+//! and a run, and this event offers each only where this reader may not take it.
+//!
+//! The envelope's subject is `agent://wardryx.internal/auth/agent-binding`, the
+//! producer's own binding check, chosen so that the attempt is not attributed to
+//! the agent it was made in the name of. A record under it is the subject-axis
+//! problem `policy_updated` has, in a trust domain that is the producer's rather
+//! than the operator's. The agent the request named, and the run it claimed, are
+//! in `data` as `asserted_agent_id` and `asserted_run_id`, and moving them out of
+//! `data` into the subject is the one move [`Rejection::ClaimedSubject`] exists to
+//! refuse: the identifier was chosen by the key that was refused, the one party
+//! with no standing to choose the subject of a record about its own refusal, and
+//! the subject is the field this store can never take back. The envelope carries
+//! no run at all, and `/v1/filter-tools` does not require one even in `data`.
+//!
+//! So a mapping would have to promote members of `data` into the metadata plane
+//! or invent a run, and this reader does neither for any type. Either way out is
+//! a decision rather than a reading: a producer that sends a subject and a run
+//! this door can take as they are, or a rule that reads `data` for one type. The
+//! event is not lost meanwhile: it is on the bus in wardryx's own hash chain.
 //!
 //! # The two that got types of their own, and what that cost
 //!
@@ -1083,12 +1116,23 @@ pub fn map_line(cfg: &EnvelopeConfig, line: &[u8], cursor: Cursor) -> Result<Ing
         .as_deref()
         .and_then(|raw| AgentId::parse_strict(raw).ok())
         .ok_or(Rejection::NoAgent)?;
+
+    // The type before the domain, and the order is the claim
+    // `ForeignTrustDomain` makes. That refusal holds a cursor (invariant 42)
+    // because the same bytes map under a different `--trust-domain`, which is
+    // true only of a type this reading maps. A type it refuses by name is
+    // refused under every domain, so counting it as somebody else's tenant
+    // would hold a position for lines no domain can record and tell the
+    // operator to change a setting that is not wrong. wardryx files both of
+    // its refused types under `wardryx.internal`, so in the other order every
+    // line of either read as foreign. Nothing is recorded either way: the
+    // comparison below still refuses every type this reading does map.
+    let kind = parsed.kind.as_deref().ok_or(Rejection::UnknownType)?;
+    let mapping = mapping_for(kind).ok_or(Rejection::UnknownType)?;
+
     if !agent_id.as_str().starts_with(&cfg.prefix) {
         return Err(Rejection::ForeignTrustDomain);
     }
-
-    let kind = parsed.kind.as_deref().ok_or(Rejection::UnknownType)?;
-    let mapping = mapping_for(kind).ok_or(Rejection::UnknownType)?;
 
     let run_id = parsed
         .run_id
