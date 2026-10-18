@@ -180,6 +180,12 @@
           "TRAILRYX_DEMO_STORE": {
             "required": false
           },
+          "TRAILRYX_KEYRYX_CREDENTIAL_FILE": {
+            "required": false
+          },
+          "TRAILRYX_KEYRYX_URL": {
+            "required": false
+          },
           "TRAILRYX_S3_ADDRESSING": {
             "required": false
           },
@@ -196,6 +202,12 @@
             "required": false
           },
           "TRAILRYX_S3_SECRET": {
+            "required": false
+          },
+          "TRAILRYX_SIGNER": {
+            "required": false
+          },
+          "TRAILRYX_WITNESS_ATTESTATIONS": {
             "required": false
           }
         }
