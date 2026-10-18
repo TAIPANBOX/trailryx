@@ -19,6 +19,16 @@ pub struct KeyryxSigner {
     kid: Option<String>,
 }
 
+// Written by hand, never derived: `bearer` is a credential, and a derived Debug would
+// print it into any log line or panic message that formats the signer.
+impl std::fmt::Debug for KeyryxSigner {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        // Red-first scaffold: the real output names the kid and says a bearer is set,
+        // and never shows its value. This stub shows neither, so the Debug test fails.
+        f.write_str("KeyryxSigner")
+    }
+}
+
 impl KeyryxSigner {
     /// A signer for the Keyryx at `origin`, presenting `bearer` on every signature.
     /// Makes no request: the key set is read by [`KeyryxSigner::refresh`].

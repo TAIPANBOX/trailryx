@@ -947,3 +947,19 @@ fn keyryx_refuses_a_bearer_it_did_not_issue() {
         "a bearer keyryx did not issue signed"
     );
 }
+
+#[test]
+fn the_signer_debug_output_names_that_a_bearer_is_set_and_never_shows_it() {
+    // A derived Debug would print the bearer into any log line or panic message that
+    // formats the signer. The output must say a bearer is set, and must not carry it.
+    let signer = KeyryxSigner::new(&unreachable_origin(), BEARER).expect("a signer for the origin");
+    let shown = format!("{signer:?}");
+    assert!(
+        !shown.contains(BEARER),
+        "the bearer appeared in the signer's Debug output: {shown}"
+    );
+    assert!(
+        shown.contains("bearer set"),
+        "the Debug output does not say a bearer is set: {shown}"
+    );
+}
