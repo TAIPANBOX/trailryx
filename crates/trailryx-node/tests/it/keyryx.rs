@@ -684,7 +684,9 @@ fn a_keyryx_outage_leaves_the_root_queued_and_the_records_sealed() {
     // The seal stands whatever Keyryx did, and a pack built now says it is unsigned.
     let held =
         reader::read_sealed(dir.path(), ShardIx(0)).expect("the sealed records still read back");
-    assert_eq!(held.records(), 2);
+    // Two mapped events, and the one note the seal writes for the payload parts it declined
+    // (invariant 34: a declined part is a record in the run it belongs to).
+    assert_eq!(held.records(), 3);
     let pack = reader::pack_attested(&held, &tenant(), None, Vec::new(), Timestamp(T1));
     let report = verify(&pack).expect("the pack parses");
     assert!(
