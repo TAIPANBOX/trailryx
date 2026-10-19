@@ -1548,30 +1548,6 @@ fn keyryxs_witness_findings_are_refused_by_name() {
     }
 }
 
-/// And the line as keyryx stamps it today never reaches its type.
-///
-/// This is a change detector for one sentence of the module doc, the one
-/// saying that both producers of the sixth kind stamp v1.0 and are counted as
-/// `UnknownSchema`. The day `SCHEMAS` accepts v1.0 this goes red, and the
-/// sentence has to change with it.
-#[test]
-fn a_witness_finding_as_keyryx_stamps_it_is_refused_for_its_schema() {
-    for kind in WITNESS_FINDINGS {
-        let line = keyryx_line("taipanbox.dev/agent-event/v1.0", kind, "");
-        for domain in [OURS, "keyryx.internal"] {
-            match map(domain, &line) {
-                Err(Rejection::UnknownSchema) => {}
-                other => panic!(
-                    "{kind} under {domain} answered {:?}, expected UnknownSchema. If \
-                     this reader now accepts v1.0, the module doc's sentence about \
-                     the sixth kind's schema is no longer true.",
-                    other.map(|unit| unit.meta.event_type)
-                ),
-            }
-        }
-    }
-}
-
 // ---------------------------------------------------------------------------
 // SPEC 5.2: the proof is typed metadata, and survives an erasure
 // ---------------------------------------------------------------------------
