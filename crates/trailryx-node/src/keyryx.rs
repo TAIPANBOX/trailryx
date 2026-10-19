@@ -10,6 +10,7 @@
 
 use std::time::Duration;
 
+use trailryx_crypto::Sha256;
 use trailryx_http::{Client, Http, Method, Request};
 use trailryx_json::{Event, Limits, Reader};
 use trailryx_record::{Hash, SigAlg, TenantId, Timestamp};
@@ -31,11 +32,13 @@ const URL_SAFE: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwx
 
 /// A signer whose private key is held by Keyryx, reached over `trailryx-http`.
 ///
-/// The key is read by [`KeyryxSigner::refresh`], and every signature is checked against
-/// it: a key set that changed under the signer is refused, not signed under the old key.
+/// The key is read by [`KeyryxSigner::refresh`], and only the key whose RFC 7638 thumbprint
+/// is the pin is taken. Every signature is checked against it: a key set that changed under
+/// the signer is refused, not signed under the old key.
 pub struct KeyryxSigner {
     client: Client,
     bearer: String,
+    pin: String,
     public: Vec<u8>,
     kid: Option<String>,
 }
@@ -50,25 +53,34 @@ impl std::fmt::Debug for KeyryxSigner {
 }
 
 impl KeyryxSigner {
-    /// A signer for the Keyryx at `origin`, presenting `bearer` on every signature.
-    /// Makes no request: the key set is read by [`KeyryxSigner::refresh`].
-    pub fn new(origin: &str, bearer: &str, _pin: &str) -> Result<Self, SignError> {
+    /// A signer for the Keyryx at `origin`, presenting `bearer` on every signature, and
+    /// taking only the key whose thumbprint is `pin` (see [`parse_pin`]). Makes no request:
+    /// the key set is read by [`KeyryxSigner::refresh`].
+    pub fn new(origin: &str, bearer: &str, pin: &str) -> Result<Self, SignError> {
         let client = Client::new(origin)
             .map_err(|e| SignError::Unavailable(e.to_string()))?
             .with_timeouts(CONNECT, IO);
         Ok(Self {
             client,
             bearer: bearer.to_owned(),
+            pin: pin.to_owned(),
             public: Vec::new(),
             kid: None,
         })
     }
 
-    /// Read the key set and take its ES384 key as the one this signer signs under.
+    /// Read the key set and take its ES384 key as the one this signer signs under, if and
+    /// only if that key is the pinned one. A key set that is refused leaves the signer with
+    /// no key, so nothing is signed under the last key it read.
     pub fn refresh(&mut self) -> Result<(), SignError> {
+        self.kid = None;
+        self.public.clear();
         let request = Request::new(Method::Get, format!("/v1/jwks/{ROOT_KEY}"));
         let body = self.exchange(request)?;
         let (kid, public) = es384_key(&body)?;
+        if thumbprint_p384(&public).as_deref() != Some(self.pin.as_str()) {
+            return Err(refused("holds a key other than the pinned one"));
+        }
         self.kid = Some(kid);
         self.public = public;
         Ok(())
@@ -219,14 +231,34 @@ pub fn decode_base64url(text: &str) -> Option<Vec<u8>> {
     decode(text, URL_SAFE, false)
 }
 
-/// The RFC 7638 thumbprint of an uncompressed P-384 point. Red-first stub: not implemented.
-pub fn thumbprint_p384(_public: &[u8]) -> Option<String> {
-    None
+/// The RFC 7638 thumbprint of an uncompressed P-384 point: the SHA-256 of the key's
+/// canonical JSON, base64url without padding. It is the `kid` Keyryx publishes for an EC key,
+/// so the value an operator copies from Keyryx's key set is the value a pin is compared with.
+/// `None` for anything that is not a 97-byte uncompressed point.
+pub fn thumbprint_p384(public: &[u8]) -> Option<String> {
+    if public.len() != 97 || public.first() != Some(&0x04) {
+        return None;
+    }
+    let canonical = format!(
+        r#"{{"crv":"P-384","kty":"EC","x":"{}","y":"{}"}}"#,
+        encode_base64url(&public[1..49]),
+        encode_base64url(&public[49..97]),
+    );
+    Some(encode_base64url(&Sha256::digest(canonical.as_bytes())))
 }
 
-/// The pin a deployment names Keyryx's key by. Red-first stub: accepts anything.
-pub fn parse_pin(_text: &str) -> Result<String, String> {
-    Ok(String::new())
+/// The pin a deployment names Keyryx's key by: its RFC 7638 thumbprint, the `kid` Keyryx
+/// publishes for it. Read strictly: 43 base64url characters that decode to 32 bytes, with no
+/// padding and no other spelling of the same bytes.
+pub fn parse_pin(text: &str) -> Result<String, String> {
+    let shaped = text.len() == 43 && decode_base64url(text).is_some_and(|bytes| bytes.len() == 32);
+    if shaped {
+        Ok(text.to_owned())
+    } else {
+        Err(format!(
+            "{text:?} is not a Keyryx key thumbprint: the 43-character kid Keyryx publishes for the key"
+        ))
+    }
 }
 
 fn encode(bytes: &[u8], alphabet: &[u8; 64], padded: bool) -> String {

@@ -30,11 +30,10 @@ trailryx-record = { path = "../trailryx-record" }
 trailryx-sign = { path = "../trailryx-sign" }
 trailryx-sim = { path = "../trailryx-sim" }
 trailryx-store = { path = "../trailryx-store" }
-
-[dev-dependencies]
-# The reader's answer is checked by the one implementation that shares no code
-# with the store: an evidence pack the offline verifier reads. A round trip
-# graded by the code that wrote it would grade its own homework.
+# The P-384 check the seal makes on each signature Keyryx returns, before it keeps it.
+# The verifier depends on nothing, and this is the function an auditor reads in it. The
+# seal's gate and the pack verifier now share this one check, so a fault in it would reach
+# both; the pack round trip in the tests is read by it too, as it always was.
 trailryx-verify = { path = "../trailryx-verify" }
 
 [[bin]]

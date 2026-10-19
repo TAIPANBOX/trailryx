@@ -17,7 +17,7 @@ use std::path::{Path, PathBuf};
 
 use trailryx_index::segment::{ShardTree, StoreTree};
 use trailryx_record::{Hash, ShardIx, SigAlg, TenantId, Timestamp};
-use trailryx_sign::{RootSignature, WitnessAttestation, sign_root_unvalidated};
+use trailryx_sign::{RootSignature, WitnessAttestation, root_statement, sign_root_unvalidated};
 
 use crate::keyryx::{KeyryxSigner, hex_decode, hex_encode, parse_attestation};
 use crate::plane::{PlaneError, sealed_manifests, write_committing};
@@ -108,6 +108,15 @@ pub fn drain(dir: &Path, signer: &mut KeyryxSigner) -> Result<Outcome, PlaneErro
         // and this is the one call that signs an unvalidated signer, on purpose.
         match sign_root_unvalidated(signer, &queued.tenant, queued.root, 1, queued.generated_at) {
             Ok(signature) => {
+                // What Keyryx returned is checked before it is kept. A signature that does not
+                // verify leaves the root queued, so a pack says it is unsigned rather than
+                // carrying a signature that was never made over this root.
+                if let Err(why) = check_root_signature(&queued, &signature) {
+                    return Ok(Outcome::Queued {
+                        waiting: total - signed,
+                        why,
+                    });
+                }
                 store_signature(dir, &queued, &signature)?;
                 signed += 1;
             }
@@ -120,6 +129,28 @@ pub fn drain(dir: &Path, signer: &mut KeyryxSigner) -> Result<Outcome, PlaneErro
         }
     }
     Ok(Outcome::Signed(signed))
+}
+
+/// The check a seal makes on a signature Keyryx returned, before it is kept: that it verifies
+/// under the key it names, over the statement this seal made for this root and time. The
+/// signer that produced it is not trusted to say so.
+fn check_root_signature(queued: &Pending, signature: &RootSignature) -> Result<(), String> {
+    if signature.algorithm != SigAlg::Es384 {
+        return Err(format!(
+            "keyryx's root signature is {:?}, which this node does not check",
+            signature.algorithm
+        ));
+    }
+    let statement = root_statement(
+        &queued.tenant,
+        queued.root,
+        1,
+        queued.generated_at,
+        signature.algorithm,
+        &signature.public_key,
+    );
+    trailryx_verify::p384::verify(&signature.public_key, &statement, &signature.signature)
+        .map_err(|why| format!("keyryx's signature over the root does not verify: {why}"))
 }
 
 /// Every root still waiting for a signature, oldest first.
