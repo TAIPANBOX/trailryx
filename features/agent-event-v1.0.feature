@@ -46,3 +46,27 @@ Feature: The agent-event reader accepts v1.0 without loosening what it refuses
     When the reader reads it
     Then it is refused as a claimed subject
     # bound: a_claimed_subject_is_refused_by_name_rather_than_by_encoding
+
+  Scenario: The wardryx checkpoint lines, as wardryx wrote them, are refused for want of a run
+    Given the two policy-allow lines from wardryx's checkpoint vectors, stamped v1.0
+    When the reader reads them
+    Then both are refused for want of a run and neither is written
+    # bound: wardryx_checkpoint_vectors_as_written_are_refused_for_want_of_a_run
+
+  Scenario: With a run added, the wardryx checkpoint lines are allowed policy decisions
+    Given the same two lines with a run identifier added and nothing else changed
+    When the reader reads them
+    Then both are policy decisions with an allowed verdict, and the prev_hash stays in the payload
+    # bound: wardryx_checkpoint_vectors_with_a_run_are_allowed_policy_decisions_under_v1_0
+
+  Scenario: A claimed wardryx line under v1.0 is refused by name
+    Given a checkpoint line whose subject a process claimed about itself, stamped v1.0
+    When the reader reads it with and without a run
+    Then it is refused as a claimed subject both ways
+    # bound: a_claimed_real_wardryx_line_under_v1_0_is_refused_by_name_with_or_without_a_run
+
+  Scenario: The agent-conform and keyryx types under v1.0 are refused by type, with or without a run
+    Given lines from agent-conform and keyryx for the types the module doc names, stamped v1.0
+    When the reader reads each one, with and without a run
+    Then every one is refused by type and none is written as an agent's decision
+    # bound: real_agent_conform_and_keyryx_lines_under_v1_0_are_refused_by_type
