@@ -6,9 +6,9 @@
 
 Feature: A seal keeps only a Keyryx signature it has checked, under the key it is pinned to
 
-  Scenario: A key set holding a key other than the pinned one is refused before anything is signed
+  Scenario: A key set that does not hold the pinned key is refused before anything is signed, and keys beside the pinned one are passed over
     Given a node pinned to the thumbprint of one Keyryx key
-    When Keyryx offers a key set holding a different key
+    When Keyryx offers a key set that does not hold the pinned key
     Then the key set is refused and the signer signs nothing
     # bound: a_key_set_that_is_not_the_pinned_key_is_refused_before_anything_is_signed
 
