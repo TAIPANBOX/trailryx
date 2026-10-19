@@ -48,6 +48,7 @@ for file in "${files[@]}"; do
   current=""
   bound=""
   line_no=0
+  file_scenarios=0
   while IFS= read -r line || [ -n "$line" ]; do
     line_no=$((line_no + 1))
     if [[ "$line" =~ ^[[:space:]]*Scenario(\ Outline)?: ]]; then
@@ -57,6 +58,7 @@ for file in "${files[@]}"; do
       current="$line_no"
       bound=""
       scenarios=$((scenarios + 1))
+      file_scenarios=$((file_scenarios + 1))
     elif [[ "$line" =~ ^[[:space:]]*#[[:space:]]*bound:[[:space:]]*([A-Za-z0-9_]+)[[:space:]]*$ ]]; then
       name="${BASH_REMATCH[1]}"
       bindings=$((bindings + 1))
@@ -74,6 +76,12 @@ for file in "${files[@]}"; do
   done <"$file"
   if [ -n "$current" ] && [ -z "$bound" ]; then
     note "$file:$current has no '# bound:' line"
+  fi
+  # A file with no scenario is judged on its own: with a second feature file beside
+  # it, the total alone would still count the other file and report a binding
+  # mismatch instead of saying that this file measured nothing.
+  if [ "$file_scenarios" -eq 0 ]; then
+    note "$file holds no scenario, so this gate measured nothing in it"
   fi
 done
 
