@@ -52,7 +52,7 @@ impl std::fmt::Debug for KeyryxSigner {
 impl KeyryxSigner {
     /// A signer for the Keyryx at `origin`, presenting `bearer` on every signature.
     /// Makes no request: the key set is read by [`KeyryxSigner::refresh`].
-    pub fn new(origin: &str, bearer: &str) -> Result<Self, SignError> {
+    pub fn new(origin: &str, bearer: &str, _pin: &str) -> Result<Self, SignError> {
         let client = Client::new(origin)
             .map_err(|e| SignError::Unavailable(e.to_string()))?
             .with_timeouts(CONNECT, IO);
@@ -217,6 +217,16 @@ pub fn encode_base64url(bytes: &[u8]) -> String {
 /// The inverse of [`encode_base64url`].
 pub fn decode_base64url(text: &str) -> Option<Vec<u8>> {
     decode(text, URL_SAFE, false)
+}
+
+/// The RFC 7638 thumbprint of an uncompressed P-384 point. Red-first stub: not implemented.
+pub fn thumbprint_p384(_public: &[u8]) -> Option<String> {
+    None
+}
+
+/// The pin a deployment names Keyryx's key by. Red-first stub: accepts anything.
+pub fn parse_pin(_text: &str) -> Result<String, String> {
+    Ok(String::new())
 }
 
 fn encode(bytes: &[u8], alphabet: &[u8; 64], padded: bool) -> String {

@@ -195,7 +195,7 @@ fn keyryx_signer() -> Result<Option<KeyryxSigner>, String> {
     if bearer.is_empty() {
         return Err(format!("{credential_path} holds no credential"));
     }
-    KeyryxSigner::new(&origin, bearer)
+    KeyryxSigner::new(&origin, bearer, "")
         .map(Some)
         .map_err(|e| format!("TRAILRYX_KEYRYX_URL {origin}: {e}"))
 }
