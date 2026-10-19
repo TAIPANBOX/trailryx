@@ -7,7 +7,7 @@
 ![Stage](https://img.shields.io/badge/stage-13%20of%2013-blue.svg)
 ![Core](https://img.shields.io/badge/core-frozen-success.svg)
 ![Rust](https://img.shields.io/badge/rust-1.88%2B%2C%20SQL%20facade%201.89%2B-orange.svg)
-![Tests](https://img.shields.io/badge/tests-1315-success.svg)
+![Tests](https://img.shields.io/badge/tests-1323-success.svg)
 ![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)
 ![Dependencies](https://img.shields.io/badge/deps-0%20in%20the%20verifier-success.svg)
 ![Unsafe](https://img.shields.io/badge/unsafe-forbidden-success.svg)
@@ -335,7 +335,7 @@ migration. What stage 13 still wants is measured absence rather than a guess, an
 | `trailryx-ingest` | the OTLP/HTTP server: HTTP/1.1, gzip, bearer auth and the agent-token door, all hand-written | 164 |
 | `trailryx-compliance` | a versioned map from what is proved to what a framework asks, and what it does not | 12 |
 | `trailryx-sql` | the SQL facade: DataFusion and the Postgres wire protocol, predicates pushed into the index, statements gated, reads authorised, connections bounded, four dialect extensions | 64 |
-| `trailryx-agentevent` | the estate's shared agent-event envelope, mapped into records: the same `agent://` grammar, the same run and delegation chain | 58 |
+| `trailryx-agentevent` | the estate's shared agent-event envelope, mapped into records: the same `agent://` grammar, the same run and delegation chain | 66 |
 | `trailryx-node` | the record plane as one process: ingest, journal, sealing on a schedule, a reader that rebuilds a segment from the journal, and a cursor that moves with every seal so an import is safe to repeat, and a root signed by Keyryx when configured and queued while it cannot sign | 49 |
 | `trailryx-demo` | the eight acceptance steps, and a reader for a collector's file | 5 |
 
@@ -751,7 +751,7 @@ not repeated here: a number written twice is a number that will disagree with it
 ## Try it
 
 ```bash
-cargo test                                    # 1315 tests
+cargo test                                    # 1323 tests
 cargo run --bin trailryx-sim-run -- --help
 ```
 
@@ -2221,14 +2221,14 @@ use `git worktree`, `git config --worktree --get core.hooksPath` should answer w
 nothing, and `git config --worktree --unset core.hooksPath` if it does not. An
 absolute value there runs a different checkout's hook against your tree.
 
-`.githooks/pre-push` runs twenty-five checks and refuses the push if any fails:
+`.githooks/pre-push` runs twenty-six checks and refuses the push if any fails:
 formatting, clippy with warnings as errors, the tests, a standalone build of the
 substrate crate, a zero-dependency check on every crate outside the SQL facade, a
 build and test of the core with the facade absent, an `unsafe` check, every temp path
 a test builds, whether anything removes them again, whether a test can wait without a bound, whether any crate
 builds more than one integration-test binary, the
-shortcut that lets a push of nothing but deletions run no check at all, the count of these checks against what CI runs,  every field of
-every configuration struct against the code meant to read it, the determinism
+shortcut that lets a push of nothing but deletions run no check at all, the count of these checks against what CI runs, every scenario in `features/` bound to a
+test that exists, every field of every configuration struct against the code meant to read it, the determinism
 criterion, the published seed corpus, the two verifiers agreeing on the same packs, a
 reproducible build of the verifier from two different paths, the TLS build of the HTTP
 client, the FIPS 140-3 build of the cryptographic provider, every parser against
@@ -2237,7 +2237,7 @@ repository, the surface `compat/1.0.json` says this repository's 1.0 will freeze
 a 200-seed durability sweep, and the advisories. How long that takes,
 measured rather than remembered, is in [`VALIDATION.md`](VALIDATION.md).
 
-The twenty-sixth runs in CI only: it breaks each check above on purpose and requires the failure, since a check that has quietly stopped catching anything looks exactly like a check with nothing to catch. It cannot run from the hook, because one of its cases rewrites `.githooks/pre-push` and bash reads a script as it executes it.
+The check after them runs in CI only: it breaks each check above on purpose and requires the failure, since a check that has quietly stopped catching anything looks exactly like a check with nothing to catch. It cannot run from the hook, because one of its cases rewrites `.githooks/pre-push` and bash reads a script as it executes it.
 
 The one about the FIPS build was added on 7 August 2026 and closes a gap of the same
 shape as the configuration one below. `Vault::new` refuses any cipher and key source

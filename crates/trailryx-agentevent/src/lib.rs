@@ -1,7 +1,7 @@
 //! The estate's shared agent-event envelope, mapped into records.
 //!
 //! One JSON object per event, NDJSON when batched, `taipanbox.dev/agent-event`
-//! v0.1 or v0.2. It is the format the other products in this estate already emit,
+//! v0.1, v0.2, v0.3 or v1.0 (see [`SCHEMAS`]). It is the format the other products in this estate already emit,
 //! and the reason it needs no format change here is that the two were designed
 //! against the same identity grammar: an `agent://<trust-domain>/<path>` URI, a
 //! run, a delegation chain in `on_behalf_of`, and an event type. A record already
@@ -249,11 +249,13 @@
 //! another door: the signed attestations a pack carries for the root they name
 //! (invariant 46).
 //!
-//! Both producers stamp `taipanbox.dev/agent-event/v1.0`, which [`SCHEMAS`]
-//! does not list yet, so today a line from either is counted as
-//! [`Rejection::UnknownSchema`] before its subject or its type is read. Naming
-//! the ten here records the decision about the types. Accepting v1.0, which
-//! SPEC 6.4.1 asks of a consumer, is a separate change.
+//! Both producers stamp `taipanbox.dev/agent-event/v1.0`, which [`SCHEMAS`] has
+//! listed since reading 114. A line from either is therefore read, its subject
+//! and its type are checked, and the ten are refused by type. Naming the ten
+//! here records the decision about the types, and accepting v1.0 is what SPEC
+//! 6.4.1 asks of a consumer. Before 114 a line from either was counted as
+//! [`Rejection::UnknownSchema`] before its type was read, and that counter is
+//! not a record of what those producers decided.
 //!
 //! `agent_assertion_refused` is the seventh kind, in SPEC 6.2's wardryx row as
 //! read on 18 October 2026, and it is the one this vocabulary came nearest to
@@ -464,7 +466,17 @@ use trailryx_record::{
 /// argument once more: a shadow DLP finding written before this reading was an
 /// unknown type, refused and counted, so the trail of prompts that carried a
 /// secret or personal data to a provider starts at 113.
-pub const MAPPER_VERSION: MapperVersion = MapperVersion(113);
+///
+/// 114 is the reading that accepts `taipanbox.dev/agent-event/v1.0` (SPEC 6.4.1).
+/// Nothing about the registry moved: the change is at the door. A line stamped
+/// v1.0 was counted as [`Rejection::UnknownSchema`] before its type was read,
+/// so every v1.0 line that maps under this reading is one an earlier reading
+/// never wrote a record for. The trail of v1.0 events starts at 114, and a
+/// reader who finds none before it is looking at a reader that could not read
+/// the schema, not at producers that were silent. The lines that stay refused
+/// do not change: the ten types the module doc names are refused by type under
+/// this reading as they were counted before it.
+pub const MAPPER_VERSION: MapperVersion = MapperVersion(114);
 
 /// The one subject agent-passport SPEC 6.2 reserves for a caller that named no
 /// agent (2026-10-14), e.g. a key scan TokenFuse refused for its client key.
@@ -493,10 +505,20 @@ pub const UNIDENTIFIED_CALLER: &str = "agent://unidentified.invalid/caller";
 /// Accepting a version is not a promise to record its traffic. It is the
 /// statement that this reader knows what the version means, and this one now
 /// does: see [`Rejection::ClaimedSubject`].
+///
+/// **v1.0 is here because SPEC 6.4.1 asks a consumer to accept it.** It is
+/// v0.3's shape with the version string changed, so nothing about how a line is
+/// read depends on which of these four stamped it. The refusal of a claimed
+/// subject is therefore made on the subject and never on the version: it runs
+/// after this gate for every value in the list, and a claim under v1.0 is
+/// refused by name exactly as it is under v0.3. The gate is an exact match on
+/// the whole string, so a version this list does not name, v1.1 included, is
+/// still [`Rejection::UnknownSchema`].
 pub const SCHEMAS: &[&str] = &[
     "taipanbox.dev/agent-event/v0.1",
     "taipanbox.dev/agent-event/v0.2",
     "taipanbox.dev/agent-event/v0.3",
+    "taipanbox.dev/agent-event/v1.0",
 ];
 
 /// What the operator asserts, because the wire cannot.

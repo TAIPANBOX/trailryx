@@ -99,7 +99,7 @@ ci_count=$(awk '
   note "$hook runs $hook_count checks and $ci runs $ci_count with $ci_only of them CI-only, so a green push is not a green pull request"
 
 # The README's figure, written the way this repository writes numbers in prose.
-words="zero one two three four five six seven eight nine ten eleven twelve thirteen fourteen fifteen sixteen seventeen eighteen nineteen twenty twenty-one twenty-two twenty-three twenty-four twenty-five"
+words="zero one two three four five six seven eight nine ten eleven twelve thirteen fourteen fifteen sixteen seventeen eighteen nineteen twenty twenty-one twenty-two twenty-three twenty-four twenty-five twenty-six twenty-seven twenty-eight"
 word_for() {
   local n=$1 i=0
   for w in $words; do
