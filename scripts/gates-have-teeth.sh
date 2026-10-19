@@ -443,6 +443,52 @@ PY
 )" \
 	"measured nothing"
 
+# ---------------------------------------------------------------------------
+# feature-bindings.sh: every scenario bound to a test, both ways, and a missing
+# subject measured as nothing rather than as a pass.
+# ---------------------------------------------------------------------------
+
+# A scenario with its binding removed. The sentence still describes a behaviour, and
+# nothing checks it: exactly the gap the gate exists to close.
+run_case "feature-bindings: a scenario with no binding" fail \
+	'./scripts/feature-bindings.sh' \
+	"$(py 'edit("features/agent-event-v1.0.feature", "    # bound: an_established_subject_under_v0_3_still_maps\n", "")')" \
+	"has no '# bound:' line"
+
+# A binding renamed to a test that does not exist. The scenario now points at nothing,
+# which is what a rename or a deletion leaves behind if nobody follows the reference.
+run_case "feature-bindings: a binding naming no test" fail \
+	'./scripts/feature-bindings.sh' \
+	"$(py 'edit("features/agent-event-v1.0.feature", "# bound: under_v1_0_the_claim_prefix_is_not_stripped", "# bound: under_v1_0_the_claim_prefix_is_renamed")')" \
+	"no test of that name exists"
+
+# Every scenario keyword turned into something else. The bindings are then outside any
+# scenario, and the gate must say it measured nothing rather than report zero problems
+# over a file that holds no scenarios at all.
+run_case "feature-bindings: a feature file with no scenarios" fail \
+	'./scripts/feature-bindings.sh' \
+	"$(pyall 'edit("features/agent-event-v1.0.feature", "  Scenario:", "  Example:")')" \
+	"measured nothing"
+
+# The whole feature directory gone. A suite that vanished must not read as a suite with
+# zero scenarios all bound.
+run_case "feature-bindings: no feature files at all" fail \
+	'./scripts/feature-bindings.sh' \
+	"$(cat <<'PY'
+import shutil
+shutil.rmtree("features")
+PY
+)" \
+	"measured nothing"
+
+# A no-op edit on the committed tree. The gate must pass a feature file it has no
+# reason to object to; a binding gate that fails everything would be as useless as one
+# that passes everything.
+run_case "feature-bindings: the committed tree passes" pass \
+	'./scripts/feature-bindings.sh' \
+	"$(py 'edit("features/agent-event-v1.0.feature", "Then both read to the same record", "Then both read to the same record")')"
+
+
 echo
 if [ -n "$(git status --porcelain)" ]; then
 	printf 'FAIL: this script left the tree dirty, so it cannot be trusted about anything above\n'
