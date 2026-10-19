@@ -181,6 +181,7 @@ Everything below is a rule, not a description. Each one says what holds it today
     - *Given* Keyryx configured and no pin, *when* the node starts, *then* it refuses to start and names the setting. *(test: `keyryx_without_a_pinned_key_refuses_to_start`)*
     - *Given* a P-384 key, *when* its thumbprint is computed, *then* it is the value openssl computes over the RFC 7638 canonical JSON. *(test: `the_pin_is_the_thumbprint_keyryx_publishes_as_its_kid`)*
     - *Given* any value offered as the pin, *when* it is read, *then* only a 43-character thumbprint is read. *(test: `a_pin_is_a_keyryx_thumbprint_and_nothing_else`)*
+    - *Given* Keyryx configured and a pin that is not a thumbprint, *when* the node starts, *then* it refuses to start and names the setting. *(test: `keyryx_with_a_pin_that_is_not_a_thumbprint_refuses_to_start`)*
 
     Mutants, described and not run in CI: the pin comparison removed from `refresh`, caught by the first scenario; the verification removed from `drain`, or made to accept everything, caught by the three signature scenarios and their controls; the statement rebuilt with another shard count or time, caught by the controls, which would then refuse the honest signature; the start check removed, caught by the start scenario.
 

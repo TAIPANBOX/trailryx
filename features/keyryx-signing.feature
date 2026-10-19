@@ -47,3 +47,9 @@ Feature: A seal keeps only a Keyryx signature it has checked, under the key it i
     When the node reads it
     Then only a 43-character base64url thumbprint is read, and anything else is refused
     # bound: a_pin_is_a_keyryx_thumbprint_and_nothing_else
+
+  Scenario: A node configured for Keyryx with a pin that is not a thumbprint does not start
+    Given Keyryx is configured for the seal and the pin is a value that is not a thumbprint
+    When the node starts
+    Then it refuses to start and names the setting it cannot use
+    # bound: keyryx_with_a_pin_that_is_not_a_thumbprint_refuses_to_start

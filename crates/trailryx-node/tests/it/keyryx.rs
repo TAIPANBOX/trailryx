@@ -1265,4 +1265,47 @@ fn a_pin_is_a_keyryx_thumbprint_and_nothing_else() {
         "a 96-character hex key identity was read as a thumbprint"
     );
     assert!(parse_pin("").is_err(), "an empty pin was read");
+    // Right length, wrong alphabet: a character outside base64url.
+    assert!(
+        parse_pin(&format!("{}!", &good[..42])).is_err(),
+        "a pin with a character outside base64url was read"
+    );
+    // Right length and alphabet, but bits set after the 32nd byte: a second spelling of
+    // no key, which strict decoding refuses.
+    assert!(
+        parse_pin(&format!("{}B", "A".repeat(42))).is_err(),
+        "a pin with bits set after its last byte was read"
+    );
+}
+
+#[test]
+fn keyryx_with_a_pin_that_is_not_a_thumbprint_refuses_to_start() {
+    // The start refused above, with a value in the pin's place that is not a thumbprint.
+    let dir = Scratch::new("bad-pin");
+    let events = dir.path().join("events.ndjson");
+    std::fs::write(&events, EVENTS).expect("the fixture is written");
+    let credential = dir.path().join("credential");
+    std::fs::write(&credential, BEARER).expect("the credential is written");
+    let output = Command::new(env!("CARGO_BIN_EXE_trailryx-node"))
+        .arg("events")
+        .arg("--file")
+        .arg(&events)
+        .arg("--data")
+        .arg(dir.path().join("store"))
+        .args(["--tenant", "acme", "--trust-domain", TRUST_DOMAIN])
+        .env("TRAILRYX_SIGNER", "keyryx")
+        .env("TRAILRYX_KEYRYX_URL", unreachable_origin())
+        .env("TRAILRYX_KEYRYX_CREDENTIAL_FILE", &credential)
+        .env("TRAILRYX_KEYRYX_KID", "not-a-thumbprint")
+        .output()
+        .expect("the node runs");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        !output.status.success(),
+        "a keyryx signer with a pin that is not a thumbprint started: {stderr}"
+    );
+    assert!(
+        stderr.contains("TRAILRYX_KEYRYX_KID"),
+        "the refusal does not name the setting: {stderr}"
+    );
 }
