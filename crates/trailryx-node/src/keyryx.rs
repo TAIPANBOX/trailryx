@@ -77,10 +77,7 @@ impl KeyryxSigner {
         self.public.clear();
         let request = Request::new(Method::Get, format!("/v1/jwks/{ROOT_KEY}"));
         let body = self.exchange(request)?;
-        let (kid, public) = es384_key(&body)?;
-        if thumbprint_p384(&public).as_deref() != Some(self.pin.as_str()) {
-            return Err(refused("holds a key other than the pinned one"));
-        }
+        let (kid, public) = pinned_es384_key(&body, &self.pin)?;
         self.kid = Some(kid);
         self.public = public;
         Ok(())
@@ -140,41 +137,49 @@ fn refused(why: &str) -> SignError {
     SignError::Unavailable(format!("keyryx's key set {why}"))
 }
 
-/// The one ES384 key in a key set, as its kid and its uncompressed point `0x04 || X || Y`.
-fn es384_key(body: &[u8]) -> Result<(String, Vec<u8>), SignError> {
+/// The pinned ES384 key in a key set, as its kid and its uncompressed point `0x04 || X || Y`.
+///
+/// Keyryx publishes a key set with an overlap while a key rotates, so a set may hold the
+/// pinned key beside its successor. The one key taken is the P-384 key whose RFC 7638
+/// thumbprint is the pin; every other key is passed over, and a set with no such key is
+/// refused. A key that is not P-384, or whose coordinates are not 48 bytes, is never the pin.
+fn pinned_es384_key(body: &[u8], pin: &str) -> Result<(String, Vec<u8>), SignError> {
     let set = parse(body).map_err(|why| refused(&why))?;
     let keys = set
         .field("keys")
         .and_then(Json::items)
         .ok_or_else(|| refused("has no keys array"))?;
-    let [key] = keys else {
-        return Err(refused(&format!(
-            "holds {} keys, and this signer takes exactly one",
-            keys.len()
-        )));
-    };
-    if key.str_field("kty") != Some("EC") || key.str_field("crv") != Some("P-384") {
-        return Err(refused("holds no P-384 key"));
+    if keys.is_empty() {
+        return Err(refused("holds no key"));
     }
-    let kid = key
-        .str_field("kid")
-        .ok_or_else(|| refused("has a key with no kid"))?
-        .to_owned();
-    let x = key
-        .str_field("x")
-        .and_then(decode_base64url)
-        .filter(|x| x.len() == 48)
-        .ok_or_else(|| refused("has a key whose x is not 48 bytes"))?;
-    let y = key
-        .str_field("y")
-        .and_then(decode_base64url)
-        .filter(|y| y.len() == 48)
-        .ok_or_else(|| refused("has a key whose y is not 48 bytes"))?;
-    let mut public = Vec::with_capacity(97);
-    public.push(0x04);
-    public.extend_from_slice(&x);
-    public.extend_from_slice(&y);
-    Ok((kid, public))
+    for key in keys {
+        if key.str_field("kty") != Some("EC") || key.str_field("crv") != Some("P-384") {
+            continue;
+        }
+        let (Some(x), Some(y)) = (
+            key.str_field("x")
+                .and_then(decode_base64url)
+                .filter(|x| x.len() == 48),
+            key.str_field("y")
+                .and_then(decode_base64url)
+                .filter(|y| y.len() == 48),
+        ) else {
+            continue;
+        };
+        let mut public = Vec::with_capacity(97);
+        public.push(0x04);
+        public.extend_from_slice(&x);
+        public.extend_from_slice(&y);
+        if thumbprint_p384(&public).as_deref() != Some(pin) {
+            continue;
+        }
+        let kid = key
+            .str_field("kid")
+            .ok_or_else(|| refused("has the pinned key with no kid"))?
+            .to_owned();
+        return Ok((kid, public));
+    }
+    Err(refused("holds a key other than the pinned one"))
 }
 
 /// Keyryx's answer to a signature: the algorithm, the key that made it, the key's point
