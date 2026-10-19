@@ -232,6 +232,9 @@ struct Reply {
     zero_signature: bool,
     /// Sign a different statement, genuinely, and answer with that signature.
     sign_another_statement: bool,
+    /// Publish the key set the way Keyryx does while a key rotates: its successor first,
+    /// then the key it holds.
+    overlap: bool,
 }
 
 /// Keyryx's consumer-facing routes for `trailryx-root`, served from `key`. Stops
@@ -261,6 +264,7 @@ impl Keyryx {
             flip_last_bit: false,
             zero_signature: false,
             sign_another_statement: false,
+            overlap: false,
         }));
         let statements = Arc::new(Mutex::new(Vec::new()));
         let stop = Arc::new(AtomicBool::new(false));
@@ -392,6 +396,9 @@ fn serve(
     };
     let current = reply.lock().expect("the reply lock").clone();
     let (status, body) = match (request.method.as_str(), request.target.as_str()) {
+        ("GET", "/v1/jwks/trailryx-root") if current.overlap => {
+            ("200 OK", jwks_in_rotation(key, &current.kid))
+        }
         ("GET", "/v1/jwks/trailryx-root") => ("200 OK", jwks(key, &current.kid)),
         ("POST", "/v1/keys/trailryx-root/sign") => {
             answer_signature(&request, key, &current, statements)
@@ -410,6 +417,19 @@ fn serve(
 fn jwks(key: &Es384Key, kid: &str) -> String {
     format!(
         r#"{{"keys":[{{"kty":"EC","crv":"P-384","alg":"ES384","use":"sig","kid":"{kid}","x":"{}","y":"{}"}}]}}"#,
+        encode_base64url(&key.public[1..49]),
+        encode_base64url(&key.public[49..97]),
+    )
+}
+
+/// The key set during a rotation: a successor key first, then the key this Keyryx holds.
+/// The successor is a P-384 point of the right size that this Keyryx does not hold.
+fn jwks_in_rotation(key: &Es384Key, kid: &str) -> String {
+    let successor = [0x5au8; 48];
+    format!(
+        r#"{{"keys":[{{"kty":"EC","crv":"P-384","alg":"ES384","use":"sig","kid":"successor","x":"{}","y":"{}"}},{{"kty":"EC","crv":"P-384","alg":"ES384","use":"sig","kid":"{kid}","x":"{}","y":"{}"}}]}}"#,
+        encode_base64url(&successor),
+        encode_base64url(&successor),
         encode_base64url(&key.public[1..49]),
         encode_base64url(&key.public[49..97]),
     )
@@ -1047,6 +1067,49 @@ fn a_key_set_that_is_not_the_pinned_key_is_refused_before_anything_is_signed() {
     assert!(
         wrong.sign(b"statement").is_err(),
         "a signer that refused the key set signed"
+    );
+}
+
+#[test]
+fn a_key_set_in_rotation_signs_under_the_pinned_key_and_not_its_successor() {
+    let Some(key) = Es384Key::new("rotation") else {
+        skip("a key set in rotation");
+        return;
+    };
+    let pinned = key.public.clone();
+    let keyryx = Keyryx::start(key);
+    keyryx.set_reply(|r| r.overlap = true);
+    // The successor comes first in the set, so a signer that took the first key would sign
+    // under a key it is not pinned to, or refuse the set and stop signing for the overlap.
+    let mut signer = KeyryxSigner::new(&keyryx.origin, BEARER, &keyryx.pin()).expect("a signer");
+    signer
+        .refresh()
+        .expect("a key set holding the pinned key beside its successor is read");
+    assert_eq!(
+        signer.public_key(),
+        pinned,
+        "the signer took a key other than the pinned one from a set in rotation"
+    );
+    signer
+        .sign(b"statement")
+        .expect("the pinned key signs while its successor is published beside it");
+
+    // Pinned to the successor instead, which this Keyryx does not hold: the set is read
+    // under that pin, and the signature Keyryx answers with is refused, since it was made
+    // under another key.
+    let successor_pin = pin_of(&{
+        let mut point = vec![0x04u8];
+        point.extend_from_slice(&[0x5au8; 48]);
+        point.extend_from_slice(&[0x5au8; 48]);
+        point
+    });
+    let mut other = KeyryxSigner::new(&keyryx.origin, BEARER, &successor_pin).expect("a signer");
+    other
+        .refresh()
+        .expect("the successor is in the set, so a signer pinned to it reads it");
+    assert!(
+        other.sign(b"statement").is_err(),
+        "a signature made under the held key was accepted by a signer pinned to the successor"
     );
 }
 
