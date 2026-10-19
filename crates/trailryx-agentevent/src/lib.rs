@@ -90,8 +90,11 @@
 //! `generated_estate_replaced`, `option_refused`, `option_applied`,
 //! `decision_requested`, `cadence_set`, `crew_ran`, `plan_asked`,
 //! `anomaly_hinted`, `typed_answer`, `typed_unanswered`, `typed_refused`,
-//! `calibration_drift`, `chain_broken`, `chain_unchained`, `chain_restarted` and
-//! `agent_assertion_refused`.
+//! `calibration_drift`, `chain_broken`, `chain_unchained`, `chain_restarted`,
+//! `witness_stream_rewritten`, `witness_stream_truncated`,
+//! `witness_chain_restarted`, `witness_checkpoint_invalid`,
+//! `witness_checkpoint_unsigned`, `witness_root_missing`,
+//! `witness_root_equivocated` and `agent_assertion_refused`.
 //!
 //! They are seven kinds and the sentence that used to cover them named one.
 //! Most are a finding or an observation about infrastructure rather than a
@@ -218,20 +221,39 @@
 //! would record one act twice. The fourth, `calibration_drift`, is a finding
 //! about a template and a model over many answers, the first kind above.
 //!
-//! The three from `agent-conform` are the sixth kind, the first two registered in
-//! SPEC 6.2 when `agent-conform watch-dir` was added and the third with the
-//! checkpoint sidecar. A verifier's finding about a stream is not a decision an
-//! agent took: `chain_broken` says a `prev_hash` in somebody's event file does
-//! not match the line before it, `chain_unchained` says a file carries events
-//! and not one `prev_hash`, so nobody can verify it, and `chain_restarted` says a
-//! stream's chain began again at a line that does not continue the one before
-//! it. All three are about a file on a box. None names a run, and each carries the
-//! synthetic identity of the verifier rather than an agent, which is the
-//! subject-axis problem the paragraph on `policy_updated` describes. This store
-//! seals what agents decided, and a chain the verifier could not follow is a
-//! reason to look at the stream, not an entry in anyone's history. The event is
-//! not lost: it is on the shared bus with its own hash chain, where the notifier
-//! and the console already read it.
+//! The three from `agent-conform` and the seven from `keyryx` are the sixth
+//! kind. agent-conform's first two were registered in SPEC 6.2 when
+//! `agent-conform watch-dir` was added and its third with the checkpoint
+//! sidecar; keyryx's seven were registered on 18 October 2026, when its witness
+//! began writing them. A verifier's or a witness's finding about a stream is not
+//! a decision an agent took: `chain_broken` says a `prev_hash` in somebody's
+//! event file does not match the line before it, `chain_unchained` says a file
+//! carries events and not one `prev_hash`, so nobody can verify it, and
+//! `chain_restarted` says a stream's chain began again at a line that does not
+//! continue the one before it. keyryx's seven are the same kind of finding made
+//! by an independent witness: three about a stream (`witness_stream_rewritten`,
+//! `witness_stream_truncated`, `witness_chain_restarted`), two about its
+//! checkpoint sidecar (`witness_checkpoint_invalid`,
+//! `witness_checkpoint_unsigned`) and two about a root (`witness_root_missing`,
+//! `witness_root_equivocated`). All ten are about a file on a box. None names a
+//! run, and each carries the synthetic identity of its producer rather than an
+//! agent (`agent://keyryx.internal/witness` for every witness finding, with
+//! `data` naming the stream or tenant it concerns), which is the subject-axis
+//! problem the paragraph on `policy_updated` describes. This store seals what
+//! agents decided, and a chain the verifier could not follow, or a stream the
+//! witness saw change, is a reason to look at the stream, not an entry in
+//! anyone's history. Neither is lost. agent-conform's finding is on the shared
+//! bus with its own hash chain, where the notifier and the console already read
+//! it. keyryx writes its findings to its own stream on the bus,
+//! `keyryx.ndjson`, and what the witness vouches for reaches this store by
+//! another door: the signed attestations a pack carries for the root they name
+//! (invariant 46).
+//!
+//! Both producers stamp `taipanbox.dev/agent-event/v1.0`, which [`SCHEMAS`]
+//! does not list yet, so today a line from either is counted as
+//! [`Rejection::UnknownSchema`] before its subject or its type is read. Naming
+//! the ten here records the decision about the types. Accepting v1.0, which
+//! SPEC 6.4.1 asks of a consumer, is a separate change.
 //!
 //! `agent_assertion_refused` is the seventh kind, in SPEC 6.2's wardryx row as
 //! read on 18 October 2026, and it is the one this vocabulary came nearest to

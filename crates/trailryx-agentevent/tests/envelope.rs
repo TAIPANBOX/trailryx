@@ -1362,6 +1362,93 @@ fn a_delegation_carrying_a_run_is_still_refused() {
 }
 
 // ---------------------------------------------------------------------------
+// keyryx's witness findings: the sixth kind, refused by name
+// ---------------------------------------------------------------------------
+
+/// The seven types SPEC 6.2's `keyryx` row lists, in the row's order.
+const WITNESS_FINDINGS: [&str; 7] = [
+    "witness_stream_rewritten",
+    "witness_stream_truncated",
+    "witness_chain_restarted",
+    "witness_checkpoint_invalid",
+    "witness_checkpoint_unsigned",
+    "witness_root_missing",
+    "witness_root_equivocated",
+];
+
+/// A witness finding shaped after SPEC 6.2's `keyryx` bullets: the witness's
+/// own synthetic subject, `data` naming the stream it concerns, counts and a
+/// clipped hash. Written from the specification, not copied from keyryx's
+/// output.
+fn keyryx_line(schema: &str, kind: &str, extra: &str) -> String {
+    format!(
+        r#"{{"schema":"{schema}","ts":"2026-10-18T09:14:02Z","source":"keyryx",
+            "type":"{kind}","severity":"high","agent_id":"agent://keyryx.internal/witness",
+            "data":{{"stream":"wardryx.ndjson","count":97,"head":"sha256:5d1c09ab"}}{extra}}}"#
+    )
+    .replace('\n', "")
+}
+
+/// Refused by type, and by nothing earlier.
+///
+/// The line is given a version this reader accepts, so the schema passes and
+/// the type is the next thing read. It is refused as that under keyryx's own
+/// trust domain and under the operator's, because the type is read before the
+/// domain is compared: counting it as `ForeignTrustDomain` would hold a cursor
+/// for lines no domain can record (invariant 42). With a run as well it is
+/// still refused, which is what makes it a decision about the type rather than
+/// a missing field, the same distinction the delegation pair above draws.
+#[test]
+fn keyryxs_witness_findings_are_refused_by_name() {
+    for kind in WITNESS_FINDINGS {
+        for (domain, extra) in [
+            ("keyryx.internal", ""),
+            ("keyryx.internal", r#","run_id":"run-invented-1""#),
+            (OURS, ""),
+            (OURS, r#","run_id":"run-invented-1""#),
+        ] {
+            let line = keyryx_line("taipanbox.dev/agent-event/v0.2", kind, extra);
+            match map(domain, &line) {
+                Err(Rejection::UnknownType) => {}
+                Err(other) => {
+                    panic!("{kind} under {domain} is refused for {other:?}, expected UnknownType")
+                }
+                Ok(unit) => panic!(
+                    "{kind} mapped to {:?}. A witness's finding about a stream is \
+                     not a decision an agent took, and the module doc names it as \
+                     refused; if that changed, the doc changes with it.",
+                    unit.meta.event_type
+                ),
+            }
+        }
+    }
+}
+
+/// And the line as keyryx stamps it today never reaches its type.
+///
+/// This is a change detector for one sentence of the module doc, the one
+/// saying that both producers of the sixth kind stamp v1.0 and are counted as
+/// `UnknownSchema`. The day `SCHEMAS` accepts v1.0 this goes red, and the
+/// sentence has to change with it.
+#[test]
+fn a_witness_finding_as_keyryx_stamps_it_is_refused_for_its_schema() {
+    for kind in WITNESS_FINDINGS {
+        let line = keyryx_line("taipanbox.dev/agent-event/v1.0", kind, "");
+        for domain in [OURS, "keyryx.internal"] {
+            match map(domain, &line) {
+                Err(Rejection::UnknownSchema) => {}
+                other => panic!(
+                    "{kind} under {domain} answered {:?}, expected UnknownSchema. If \
+                     this reader now accepts v1.0, the module doc's sentence about \
+                     the sixth kind's schema is no longer true.",
+                    other.map(|unit| unit.meta.event_type)
+                ),
+            }
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
 // SPEC 5.2: the proof is typed metadata, and survives an erasure
 // ---------------------------------------------------------------------------
 
