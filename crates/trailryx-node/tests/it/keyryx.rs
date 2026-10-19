@@ -18,9 +18,10 @@ use std::thread::{self, JoinHandle};
 use std::time::Duration;
 
 use trailryx_agentevent::EnvelopeConfig;
+use trailryx_crypto::Sha256;
 use trailryx_node::keyryx::{
     KeyryxSigner, decode_base64, decode_base64url, encode_base64, encode_base64url,
-    parse_attestation,
+    parse_attestation, parse_pin, thumbprint_p384,
 };
 use trailryx_node::signing::{Outcome, drain, queued_roots, reconcile, signed_root, witnesses_for};
 use trailryx_node::{Plane, SealPolicy, ingest_file, reader};
@@ -37,6 +38,8 @@ const TRUST_DOMAIN: &str = "acme.example";
 const T0: u64 = 1_785_000_000_000_000_000;
 /// A second after the seal, when the root is first queued in these tests.
 const T1: u64 = T0 + 1_000_000_000;
+/// The pin a signer is given where no key is ever read, so the pin is never compared.
+const NO_PIN: &str = "no-key-is-read-behind-this-origin";
 
 /// Two events that map to records, the same lines `events.rs` maps in its own suite.
 const EVENTS: &str = concat!(
@@ -223,12 +226,22 @@ struct Reply {
     bearer: String,
     kid: String,
     short_signature: bool,
+    /// Flip the last bit of the signature: r is untouched and s no longer signs the statement.
+    flip_last_bit: bool,
+    /// Answer with r and s both zero, the classic forgery an unchecked verifier accepts.
+    zero_signature: bool,
+    /// Sign a different statement, genuinely, and answer with that signature.
+    sign_another_statement: bool,
+    /// Publish the key set the way Keyryx does while a key rotates: its successor first,
+    /// then the key it holds.
+    overlap: bool,
 }
 
 /// Keyryx's consumer-facing routes for `trailryx-root`, served from `key`. Stops
 /// when dropped, and the key goes with the thread that serves it.
 struct Keyryx {
     origin: String,
+    pin: String,
     reply: Arc<Mutex<Reply>>,
     statements: Arc<Mutex<Vec<Vec<u8>>>>,
     stop: Arc<AtomicBool>,
@@ -237,6 +250,7 @@ struct Keyryx {
 
 impl Keyryx {
     fn start(key: Es384Key) -> Self {
+        let pin = pin_of(&key.public);
         let listener = TcpListener::bind("127.0.0.1:0").expect("a loopback port");
         let origin = format!("http://{}", listener.local_addr().expect("a bound address"));
         // Non-blocking so the loop can see the stop flag between connections.
@@ -247,6 +261,10 @@ impl Keyryx {
             bearer: BEARER.to_owned(),
             kid: KID.to_owned(),
             short_signature: false,
+            flip_last_bit: false,
+            zero_signature: false,
+            sign_another_statement: false,
+            overlap: false,
         }));
         let statements = Arc::new(Mutex::new(Vec::new()));
         let stop = Arc::new(AtomicBool::new(false));
@@ -270,6 +288,7 @@ impl Keyryx {
         };
         Self {
             origin,
+            pin,
             reply,
             statements,
             stop,
@@ -279,6 +298,11 @@ impl Keyryx {
 
     fn set_reply(&self, change: impl FnOnce(&mut Reply)) {
         change(&mut self.reply.lock().expect("the reply lock"));
+    }
+
+    /// The thumbprint of the key this Keyryx holds: the pin a deployment would name it by.
+    fn pin(&self) -> String {
+        self.pin.clone()
     }
 
     /// Every statement keyryx was sent to sign, in arrival order.
@@ -372,6 +396,9 @@ fn serve(
     };
     let current = reply.lock().expect("the reply lock").clone();
     let (status, body) = match (request.method.as_str(), request.target.as_str()) {
+        ("GET", "/v1/jwks/trailryx-root") if current.overlap => {
+            ("200 OK", jwks_in_rotation(key, &current.kid))
+        }
         ("GET", "/v1/jwks/trailryx-root") => ("200 OK", jwks(key, &current.kid)),
         ("POST", "/v1/keys/trailryx-root/sign") => {
             answer_signature(&request, key, &current, statements)
@@ -390,6 +417,19 @@ fn serve(
 fn jwks(key: &Es384Key, kid: &str) -> String {
     format!(
         r#"{{"keys":[{{"kty":"EC","crv":"P-384","alg":"ES384","use":"sig","kid":"{kid}","x":"{}","y":"{}"}}]}}"#,
+        encode_base64url(&key.public[1..49]),
+        encode_base64url(&key.public[49..97]),
+    )
+}
+
+/// The key set during a rotation: a successor key first, then the key this Keyryx holds.
+/// The successor is a P-384 point of the right size that this Keyryx does not hold.
+fn jwks_in_rotation(key: &Es384Key, kid: &str) -> String {
+    let successor = [0x5au8; 48];
+    format!(
+        r#"{{"keys":[{{"kty":"EC","crv":"P-384","alg":"ES384","use":"sig","kid":"successor","x":"{}","y":"{}"}},{{"kty":"EC","crv":"P-384","alg":"ES384","use":"sig","kid":"{kid}","x":"{}","y":"{}"}}]}}"#,
+        encode_base64url(&successor),
+        encode_base64url(&successor),
         encode_base64url(&key.public[1..49]),
         encode_base64url(&key.public[49..97]),
     )
@@ -416,12 +456,26 @@ fn answer_signature(
         .lock()
         .expect("the statement lock")
         .push(statement.clone());
-    let Some(mut signature) = key.sign_raw(&statement) else {
+    // What keyryx answers is a signature, unless a test has changed it: a genuine signature
+    // over another statement, one bit off, or zeros.
+    let signed_over = if current.sign_another_statement {
+        b"a statement keyryx was never asked to sign".to_vec()
+    } else {
+        statement.clone()
+    };
+    let Some(mut signature) = key.sign_raw(&signed_over) else {
         return (
             "500 Internal Server Error",
             r#"{"error":"store_failed"}"#.to_owned(),
         );
     };
+    if current.zero_signature {
+        signature = vec![0u8; 96];
+    }
+    if current.flip_last_bit {
+        let last = signature.len() - 1;
+        signature[last] ^= 1;
+    }
     if current.short_signature {
         signature.pop();
     }
@@ -627,7 +681,8 @@ fn keyryx_signs_exactly_the_statement_it_is_given_and_answers_with_its_key() {
     };
     let public = key.public.clone();
     let keyryx = Keyryx::start(key);
-    let mut signer = KeyryxSigner::new(&keyryx.origin, BEARER).expect("a signer for the origin");
+    let mut signer =
+        KeyryxSigner::new(&keyryx.origin, BEARER, &keyryx.pin()).expect("a signer for the origin");
     signer.refresh().expect("the key set is read");
     assert_eq!(
         signer.public_key(),
@@ -667,7 +722,7 @@ fn a_keyryx_outage_leaves_the_root_queued_and_the_records_sealed() {
     );
 
     let mut signer =
-        KeyryxSigner::new(&unreachable_origin(), BEARER).expect("a signer for the origin");
+        KeyryxSigner::new(&unreachable_origin(), BEARER, NO_PIN).expect("a signer for the origin");
     let outcome = drain(dir.path(), &mut signer).expect("an outage is an outcome, not an error");
     assert!(
         matches!(outcome, Outcome::Queued { waiting: 1, .. }),
@@ -712,14 +767,14 @@ fn a_queued_root_is_signed_under_the_time_it_was_queued_once_keyryx_answers() {
         .expect("reconcile")
         .expect("a sealed root is queued");
 
-    let mut down = KeyryxSigner::new(&unreachable_origin(), BEARER).expect("a signer");
+    let mut down = KeyryxSigner::new(&unreachable_origin(), BEARER, NO_PIN).expect("a signer");
     assert!(matches!(
         drain(dir.path(), &mut down).expect("the drain"),
         Outcome::Queued { .. }
     ));
 
     let keyryx = Keyryx::start(key);
-    let mut up = KeyryxSigner::new(&keyryx.origin, BEARER).expect("a signer");
+    let mut up = KeyryxSigner::new(&keyryx.origin, BEARER, &keyryx.pin()).expect("a signer");
     up.refresh().expect("the key set is read");
     assert_eq!(
         drain(dir.path(), &mut up).expect("the drain"),
@@ -759,7 +814,7 @@ fn a_pack_built_after_keyryx_signed_carries_the_signature_and_the_witness_the_ve
         .expect("a sealed root is queued");
 
     let keyryx = Keyryx::start(key);
-    let mut signer = KeyryxSigner::new(&keyryx.origin, BEARER).expect("a signer");
+    let mut signer = KeyryxSigner::new(&keyryx.origin, BEARER, &keyryx.pin()).expect("a signer");
     signer.refresh().expect("the key set is read");
     assert_eq!(
         drain(dir.path(), &mut signer).expect("the drain"),
@@ -879,7 +934,7 @@ fn a_signature_of_the_wrong_size_is_refused_and_its_root_stays_queued() {
 
     let keyryx = Keyryx::start(key);
     keyryx.set_reply(|r| r.short_signature = true);
-    let mut signer = KeyryxSigner::new(&keyryx.origin, BEARER).expect("a signer");
+    let mut signer = KeyryxSigner::new(&keyryx.origin, BEARER, &keyryx.pin()).expect("a signer");
     signer.refresh().expect("the key set is read");
     assert!(
         matches!(
@@ -910,7 +965,7 @@ fn a_key_set_that_changed_under_the_signer_is_refused_not_signed_under_the_old_k
         return;
     };
     let keyryx = Keyryx::start(key);
-    let mut signer = KeyryxSigner::new(&keyryx.origin, BEARER).expect("a signer");
+    let mut signer = KeyryxSigner::new(&keyryx.origin, BEARER, &keyryx.pin()).expect("a signer");
     signer.refresh().expect("the key set is read");
     // The control: the signer signs under the key it read.
     signer
@@ -933,14 +988,18 @@ fn keyryx_refuses_a_bearer_it_did_not_issue() {
         return;
     };
     let keyryx = Keyryx::start(key);
-    let mut signer = KeyryxSigner::new(&keyryx.origin, BEARER).expect("a signer");
+    let mut signer = KeyryxSigner::new(&keyryx.origin, BEARER, &keyryx.pin()).expect("a signer");
     signer.refresh().expect("the key set is read");
     signer
         .sign(b"statement")
         .expect("the bearer keyryx issued signs");
 
-    let mut stranger = KeyryxSigner::new(&keyryx.origin, "a-bearer-keyryx-never-issued")
-        .expect("a signer for the origin");
+    let mut stranger = KeyryxSigner::new(
+        &keyryx.origin,
+        "a-bearer-keyryx-never-issued",
+        &keyryx.pin(),
+    )
+    .expect("a signer for the origin");
     stranger
         .refresh()
         .expect("the key set is public, so a stranger may read it");
@@ -954,7 +1013,8 @@ fn keyryx_refuses_a_bearer_it_did_not_issue() {
 fn the_signer_debug_output_names_that_a_bearer_is_set_and_never_shows_it() {
     // A derived Debug would print the bearer into any log line or panic message that
     // formats the signer. The output must say a bearer is set, and must not carry it.
-    let signer = KeyryxSigner::new(&unreachable_origin(), BEARER).expect("a signer for the origin");
+    let signer =
+        KeyryxSigner::new(&unreachable_origin(), BEARER, NO_PIN).expect("a signer for the origin");
     let shown = format!("{signer:?}");
     assert!(
         !shown.contains(BEARER),
@@ -963,5 +1023,352 @@ fn the_signer_debug_output_names_that_a_bearer_is_set_and_never_shows_it() {
     assert!(
         shown.contains("bearer set"),
         "the Debug output does not say a bearer is set: {shown}"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// The pin, and what a seal checks before it keeps a Keyryx signature
+// ---------------------------------------------------------------------------
+
+/// The RFC 7638 thumbprint of an uncompressed P-384 point, computed from the canonical
+/// JSON with this crate's SHA-256. The openssl test below is what proves it right.
+fn pin_of(public: &[u8]) -> String {
+    let canonical = format!(
+        r#"{{"crv":"P-384","kty":"EC","x":"{}","y":"{}"}}"#,
+        encode_base64url(&public[1..49]),
+        encode_base64url(&public[49..97]),
+    );
+    encode_base64url(&Sha256::digest(canonical.as_bytes()))
+}
+
+#[test]
+fn a_key_set_that_is_not_the_pinned_key_is_refused_before_anything_is_signed() {
+    let Some(key) = Es384Key::new("pinned") else {
+        skip("a pinned key");
+        return;
+    };
+    let keyryx = Keyryx::start(key);
+    // The control: pinned to the key keyryx holds, the key set is read and it signs.
+    let mut right = KeyryxSigner::new(&keyryx.origin, BEARER, &keyryx.pin()).expect("a signer");
+    right.refresh().expect("the pinned key is read");
+    assert!(
+        right.sign(b"statement").is_ok(),
+        "the pinned key did not sign"
+    );
+
+    // A key keyryx does not hold is pinned instead: the key set is refused, and a signer
+    // that refused it holds no key to sign under.
+    let other = pin_of(&[0x04u8; 97]);
+    let mut wrong = KeyryxSigner::new(&keyryx.origin, BEARER, &other).expect("a signer");
+    assert!(
+        wrong.refresh().is_err(),
+        "a key set holding a key other than the pinned one was read"
+    );
+    assert!(
+        wrong.sign(b"statement").is_err(),
+        "a signer that refused the key set signed"
+    );
+}
+
+#[test]
+fn a_key_set_in_rotation_signs_under_the_pinned_key_and_not_its_successor() {
+    let Some(key) = Es384Key::new("rotation") else {
+        skip("a key set in rotation");
+        return;
+    };
+    let pinned = key.public.clone();
+    let keyryx = Keyryx::start(key);
+    keyryx.set_reply(|r| r.overlap = true);
+    // The successor comes first in the set, so a signer that took the first key would sign
+    // under a key it is not pinned to, or refuse the set and stop signing for the overlap.
+    let mut signer = KeyryxSigner::new(&keyryx.origin, BEARER, &keyryx.pin()).expect("a signer");
+    signer
+        .refresh()
+        .expect("a key set holding the pinned key beside its successor is read");
+    assert_eq!(
+        signer.public_key(),
+        pinned,
+        "the signer took a key other than the pinned one from a set in rotation"
+    );
+    signer
+        .sign(b"statement")
+        .expect("the pinned key signs while its successor is published beside it");
+
+    // Pinned to the successor instead, which this Keyryx does not hold: the set is read
+    // under that pin, and the signature Keyryx answers with is refused, since it was made
+    // under another key.
+    let successor_pin = pin_of(&{
+        let mut point = vec![0x04u8];
+        point.extend_from_slice(&[0x5au8; 48]);
+        point.extend_from_slice(&[0x5au8; 48]);
+        point
+    });
+    let mut other = KeyryxSigner::new(&keyryx.origin, BEARER, &successor_pin).expect("a signer");
+    other
+        .refresh()
+        .expect("the successor is in the set, so a signer pinned to it reads it");
+    assert!(
+        other.sign(b"statement").is_err(),
+        "a signature made under the held key was accepted by a signer pinned to the successor"
+    );
+}
+
+#[test]
+fn a_tampered_signature_is_refused_and_its_root_stays_queued() {
+    let Some(key) = Es384Key::new("tampered") else {
+        skip("a tampered signature");
+        return;
+    };
+    let dir = Scratch::new("tampered");
+    seal_two_events(dir.path());
+    let root = reconcile(dir.path(), ShardIx(0), &tenant(), Timestamp(T1))
+        .expect("reconcile")
+        .expect("a sealed root is queued");
+
+    let keyryx = Keyryx::start(key);
+    keyryx.set_reply(|r| r.flip_last_bit = true);
+    let mut signer = KeyryxSigner::new(&keyryx.origin, BEARER, &keyryx.pin()).expect("a signer");
+    signer.refresh().expect("the key set is read");
+    assert!(
+        matches!(
+            drain(dir.path(), &mut signer).expect("the drain"),
+            Outcome::Queued { waiting: 1, .. }
+        ),
+        "a signature that does not verify was accepted"
+    );
+    assert!(
+        signed_root(dir.path(), root)
+            .expect("the signatures read")
+            .is_none(),
+        "a signature that does not verify was stored"
+    );
+    assert_eq!(queued_roots(dir.path()).expect("the queue reads"), [root]);
+
+    // The control: the same keyryx, answering correctly, signs the same root.
+    keyryx.set_reply(|r| r.flip_last_bit = false);
+    assert_eq!(
+        drain(dir.path(), &mut signer).expect("the drain"),
+        Outcome::Signed(1)
+    );
+}
+
+#[test]
+fn a_zero_signature_is_refused_and_its_root_stays_queued() {
+    let Some(key) = Es384Key::new("zero") else {
+        skip("a zero signature");
+        return;
+    };
+    let dir = Scratch::new("zero");
+    seal_two_events(dir.path());
+    let root = reconcile(dir.path(), ShardIx(0), &tenant(), Timestamp(T1))
+        .expect("reconcile")
+        .expect("a sealed root is queued");
+
+    let keyryx = Keyryx::start(key);
+    keyryx.set_reply(|r| r.zero_signature = true);
+    let mut signer = KeyryxSigner::new(&keyryx.origin, BEARER, &keyryx.pin()).expect("a signer");
+    signer.refresh().expect("the key set is read");
+    assert!(
+        matches!(
+            drain(dir.path(), &mut signer).expect("the drain"),
+            Outcome::Queued { waiting: 1, .. }
+        ),
+        "a signature of r = s = 0 was accepted"
+    );
+    assert!(
+        signed_root(dir.path(), root)
+            .expect("the signatures read")
+            .is_none(),
+        "a signature of r = s = 0 was stored"
+    );
+    assert_eq!(queued_roots(dir.path()).expect("the queue reads"), [root]);
+
+    // The control: once keyryx answers with a real signature, the same root is signed.
+    keyryx.set_reply(|r| r.zero_signature = false);
+    assert_eq!(
+        drain(dir.path(), &mut signer).expect("the drain"),
+        Outcome::Signed(1)
+    );
+}
+
+#[test]
+fn a_genuine_signature_over_another_statement_is_refused_and_its_root_stays_queued() {
+    let Some(key) = Es384Key::new("replayed") else {
+        skip("a signature over another statement");
+        return;
+    };
+    let dir = Scratch::new("replayed");
+    seal_two_events(dir.path());
+    let root = reconcile(dir.path(), ShardIx(0), &tenant(), Timestamp(T1))
+        .expect("reconcile")
+        .expect("a sealed root is queued");
+
+    let keyryx = Keyryx::start(key);
+    keyryx.set_reply(|r| r.sign_another_statement = true);
+    let mut signer = KeyryxSigner::new(&keyryx.origin, BEARER, &keyryx.pin()).expect("a signer");
+    signer.refresh().expect("the key set is read");
+    assert!(
+        matches!(
+            drain(dir.path(), &mut signer).expect("the drain"),
+            Outcome::Queued { waiting: 1, .. }
+        ),
+        "a signature over a statement the seal did not make was accepted"
+    );
+    assert!(
+        signed_root(dir.path(), root)
+            .expect("the signatures read")
+            .is_none(),
+        "a signature over a statement the seal did not make was stored"
+    );
+    assert_eq!(queued_roots(dir.path()).expect("the queue reads"), [root]);
+
+    // The control: the same keyryx, answering over the statement it was given, signs.
+    keyryx.set_reply(|r| r.sign_another_statement = false);
+    assert_eq!(
+        drain(dir.path(), &mut signer).expect("the drain"),
+        Outcome::Signed(1)
+    );
+}
+
+#[test]
+fn keyryx_without_a_pinned_key_refuses_to_start() {
+    // The node is run the way an operator runs it: Keyryx configured, no pin. `events`
+    // reads one file and exits, so a node that starts is seen to finish, and no test waits
+    // on a server that never returns (invariant 18).
+    let dir = Scratch::new("no-pin");
+    let events = dir.path().join("events.ndjson");
+    std::fs::write(&events, EVENTS).expect("the fixture is written");
+    let credential = dir.path().join("credential");
+    std::fs::write(&credential, BEARER).expect("the credential is written");
+    let output = Command::new(env!("CARGO_BIN_EXE_trailryx-node"))
+        .arg("events")
+        .arg("--file")
+        .arg(&events)
+        .arg("--data")
+        .arg(dir.path().join("store"))
+        .args(["--tenant", "acme", "--trust-domain", TRUST_DOMAIN])
+        .env("TRAILRYX_SIGNER", "keyryx")
+        .env("TRAILRYX_KEYRYX_URL", unreachable_origin())
+        .env("TRAILRYX_KEYRYX_CREDENTIAL_FILE", &credential)
+        .env_remove("TRAILRYX_KEYRYX_KID")
+        .output()
+        .expect("the node runs");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        !output.status.success(),
+        "a keyryx signer with no pinned key started: {stderr}"
+    );
+    assert!(
+        stderr.contains("TRAILRYX_KEYRYX_KID"),
+        "the refusal does not name the setting: {stderr}"
+    );
+}
+
+#[test]
+fn the_pin_is_the_thumbprint_keyryx_publishes_as_its_kid() {
+    let Some(key) = Es384Key::new("thumbprint") else {
+        skip("a thumbprint");
+        return;
+    };
+    // The canonical JSON an RFC 7638 thumbprint hashes, hashed by openssl rather than by
+    // this crate: a second implementation of the same rule, so a wrong canonical form
+    // cannot pass against itself.
+    let canonical = format!(
+        r#"{{"crv":"P-384","kty":"EC","x":"{}","y":"{}"}}"#,
+        encode_base64url(&key.public[1..49]),
+        encode_base64url(&key.public[49..97]),
+    );
+    let path = key.scratch.join("canonical.json");
+    std::fs::write(&path, canonical.as_bytes()).expect("the canonical JSON is written");
+    let digest = Command::new("openssl")
+        .args(["dgst", "-sha256", "-binary"])
+        .arg(&path)
+        .output()
+        .expect("openssl runs");
+    assert!(
+        digest.status.success(),
+        "openssl could not hash the canonical JSON"
+    );
+    let expected = encode_base64url(&digest.stdout);
+    assert_eq!(
+        expected.len(),
+        43,
+        "a thumbprint is 43 base64url characters"
+    );
+    assert_eq!(
+        thumbprint_p384(&key.public),
+        Some(expected.clone()),
+        "the node's thumbprint is not the one openssl computes"
+    );
+    assert_eq!(pin_of(&key.public), expected);
+}
+
+#[test]
+fn a_pin_is_a_keyryx_thumbprint_and_nothing_else() {
+    let good = pin_of(&[0x04u8; 97]);
+    assert_eq!(
+        parse_pin(&good),
+        Ok(good.clone()),
+        "a thumbprint is read as itself"
+    );
+    assert!(
+        parse_pin(&good[..42]).is_err(),
+        "a pin one character short was read"
+    );
+    assert!(
+        parse_pin(&format!("{good}A")).is_err(),
+        "a pin one character long was read"
+    );
+    assert!(
+        parse_pin(&format!("{good}=")).is_err(),
+        "a padded pin was read"
+    );
+    assert!(
+        parse_pin(&"ab".repeat(48)).is_err(),
+        "a 96-character hex key identity was read as a thumbprint"
+    );
+    assert!(parse_pin("").is_err(), "an empty pin was read");
+    // Right length, wrong alphabet: a character outside base64url.
+    assert!(
+        parse_pin(&format!("{}!", &good[..42])).is_err(),
+        "a pin with a character outside base64url was read"
+    );
+    // Right length and alphabet, but bits set after the 32nd byte: a second spelling of
+    // no key, which strict decoding refuses.
+    assert!(
+        parse_pin(&format!("{}B", "A".repeat(42))).is_err(),
+        "a pin with bits set after its last byte was read"
+    );
+}
+
+#[test]
+fn keyryx_with_a_pin_that_is_not_a_thumbprint_refuses_to_start() {
+    // The start refused above, with a value in the pin's place that is not a thumbprint.
+    let dir = Scratch::new("bad-pin");
+    let events = dir.path().join("events.ndjson");
+    std::fs::write(&events, EVENTS).expect("the fixture is written");
+    let credential = dir.path().join("credential");
+    std::fs::write(&credential, BEARER).expect("the credential is written");
+    let output = Command::new(env!("CARGO_BIN_EXE_trailryx-node"))
+        .arg("events")
+        .arg("--file")
+        .arg(&events)
+        .arg("--data")
+        .arg(dir.path().join("store"))
+        .args(["--tenant", "acme", "--trust-domain", TRUST_DOMAIN])
+        .env("TRAILRYX_SIGNER", "keyryx")
+        .env("TRAILRYX_KEYRYX_URL", unreachable_origin())
+        .env("TRAILRYX_KEYRYX_CREDENTIAL_FILE", &credential)
+        .env("TRAILRYX_KEYRYX_KID", "not-a-thumbprint")
+        .output()
+        .expect("the node runs");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        !output.status.success(),
+        "a keyryx signer with a pin that is not a thumbprint started: {stderr}"
+    );
+    assert!(
+        stderr.contains("TRAILRYX_KEYRYX_KID"),
+        "the refusal does not name the setting: {stderr}"
     );
 }

@@ -24,7 +24,7 @@ use trailryx_ingest::bearer::SharedSecret;
 use trailryx_ingest::config::Config;
 use trailryx_ingest::handler::Ingest;
 use trailryx_ingest::server::{Server, stderr_log};
-use trailryx_node::keyryx::KeyryxSigner;
+use trailryx_node::keyryx::{KeyryxSigner, parse_pin};
 use trailryx_node::plane::{Plane, SealPolicy, seed_from_process};
 use trailryx_node::signing::{self, Outcome};
 use trailryx_node::{Resume, Ship, reader, ship};
@@ -64,11 +64,13 @@ events reads a file of the estate's shared agent-event NDJSON envelope
       had written and not sealed, and of nothing before them. A smaller number
       is a smaller window and one more fsync per segment.
 
-Signing is optional. With TRAILRYX_SIGNER=keyryx, TRAILRYX_KEYRYX_URL (an http origin)
-and TRAILRYX_KEYRYX_CREDENTIAL_FILE (the consumer credential), each sealed root is signed
-by Keyryx. A root that cannot be signed is queued beside the data and signed when Keyryx
-answers, and the records are sealed either way. read --pack attaches the signature for
-the root it packs, and any witness attestation filed under TRAILRYX_WITNESS_ATTESTATIONS.
+Signing is optional. With TRAILRYX_SIGNER=keyryx, TRAILRYX_KEYRYX_URL (an http origin),
+TRAILRYX_KEYRYX_KID (the kid Keyryx publishes for its key, which the node pins to) and
+TRAILRYX_KEYRYX_CREDENTIAL_FILE (the consumer credential), each sealed root is signed by
+Keyryx, and a signature is kept only if it verifies under that key. A root that cannot be
+signed is queued beside the data and signed when Keyryx answers, and the records are sealed
+either way. read --pack attaches the signature for the root it packs, and any witness
+attestation filed under TRAILRYX_WITNESS_ATTESTATIONS.
 
 This process keeps the metadata plane only. It has no key custodian, so payload
 parts a source hands over are declined and counted, and the count is written
@@ -169,8 +171,9 @@ const SIGN_RETRY: Duration = Duration::from_secs(30);
 
 /// The signer the seal uses, from the environment. Unset means no signer, and the seal
 /// stays as it was. `keyryx` takes the Keyryx at TRAILRYX_KEYRYX_URL and presents the
-/// consumer credential in the file TRAILRYX_KEYRYX_CREDENTIAL_FILE. Anything else, or a
-/// setting missing, is refused at start rather than sealing unsigned.
+/// consumer credential in the file TRAILRYX_KEYRYX_CREDENTIAL_FILE, and signs only under the
+/// key whose thumbprint is TRAILRYX_KEYRYX_KID. Anything else, or a setting missing, is
+/// refused at start rather than sealing unsigned.
 fn keyryx_signer() -> Result<Option<KeyryxSigner>, String> {
     let kind = match std::env::var("TRAILRYX_SIGNER") {
         Ok(kind) => kind,
@@ -185,6 +188,11 @@ fn keyryx_signer() -> Result<Option<KeyryxSigner>, String> {
     let origin = std::env::var("TRAILRYX_KEYRYX_URL").map_err(|_| {
         "TRAILRYX_SIGNER=keyryx needs TRAILRYX_KEYRYX_URL, such as http://keyryx:4340".to_owned()
     })?;
+    let pin_text = std::env::var("TRAILRYX_KEYRYX_KID").map_err(|_| {
+        "TRAILRYX_SIGNER=keyryx needs TRAILRYX_KEYRYX_KID, the kid Keyryx publishes for the key this node signs under"
+            .to_owned()
+    })?;
+    let pin = parse_pin(&pin_text).map_err(|why| format!("TRAILRYX_KEYRYX_KID: {why}"))?;
     let credential_path = std::env::var("TRAILRYX_KEYRYX_CREDENTIAL_FILE").map_err(|_| {
         "TRAILRYX_SIGNER=keyryx needs TRAILRYX_KEYRYX_CREDENTIAL_FILE, the file holding the consumer credential"
             .to_owned()
@@ -195,7 +203,7 @@ fn keyryx_signer() -> Result<Option<KeyryxSigner>, String> {
     if bearer.is_empty() {
         return Err(format!("{credential_path} holds no credential"));
     }
-    KeyryxSigner::new(&origin, bearer)
+    KeyryxSigner::new(&origin, bearer, &pin)
         .map(Some)
         .map_err(|e| format!("TRAILRYX_KEYRYX_URL {origin}: {e}"))
 }

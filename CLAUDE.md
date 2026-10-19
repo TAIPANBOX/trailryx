@@ -172,6 +172,19 @@ Everything below is a rule, not a description. Each one says what holds it today
 
 51. **Every scenario in `features/*.feature` is bound to a named test, and every binding names a test that exists.** A scenario carries exactly one `# bound:` line. A scenario with none, one with two, or one naming a test that no integration-test file defines fails the gate, and no feature file at all is measured nothing. The gate checks that the binding is real, not that the test asserts the sentence: that is the red-first rule's job. *(gate: `scripts/feature-bindings.sh`, with five cases in `scripts/gates-have-teeth.sh`.)*
 
+52. **@decided 2026-10-19: the secure default is the product's default, so the seal keeps only a Keyryx signature it has checked itself, under the one key it is pinned to, and does not start with Keyryx configured and no pin.** The pin is `TRAILRYX_KEYRYX_KID`: the RFC 7638 thumbprint Keyryx publishes as the key's `kid`, 43 base64url characters, read strictly. A key set holding any other key is refused when it is read, and the signer then holds no key to sign under. A signature Keyryx returns is verified with the P-384 check of `trailryx-verify` over the statement this seal made for the root, tenant, shard count 1 and the time the root was queued, before it is stored. A signature that does not verify, or is not ES384, leaves the root queued, so a pack built now says it is unsigned. Scenarios in `features/keyryx-signing.feature`, each bound to the named test in `crates/trailryx-node/tests/it/keyryx.rs`:
+
+    - *Given* a pinned node, *when* Keyryx offers another key, *then* the key set is refused and nothing is signed. *(test: `a_key_set_that_is_not_the_pinned_key_is_refused_before_anything_is_signed`)*
+    - *Given* a sealed root, *when* Keyryx answers with a signature whose last bit is altered, *then* it is not stored and the root stays queued. *(test: `a_tampered_signature_is_refused_and_its_root_stays_queued`)*
+    - *Given* a sealed root, *when* Keyryx answers with r and s both zero, *then* it is not stored. *(test: `a_zero_signature_is_refused_and_its_root_stays_queued`)*
+    - *Given* a sealed root, *when* Keyryx answers with a genuine signature over a statement the seal never made, *then* it is not stored under this root. *(test: `a_genuine_signature_over_another_statement_is_refused_and_its_root_stays_queued`)*
+    - *Given* Keyryx configured and no pin, *when* the node starts, *then* it refuses to start and names the setting. *(test: `keyryx_without_a_pinned_key_refuses_to_start`)*
+    - *Given* a P-384 key, *when* its thumbprint is computed, *then* it is the value openssl computes over the RFC 7638 canonical JSON. *(test: `the_pin_is_the_thumbprint_keyryx_publishes_as_its_kid`)*
+    - *Given* any value offered as the pin, *when* it is read, *then* only a 43-character thumbprint is read. *(test: `a_pin_is_a_keyryx_thumbprint_and_nothing_else`)*
+    - *Given* Keyryx configured and a pin that is not a thumbprint, *when* the node starts, *then* it refuses to start and names the setting. *(test: `keyryx_with_a_pin_that_is_not_a_thumbprint_refuses_to_start`)*
+
+    Mutants, described and not run in CI: the pin comparison removed from `refresh`, caught by the first scenario; the verification removed from `drain`, or made to accept everything, caught by the three signature scenarios and their controls; the statement rebuilt with another shard count or time, caught by the controls, which would then refuse the honest signature; the start check removed, caught by the start scenario.
+
 ---
 
 ## What is a gate, and what is still only a sentence

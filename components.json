@@ -184,6 +184,10 @@
             "required": false,
             "why": "The file holding the consumer credential this node presents to Keyryx when TRAILRYX_SIGNER=keyryx. Read only in that case; unset means no signer."
           },
+          "TRAILRYX_KEYRYX_KID": {
+            "required": false,
+            "why": "The RFC 7638 thumbprint Keyryx publishes as the kid of the key this node signs under, 43 base64url characters. The node takes only that key and checks each signature against it. Read only when TRAILRYX_SIGNER=keyryx, which refuses to start without it."
+          },
           "TRAILRYX_KEYRYX_URL": {
             "required": false,
             "why": "The http origin of the Keyryx that signs sealed roots when TRAILRYX_SIGNER=keyryx. Read only in that case; unset means no signer."

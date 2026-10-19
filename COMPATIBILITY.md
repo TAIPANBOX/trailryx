@@ -90,7 +90,7 @@ Status: frozen at 1.0.0 (2026-09-13): the surface below is the promise of this m
 - the journal's FRAME_VERSION and OLDEST_FRAME_VERSION: invariant 7 requires a field change to be a new frame version plus a reader-side migration rather than a rewrite of what is frozen here, so those two are expected to move and are deliberately not frozen
 - a new EventType wire code, appended under invariant 36 and never renumbered
 - a new agent-event type this mapper newly accepts (crates/trailryx-agentevent), the way identity_finding and alert_sent were added
-- the seal's Keyryx signer, optional and unset by default: TRAILRYX_SIGNER, TRAILRYX_KEYRYX_URL, TRAILRYX_KEYRYX_CREDENTIAL_FILE and TRAILRYX_WITNESS_ATTESTATIONS (crates/trailryx-node/src/main.rs, keyryx.rs, signing.rs)
+- the seal's Keyryx signer, optional and unset by default: TRAILRYX_SIGNER, TRAILRYX_KEYRYX_URL, TRAILRYX_KEYRYX_KID, TRAILRYX_KEYRYX_CREDENTIAL_FILE and TRAILRYX_WITNESS_ATTESTATIONS (crates/trailryx-node/src/main.rs, keyryx.rs, signing.rs)
 - the agent-token door on trailryx-ingest and trailryx-node run, opt-in through four flags that go together (--agent-token-issuer, --agent-token-audience, --agent-token-jwks, --agent-token-origin): each agent presents its own vouchryx access token as Authorization: DPoP with a DPoP proof, and a span naming another agent is refused and written down as a record; without the flags the door is unchanged, and with --token-file as well the binary refuses to start
 - AuthProvider::authenticate_request and RequestContext in crates/trailryx-contracts: a provided trait method whose default calls authenticate with the Authorization field, so an adapter written before it compiles and behaves unchanged
 
