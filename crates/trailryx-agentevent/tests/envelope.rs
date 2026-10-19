@@ -747,6 +747,130 @@ fn an_established_subject_under_v0_3_still_maps() {
 }
 
 // ---------------------------------------------------------------------------
+// SPEC 6.4.1: v1.0 is v0.3's shape with the version string changed
+// ---------------------------------------------------------------------------
+
+/// The same line under another version string, and nothing else changed.
+fn stamped(event: &str, version: &str) -> String {
+    event.replace("agent-event/v0.2", &format!("agent-event/{version}"))
+}
+
+/// An established identity finding from idryx, in our own trust domain.
+fn established_finding() -> String {
+    line("identity_finding", "").replace("\"source\":\"tokenfuse\"", "\"source\":\"idryx\"")
+}
+
+/// The same finding with its subject claimed by the process that emitted it.
+fn claimed_finding() -> String {
+    established_finding().replace(
+        "\"agent_id\":\"agent://acme.example/support/tier1-bot\"",
+        "\"agent_id\":\"claimed:agent://acme.example/support/tier1-bot\"",
+    )
+}
+
+/// SPEC 6.4.1 asks a consumer to accept v1.0, and v1.0 is v0.3's shape. A line
+/// stamped v1.0 must therefore come out identical to the same line stamped v0.3:
+/// same type, subject, run, severity, planes and mapper reading.
+#[test]
+fn v1_0_is_read_exactly_like_v0_3() {
+    let base = line("budget_exhausted", "");
+    let under_v03 = map(OURS, &stamped(&base, "v0.3")).expect("v0.3 maps");
+    let under_v10 = map(OURS, &stamped(&base, "v1.0")).expect("v1.0 maps");
+    assert_eq!(under_v03, under_v10);
+}
+
+/// The schema gate is an exact match. A prefix match would accept a v1.1 this
+/// reader has never read, which is the failure the closed list exists to stop.
+#[test]
+fn a_version_beyond_the_accepted_ones_is_refused_by_schema() {
+    let base = line("budget_exhausted", "");
+    for version in ["v1.1", "v1.0.1", "v1", "v1.00", "v2.0", "v1.0 "] {
+        assert_eq!(
+            map(OURS, &stamped(&base, version)),
+            Err(Rejection::UnknownSchema),
+            "{version}"
+        );
+    }
+}
+
+/// The refusal is about the subject, so it must hold under every accepted
+/// version, v1.0 included. v0.3 implied it before; nothing now depends on the
+/// version to carry it.
+#[test]
+fn every_accepted_version_refuses_a_claimed_subject_by_name() {
+    for version in ["v0.1", "v0.2", "v0.3", "v1.0"] {
+        assert_eq!(
+            map(OURS, &stamped(&claimed_finding(), version)),
+            Err(Rejection::ClaimedSubject),
+            "{version}"
+        );
+    }
+}
+
+/// SPEC 3.3: the prefix is not stripped. Stripping it and accepting the rest
+/// would seal a process's own assertion as an established identity. So the bare
+/// identifier under v1.0 is an ordinary subject, and the prefixed one is refused.
+#[test]
+fn under_v1_0_the_claim_prefix_is_not_stripped() {
+    let bare = stamped(&established_finding(), "v1.0");
+    assert!(
+        map(OURS, &bare).is_ok(),
+        "the bare subject under v1.0 must map"
+    );
+    assert_eq!(
+        map(OURS, &stamped(&claimed_finding(), "v1.0")),
+        Err(Rejection::ClaimedSubject)
+    );
+}
+
+/// The three agent-conform chain findings, named as the module doc names them.
+const AGENT_CONFORM_FINDINGS: [&str; 3] = ["chain_broken", "chain_unchained", "chain_restarted"];
+
+/// A finding from agent-conform's chain verifier, with the producer's own
+/// synthetic subject and `data` naming the file it read. Written from the module
+/// doc's description, not copied from agent-conform's output.
+fn conform_line(kind: &str) -> String {
+    format!(
+        r#"{{"schema":"taipanbox.dev/agent-event/v1.0","ts":"2026-10-18T09:14:02Z",
+            "source":"agent-conform","type":"{kind}","severity":"high",
+            "agent_id":"agent://agent-conform.internal/watch",
+            "data":{{"file":"events.ndjson","line":12}}}}"#
+    )
+    .replace('\n', "")
+}
+
+/// Under v1.0 the ten types the module doc names are read now, and they must be
+/// refused BY TYPE, under every domain. Refused as `UnknownSchema` they were
+/// merely not read; now that they are read, sealing one as an agent's decision
+/// would be the new failure. Both producers' lines carry a run and a domain
+/// argument that must not rescue them.
+#[test]
+fn keyryx_and_agent_conform_types_under_v1_0_are_refused_by_type_and_not_sealed() {
+    for kind in WITNESS_FINDINGS {
+        let line = keyryx_line("taipanbox.dev/agent-event/v1.0", kind, "");
+        for domain in ["keyryx.internal", OURS] {
+            assert_refused_by_type(domain, kind, &line);
+        }
+    }
+    for kind in AGENT_CONFORM_FINDINGS {
+        let line = conform_line(kind);
+        for domain in ["agent-conform.internal", OURS] {
+            assert_refused_by_type(domain, kind, &line);
+        }
+    }
+}
+
+fn assert_refused_by_type(domain: &str, kind: &str, line: &str) {
+    match map(domain, line) {
+        Err(Rejection::UnknownType) => {}
+        other => panic!(
+            "{kind} under {domain} answered {:?}, expected UnknownType",
+            other.map(|unit| unit.meta.event_type)
+        ),
+    }
+}
+
+// ---------------------------------------------------------------------------
 // The box's own dependency (tokenfuse), SPEC 6.2
 // ---------------------------------------------------------------------------
 
