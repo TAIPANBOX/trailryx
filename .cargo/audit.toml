@@ -13,4 +13,39 @@ ignore = [
   # rkyv 0.7.46, out-of-bounds reads on archives containing Rc/Arc.
   # In the lockfile, in no build graph. Reason checked as: never-built.
   "RUSTSEC-2026-0235",
+
+  # TEMPORARY ACCEPTED RISK, until DataFusion 56 (parquet and arrow-ipc 60).
+  # Reason checked as: bounded.
+  #
+  # RUSTSEC-2026-0391, zstd 0.13.3: data from an abandoned stream leaks into the
+  # next one when a context is reused through
+  # zstd::stream::raw::{Encoder,Decoder}::with_context.
+  # RUSTSEC-2026-0403, zstd-safe 7.2.1: uninitialized memory is exposed when a
+  # legacy-frame decompress_stream call fails, through
+  # zstd::stream::write::Decoder.
+  #
+  # Both are fixed only in zstd 0.14.3 and zstd-safe 8.2.0. zstd 0.14 needs
+  # parquet and arrow-ipc 60, and no released DataFusion takes them yet: the
+  # facade is on DataFusion 54 (arrow, parquet and arrow-ipc 58), and the newest
+  # release asks for zstd ^0.13 as well. So the fix cannot be reached from here.
+  #
+  # Why it is believed not to reach us (`@claude`, read from the 54.1.0 and 58.4.0
+  # sources and from the facade, not run): parquet and arrow-ipc use only
+  # zstd::bulk, and nothing in the dependents calls with_context or the seekable
+  # API. DataFusion reads zstd-compressed files through compression-codecs'
+  # streaming decoder, which is the nearest path to the second advisory. The
+  # facade's SQL gate (crates/trailryx-sql/src/gate.rs) refuses CREATE EXTERNAL
+  # TABLE and COPY, and the facade registers no file source of its own, so no
+  # query can name a compressed file. Nothing here checks that those are the only
+  # routes in, so this is an accepted risk and not an absence.
+  #
+  # Exit: DataFusion 56, or any release that takes parquet and arrow-ipc 60.
+  # scripts/audit.sh fails while these two lines stay and any of this stops
+  # holding: parquet or arrow-ipc 60 in Cargo.lock (the ignore has expired), zstd
+  # outside 0.13.x or zstd-safe outside 7.x, or a crate that depends on zstd and
+  # is not one of today's. zstd-safe stays at 7.2.1 on purpose: 7.2.2 and later
+  # fall inside the affected range of a further advisory that 7.2.1 sits outside
+  # of, so a plain `cargo update` would trade two ignored findings for a live one.
+  "RUSTSEC-2026-0391",
+  "RUSTSEC-2026-0403",
 ]

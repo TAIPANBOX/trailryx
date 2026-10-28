@@ -11,8 +11,8 @@
 # it, a "nothing found" needs a run where the same check finds something. An
 # ignore is the same problem wearing a configuration file.
 #
-# So every entry in `.cargo/audit.toml` names a crate AND a reason, and both
-# reasons in use here are facts rather than judgements, which means they can be
+# So every entry in `.cargo/audit.toml` names a crate AND a reason, and each
+# reason in use here is a fact rather than a judgement, which means it can be
 # re-derived on every run:
 #
 #   never-built     the crate is in Cargo.lock and in no build graph, because
@@ -20,10 +20,18 @@
 #   dev-only        the crate is compiled, but only for tests: no path to it
 #                   exists along normal dependency edges, so nothing a consumer
 #                   builds contains it.
+#   bounded         the crate IS built, a fix exists that this repository cannot
+#                   take yet, and the ignore is a temporary accepted risk. It is
+#                   judged from Cargo.lock as text: the crate stays inside the
+#                   version range the risk was accepted for, nothing but the
+#                   callers it names depends on it, and the ignore EXPIRES the
+#                   day a release that makes the fix reachable is in the lock.
 #
-# The second is deliberately the weaker of the two and is written down as such.
-# It says the code is not in a shipped artifact. It does not say the code is
-# never executed here.
+# The second is deliberately the weaker of the first two and is written down as
+# such: it says the code is not in a shipped artifact, not that it is never
+# executed here. The third is weaker still, because the code is built and shipped
+# and what is checked is that the reason it was accepted for has not changed. An
+# ignore of that kind records a decision and carries its own exit condition.
 #
 # WHY THE CARGO-AUDIT HALF CAN SKIP AND THE REACHABILITY HALF CANNOT.
 #
@@ -49,10 +57,16 @@ fi
 
 ids=$(grep -oE 'RUSTSEC-[0-9]{4}-[0-9]{4}' "$config" | sort -u)
 
-# Each ignored advisory, the crate it concerns, and which of the two reasons is
+# Each ignored advisory, the crate it concerns, and which of the three reasons is
 # being claimed. An id present in the config and absent here is refused: the
 # point of the file is that a reason exists and is checked, so a silent entry
 # is the exact failure this script is for.
+#
+# The order of the checks below matters. The `bounded` reason is judged from
+# Cargo.lock AS TEXT, before cargo is asked anything: a lockfile edited by hand
+# or by a bump that has not been built yet is something `cargo tree` would try to
+# resolve again, and the expiry has to be reported as the expiry rather than as a
+# resolver error. The two tree-based reasons run only when the text checks passed.
 python3 - "$ids" <<'PY'
 import re
 import subprocess
@@ -64,7 +78,35 @@ REASONS = {
     # (`rkyv = ["dep:rkyv"]`) that nothing in this graph turns on. rust_decimal
     # 1.42.1 is the latest published version, so no upgrade removes the entry.
     "RUSTSEC-2026-0235": ("rkyv", "never-built"),
+    # zstd IS built: DataFusion compiles it in by default. The fixed zstd 0.14.3
+    # and zstd-safe 8.2.0 need parquet and arrow-ipc 60, which no released
+    # DataFusion takes. See BOUNDED and EXPIRES_AT below for what is re-checked.
+    "RUSTSEC-2026-0391": ("zstd", "bounded"),
+    "RUSTSEC-2026-0403": ("zstd-safe", "bounded"),
 }
+
+# `bounded`: built, but only through the callers the reason was argued for, only
+# inside a version range, and only until a named release. Per crate: the
+# half-open range [low, high) the reason holds for, and the only crates allowed
+# to depend on it. A crate that starts to depend on zstd may call the stream API
+# the two advisories are about; this list is where that gets read again.
+#
+# zstd-safe is pinned at 7.2.1 in the lockfile and must not move within 7.x:
+# 7.2.2 and later are inside the affected range of a further advisory that 7.2.1
+# sits outside of. cargo-audit reports that on its own, so the range here is the
+# half this table owns.
+BOUNDED = {
+    "zstd": ((0, 13, 0), (0, 14, 0),
+             {"arrow-ipc", "compression-codecs", "datafusion", "datafusion-datasource", "parquet"}),
+    "zstd-safe": ((7, 0, 0), (8, 0, 0), {"compression-codecs", "zstd"}),
+}
+
+# The release that retires the `bounded` ignores: parquet or arrow-ipc at this
+# major or later means a zstd 0.14 is reachable, and the ignore has expired.
+EXPIRES_AT = {"parquet": 60, "arrow-ipc": 60}
+
+LOCK = "Cargo.lock"
+
 
 def tree(crate, edges=None):
     cmd = ["cargo", "tree", "-i", crate, "--all-features", "--target", "all"]
@@ -75,49 +117,127 @@ def tree(crate, edges=None):
         return ""
     return out.stdout if re.search(rf"^{re.escape(crate)} v", out.stdout, re.M) else ""
 
+
+def version_tuple(version):
+    m = re.match(r"(\d+)\.(\d+)\.(\d+)", version)
+    return tuple(int(x) for x in m.groups()) if m else None
+
+
+def read_lock(path):
+    """[(name, version, [dependency names])] from a Cargo.lock, read as text."""
+    out = []
+    for block in re.split(r"(?m)^\[\[package\]\]\s*$", open(path).read())[1:]:
+        name = re.search(r'(?m)^name = "([^"]+)"', block)
+        version = re.search(r'(?m)^version = "([^"]+)"', block)
+        if not (name and version):
+            continue
+        # Entries of `dependencies = [ ... ]`: ` "zstd",` or ` "zstd 0.13.3",`.
+        deps = [d.split(" ")[0] for d in re.findall(r'(?m)^ "([^"]+)",?$', block)]
+        out.append((name.group(1), version.group(1), deps))
+    return out
+
+
 ids = [i for i in sys.argv[1].split() if i]
 fail = False
 
 if not ids:
     print("  (no advisories are silenced)")
 
+# 1. a recorded reason, of a kind this script knows
 for advisory in ids:
     entry = REASONS.get(advisory)
     if entry is None:
         print(f"FAIL: {advisory} is silenced but no reason is recorded for it here.")
         print("      Record the crate and the reason, or stop silencing it.")
         fail = True
-        continue
-
-    crate, reason = entry
-
-    if reason == "never-built":
-        found = tree(crate)
-        if found:
-            print(f"FAIL: {advisory} is silenced because '{crate}' is never built, "
-                  f"and it IS in the build graph:")
-            print(found.strip()[:600])
-            fail = True
-        else:
-            print(f"  ok  {advisory}: '{crate}' is in no build graph, only in the lockfile")
-
-    elif reason == "dev-only":
-        shipped = tree(crate, edges="normal")
-        if shipped:
-            print(f"FAIL: {advisory} is silenced because '{crate}' is test-only, "
-                  f"and it now reaches a normal dependency edge:")
-            print(shipped.strip()[:600])
-            fail = True
-        elif not tree(crate):
-            print(f"FAIL: {advisory} is silenced as test-only but '{crate}' is in no graph "
-                  f"at all, so the entry is stale and should be removed.")
-            fail = True
-        else:
-            print(f"  ok  {advisory}: '{crate}' is reached only through dev-dependencies")
-
-    else:
-        print(f"FAIL: {advisory} claims an unknown reason {reason!r}")
+    elif entry[1] not in ("never-built", "dev-only", "bounded"):
+        print(f"FAIL: {advisory} claims an unknown reason {entry[1]!r}")
         fail = True
+
+# 2. the `bounded` reasons, from the lockfile as text
+bounded = [a for a in ids if a in REASONS and REASONS[a][1] == "bounded"]
+if bounded and not fail:
+    try:
+        lock = read_lock(LOCK)
+    except FileNotFoundError:
+        print(f"FAIL: {LOCK} is missing, so the bounded ignores measured nothing.")
+        lock = None
+        fail = True
+
+    if lock is not None:
+        expired = sorted(
+            (name, version)
+            for name, version, _ in lock
+            if name in EXPIRES_AT and (version_tuple(version) or (0,))[0] >= EXPIRES_AT[name]
+        )
+        for name, version in expired:
+            print(f"FAIL: {', '.join(bounded)} {'is' if len(bounded) == 1 else 'are'} ignored only "
+                  f"until {name} {EXPIRES_AT[name]}, and {LOCK} has {name} {version}: "
+                  "the ignore has expired.")
+            print("      A zstd 0.14 is reachable now. Remove the ignore from .cargo/audit.toml and")
+            print("      the entry from REASONS and BOUNDED in this script, and let cargo-audit judge")
+            print("      what is left.")
+            fail = True
+
+        for advisory in bounded:
+            crate = REASONS[advisory][0]
+            low, high, callers = BOUNDED[crate]
+            seen = sorted({version for name, version, _ in lock if name == crate})
+            if not seen:
+                print(f"FAIL: {advisory} is ignored for '{crate}', but '{crate}' is not in {LOCK}: "
+                      "the ignore matches nothing.")
+                print("      Remove it from .cargo/audit.toml and from REASONS and BOUNDED in this script.")
+                fail = True
+                continue
+            ok = True
+            for version in seen:
+                v = version_tuple(version)
+                if v is None or not (low <= v < high):
+                    print(f"FAIL: {advisory} is ignored for {crate} "
+                          f"{'.'.join(map(str, low))} up to (not including) {'.'.join(map(str, high))}, "
+                          f"but {LOCK} has {crate} {version}, outside the range the reason was argued for.")
+                    print("      Argue it again, or remove the ignore if this version is the fix.")
+                    fail = True
+                    ok = False
+            for name, version, deps in lock:
+                if crate in deps and name not in callers:
+                    print(f"FAIL: {advisory} is ignored on the reasoning that '{crate}' is used only "
+                          f"through {', '.join(sorted(callers))}, but {name} {version} depends on it too.")
+                    print("      The reason covers the callers it names; read what this one calls.")
+                    fail = True
+                    ok = False
+            if ok and not expired:
+                print(f"  ok  {advisory}: '{crate}' {', '.join(seen)} is inside its range, its only "
+                      f"dependents are {', '.join(sorted(callers))}, and no ignored-until release is in {LOCK}")
+
+# 3. the two reasons that ask cargo about the build graph
+if not fail:
+    for advisory in ids:
+        crate, reason = REASONS[advisory]
+
+        if reason == "never-built":
+            found = tree(crate)
+            if found:
+                print(f"FAIL: {advisory} is silenced because '{crate}' is never built, "
+                      f"and it IS in the build graph:")
+                print(found.strip()[:600])
+                fail = True
+            else:
+                print(f"  ok  {advisory}: '{crate}' is in no build graph, only in the lockfile")
+
+        elif reason == "dev-only":
+            shipped = tree(crate, edges="normal")
+            if shipped:
+                print(f"FAIL: {advisory} is silenced because '{crate}' is test-only, "
+                      f"and it now reaches a normal dependency edge:")
+                print(shipped.strip()[:600])
+                fail = True
+            elif not tree(crate):
+                print(f"FAIL: {advisory} is silenced as test-only but '{crate}' is in no graph "
+                      f"at all, so the entry is stale and should be removed.")
+                fail = True
+            else:
+                print(f"  ok  {advisory}: '{crate}' is reached only through dev-dependencies")
 
 if fail:
     print()
