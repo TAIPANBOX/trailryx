@@ -49,12 +49,32 @@ note() {
 # that produced "the badge says 1066 tests and the suite runs 51" and refused a push
 # over a drift that did not exist, because the only guard here was against a total of
 # exactly zero. A partial count is worse than no count: it looks like a measurement.
-suite=$(cargo test --workspace --quiet 2>/dev/null)
-suite_status=$?
-total=$(printf '%s\n' "$suite" | grep -E '^test result' | awk '{s += $4} END {print s + 0}')
-if [ "$suite_status" -ne 0 ] || [ "$total" -eq 0 ]; then
-  note "the suite did not finish (cargo exited $suite_status, $total tests seen), so nothing here was compared against it"
-  exit 1
+#
+# Where the counts come from has two answers, and they differ in cost and in nothing
+# else. With TRAILRYX_SUITE_RECORD set, they are read out of a run that already
+# happened: `scripts/suite.sh` made the record in the same job a moment ago, and
+# `suite.sh counts` refuses it unless it is for this commit, ended cleanly and
+# attributes every result to a crate. CI does this, and it is the difference between
+# a check that takes seconds and one that took 12 to 15 minutes on a cold cache,
+# because the alternative below compiles and runs the suite again for every crate
+# row. Without it, the suite is run here, as it always was, and that is what the
+# hook does. Every comparison further down is the same on both paths.
+record="${TRAILRYX_SUITE_RECORD:-}"
+if [ -n "$record" ]; then
+  if ! per_crate=$(./scripts/suite.sh counts "$record" 2>&1); then
+    printf '%s\n' "$per_crate"
+    note "the recorded suite run could not be read, so nothing here was compared against it"
+    exit 1
+  fi
+  total=$(printf '%s\n' "$per_crate" | awk '$1 == "total" {print $2}')
+else
+  suite=$(cargo test --workspace --quiet 2>/dev/null)
+  suite_status=$?
+  total=$(printf '%s\n' "$suite" | grep -E '^test result' | awk '{s += $4} END {print s + 0}')
+  if [ "$suite_status" -ne 0 ] || [ "$total" -eq 0 ]; then
+    note "the suite did not finish (cargo exited $suite_status, $total tests seen), so nothing here was compared against it"
+    exit 1
+  fi
 fi
 
 badge=$(grep -o 'badge/tests-[0-9]*-' "$readme" | grep -o '[0-9]*')
@@ -77,10 +97,22 @@ while IFS= read -r line; do
   # Same reason as the total above: a crate whose run never completed has not been
   # measured, and saying so is the only honest answer. Reporting its row as drifted
   # would send somebody to edit a number that was right.
-  crate_out=$(cargo test -p "$crate" --quiet 2>/dev/null)
-  crate_status=$?
-  actual=$(printf '%s\n' "$crate_out" |
-    grep -E '^test result' | awk '{s += $4} END {print s + 0}')
+  if [ -n "$record" ]; then
+    # From the recorded run. A row whose crate has no test binary in it was not
+    # measured, which is said, rather than read as zero tests.
+    actual=$(printf '%s\n' "$per_crate" | awk -v c="$crate" '$1 == "crate" && $2 == c {print $3}')
+    if [ -z "$actual" ]; then
+      note "$crate: the recorded suite run holds no test binary for it, so its row was not checked"
+      unmeasured=1
+      continue
+    fi
+    crate_status=0
+  else
+    crate_out=$(cargo test -p "$crate" --quiet 2>/dev/null)
+    crate_status=$?
+    actual=$(printf '%s\n' "$crate_out" |
+      grep -E '^test result' | awk '{s += $4} END {print s + 0}')
+  fi
   if [ "$crate_status" -ne 0 ]; then
     note "$crate: its suite did not finish (cargo exited $crate_status), so its row was not checked"
     unmeasured=1
