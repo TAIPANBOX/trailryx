@@ -48,6 +48,30 @@ name: ci
 # The one thing that is NOT free to split is `protoc`: both jobs install it,
 # because both compile the crate that needs it.
 
+# WHERE THE REST OF THE TIME WENT, measured 2026-10-28 from the step timings of five
+# runs (three cold, two warm). The debug job on a cold cache took 27 to 35 minutes and
+# the step that checks the README's test counts was 12 to 15 of them, longer than the
+# suite's own compile and run: it ran the suite again for the workspace and then once
+# for each crate row, and each of those invocations resolves its own feature set, so
+# each compiled part of the tree again. The counts are a fact about the run that had
+# already happened, so that run now writes a record (`scripts/suite.sh`) and the
+# README check reads the counts out of it (`scripts/readme-numbers.sh`), under a
+# commit and exit-status check, with no looser fallback. Nothing that was compared is
+# compared less: the same badge, the same rows, the same sum. The hook still runs the
+# suite again for that check and says nothing different about the README.
+#
+# The record lives in the runner's temp directory and not under `target`, because the
+# cache action saves everything under `target` and a record restored from a previous
+# run would be a record of the wrong commit.
+#
+# Two smaller changes in the same pass. A run that fails now saves its cache
+# (`cache-on-failure`), because a red pull request is followed by a fix and the fix
+# should not pay the cold compile the red run already paid; before this, the run after
+# a failure measured 27 minutes. And a newer push to a pull request cancels the older
+# run of the same pull request, which was only going to be superseded: the group is
+# the pull request for those and the run itself for everything else, so a push to main
+# is never cancelled and never replaced while it waits.
+
 on:
   push:
     branches: [main]
@@ -55,6 +79,10 @@ on:
 
 permissions:
   contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event_name == 'pull_request' && github.ref || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   gate:
@@ -83,6 +111,8 @@ jobs:
       # GitHub evicts the oldest entries itself, so nothing starts metering.
       - name: cargo cache
         uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          cache-on-failure: true
 
       # `trailryx-federation-grpc` generates its wire types at build time, on
       # purpose: a checked-in copy is a second source of truth for the wire, and
@@ -113,8 +143,13 @@ jobs:
       - name: cargo clippy -D warnings
         run: cargo clippy --all-targets --quiet -- -D warnings
 
+      # `scripts/suite.sh` runs `cargo test --workspace` and, because the README step
+      # further down asks for it, keeps a record of the run for that check to count
+      # from instead of running the suite again.
       - name: cargo test
-        run: cargo test --workspace --quiet
+        run: ./scripts/suite.sh
+        env:
+          TRAILRYX_SUITE_RECORD: ${{ runner.temp }}/trailryx-suite-record.txt
 
       # The substrate must stand on its own. Trivially true today, and the day it
       # would stop being true, it breaks here.
@@ -216,8 +251,11 @@ jobs:
       # A README number is a claim with no owner, and an audit on 30 July 2026 found
       # six crate counts drifted, a dependency figure no reading of the tree
       # reproduced, and a line off by a factor of two. None was a lie when written.
+      # The test counts come from the run the `cargo test` step above recorded.
       - name: README numbers are true
         run: ./scripts/readme-numbers.sh
+        env:
+          TRAILRYX_SUITE_RECORD: ${{ runner.temp }}/trailryx-suite-record.txt
 
       # The surface compat/1.0.json says this repository's 1.0 will freeze, against
       # the code, and against COMPATIBILITY.md, which is rendered from it rather
@@ -259,6 +297,8 @@ jobs:
       # single-job version recompile work it had already done.
       - name: cargo cache
         uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          cache-on-failure: true
 
       - name: protoc
         run: |

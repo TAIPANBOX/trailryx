@@ -31,10 +31,15 @@
 # and the ones left out are left out for stated reasons rather than by
 # accident:
 #
-#   readme-numbers.sh, reproduce.sh, tls-builds.sh   they build or run the whole
+#   reproduce.sh, tls-builds.sh                      they build or run the whole
 #                                                    workspace; a case costs
 #                                                    minutes and the harness
 #                                                    would stop being run
+#   readme-numbers.sh, the path that runs the suite  the same reason. The path
+#                                                    that counts from a recorded
+#                                                    run is covered (the suite.sh
+#                                                    section below), and it is
+#                                                    the one CI takes
 #   kill-linux.sh                                    needs a Linux container,
 #                                                    absent on a developer Mac
 #   fips-build.sh                                    29s per case, borderline
@@ -566,6 +571,162 @@ run_case "feature-bindings: the committed tree passes" pass \
 	'./scripts/feature-bindings.sh' \
 	"$(py 'edit("features/agent-event-v1.0.feature", "Then both read to the same record", "Then both read to the same record")')"
 
+
+# ---------------------------------------------------------------------------
+# suite.sh counts, and readme-numbers.sh reading a recorded run instead of running
+# the suite again. CI takes this path, so it is the one that has to bite.
+#
+# The recorded run is built from the README's own table, so it agrees with the
+# README on the committed tree by construction, and every fault below is a change to
+# the record alone. It lives outside the tree, which is why `restore` does not reach
+# it and why it is rebuilt before each case.
+# ---------------------------------------------------------------------------
+
+TEETH_REC="$baseline_dir/suite-record.txt"
+export TEETH_REC
+
+fresh_record() {
+	python3 - "$TEETH_REC" <<'PY'
+import os, re, subprocess, sys
+
+out = sys.argv[1]
+head = subprocess.run(["git", "rev-parse", "HEAD"], capture_output=True, text=True).stdout.strip()
+rows = []
+for line in open("README.md"):
+    if not line.startswith("| `trailryx-"):
+        continue
+    fields = line.split("|")
+    crate = re.match(r"\s*`(trailryx-[a-z0-9-]+)`", fields[1]).group(1)
+    count = fields[-2].strip()
+    if count != "-":
+        rows.append((crate, int(count)))
+assert rows, "no crate rows in the README"
+
+lines = ["suite-head: " + head]
+exes = {}
+for i, (crate, n) in enumerate(rows):
+    exes[crate] = "/w/target/debug/deps/%s-%016x" % (crate.replace("-", "_"), i)
+    lines.append(
+        '{"reason":"compiler-artifact","package_id":"path+file:///w/crates/%s#1.0.0",'
+        '"manifest_path":"/w/crates/%s/Cargo.toml","target":{"kind":["lib"],"name":"%s"},'
+        '"profile":{"test":true},"features":[],"filenames":["%s"],"executable":"%s","fresh":true}'
+        % (crate, crate, crate.replace("-", "_"), exes[crate], exes[crate])
+    )
+lines.append("    Finished `test` profile [optimized + debuginfo] target(s)")
+for crate, n in rows:
+    lines.append("     Running unittests src/lib.rs (target/debug/deps/%s)" % os.path.basename(exes[crate]))
+    lines.append("")
+    lines.append("running %d tests" % n)
+    lines.append("." * n)
+    lines.append(
+        "test result: ok. %d passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s" % n
+    )
+    lines.append("")
+lines.append("suite-exit-status: 0")
+open(out, "w").write("\n".join(lines) + "\n")
+PY
+}
+
+noop_on_record="$(py 'import os
+edit(os.environ["TEETH_REC"], "suite-exit-status: 0", "suite-exit-status: 0")')"
+
+# A run that failed. Its counts are the counts of a run that stopped somewhere, and a
+# partial count reads exactly like a measurement.
+fresh_record
+run_case "suite-counts: a recorded run that exited non-zero" fail \
+	'./scripts/suite.sh counts "$TEETH_REC"' \
+	"$(py 'import os
+edit(os.environ["TEETH_REC"], "suite-exit-status: 0", "suite-exit-status: 101")')" \
+	"does not end in a clean run"
+
+# A run that was killed: no exit status was ever written.
+fresh_record
+run_case "suite-counts: a recorded run with no exit status" fail \
+	'./scripts/suite.sh counts "$TEETH_REC"' \
+	"$(py 'import os
+edit(os.environ["TEETH_REC"], "suite-exit-status: 0", "")')" \
+	"does not end in a clean run"
+
+# A record is evidence about one tree. One made at another commit counts another tree.
+fresh_record
+run_case "suite-counts: a recorded run from another commit" fail \
+	'./scripts/suite.sh counts "$TEETH_REC"' \
+	"$(py 'import os
+edit(os.environ["TEETH_REC"], "suite-head: ", "suite-head: 0000")')" \
+	"was made at commit"
+
+# A result that no header owns would be added to the total and to nobody, which is
+# how a total and a table come apart without either being wrong about its own sum.
+fresh_record
+run_case "suite-counts: a result line no header owns" fail \
+	'./scripts/suite.sh counts "$TEETH_REC"' \
+	"$(py 'import os
+edit(os.environ["TEETH_REC"], "{\"reason\"", "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s\n{\"reason\"")')" \
+	"belong to no crate"
+
+# A test binary that no build message accounts for. The run happened, and nobody can
+# say whose it was.
+fresh_record
+run_case "suite-counts: a binary no build message accounts for" fail \
+	'./scripts/suite.sh counts "$TEETH_REC"' \
+	"$(py 'import os
+edit(os.environ["TEETH_REC"], "(target/debug/deps/trailryx_sim-", "(target/debug/deps/nothing_")')" \
+	"belong to no crate"
+
+# Nothing counted at all must be said, not reported as zero tests in agreement with
+# nothing. Invariant 19: a check that cannot fail reports zero for ever.
+fresh_record
+run_case "suite-counts: a recorded run with no results" fail \
+	'./scripts/suite.sh counts "$TEETH_REC"' \
+	"$(pyall 'import os
+edit(os.environ["TEETH_REC"], "test result: ok.", "test outcome: ok.")')" \
+	'no "test result" line at all'
+
+# A binary that was announced and never reported. Its tests are in no count, and the
+# total still adds up to something, which is the quiet way for a count to be short.
+fresh_record
+run_case "suite-counts: a run header with no result after it" fail \
+	'./scripts/suite.sh counts "$TEETH_REC"' \
+	"$(py 'import os
+edit(os.environ["TEETH_REC"], "     Running unittests src/lib.rs (target/debug/deps/trailryx_sim-0000000000000000)", "     Running unittests src/lib.rs (target/debug/deps/trailryx_sim-0000000000000000)\n\n     Running unittests src/lib.rs (target/debug/deps/trailryx_sim-0000000000000000)")')" \
+	"run header(s)"
+
+# And the non-fault: a clean run for this commit is counted, with a total.
+fresh_record
+run_case "suite-counts: a clean recorded run is counted" pass \
+	'./scripts/suite.sh counts "$TEETH_REC" | grep "^total [1-9]" >/dev/null' \
+	"$noop_on_record"
+
+# readme-numbers.sh itself, reading the record. One crate runs one test more than its
+# row says: the table is out of date, and it must be named.
+fresh_record
+run_case "readme-numbers: a crate row the recorded run disagrees with" fail \
+	'TRAILRYX_SUITE_RECORD="$TEETH_REC" ./scripts/readme-numbers.sh' \
+	"$(py 'import os, re
+p = os.environ["TEETH_REC"]
+s = open(p).read()
+m = re.search(r"running (\d+) tests\n(\.*)\ntest result: ok\. (\d+) passed", s)
+assert m
+n = int(m.group(1)) + 1
+new = "running %d tests\n%s\ntest result: ok. %d passed" % (n, "." * n, n)
+open(p, "w").write(s.replace(m.group(0), new, 1))')" \
+	"the table says"
+
+# The same record, a README that still agrees with it, and a gate that must not object.
+# Without this the case above would be satisfied by a gate that fails everything.
+fresh_record
+run_case "readme-numbers: a recorded run that agrees passes" pass \
+	'TRAILRYX_SUITE_RECORD="$TEETH_REC" ./scripts/readme-numbers.sh' \
+	"$noop_on_record"
+
+# A record the gate cannot read must stop it, not send it to run the suite instead:
+# a silent fallback would turn a broken record into a slow pass.
+fresh_record
+run_case "readme-numbers: an unreadable recorded run stops the gate" fail \
+	'TRAILRYX_SUITE_RECORD="$TEETH_REC" ./scripts/readme-numbers.sh' \
+	"$(py 'import os
+edit(os.environ["TEETH_REC"], "suite-exit-status: 0", "suite-exit-status: 101")')" \
+	"the recorded suite run could not be read"
 
 echo
 if [ -n "$(git status --porcelain)" ]; then
