@@ -255,6 +255,77 @@ assert os.path.isdir("crates/trailryx-store/tests/it"), "no tests/it to plant be
 open(p, "w").write("#[test]\nfn teeth_planted() {}\n")')" \
 	"integration-test binaries"
 
+# invariant 24, the third kind of reason: the crate IS built, but only through
+# the callers the reason was argued for, only inside a version range, and only
+# until a named release (zstd and zstd-safe, until parquet and arrow-ipc 60).
+# Each case plants one way that reason stops holding, in the lockfile, which
+# the gate reads as text, so every one of them fails before `cargo audit` and
+# costs no advisory-db fetch.
+#
+# The expiry is the one that matters most and has a case per crate: with only
+# one of them planted, the other half of EXPIRES_AT could be deleted and every
+# case here would still be red for the first.
+run_case "audit: the zstd ignores outlive parquet 60" fail \
+	'./scripts/audit.sh' \
+	"$(py 'edit("Cargo.lock", "name = \"parquet\"\nversion = \"58.4.0\"", "name = \"parquet\"\nversion = \"60.0.0\"")')" \
+	"has expired"
+
+run_case "audit: the zstd ignores outlive arrow-ipc 60" fail \
+	'./scripts/audit.sh' \
+	"$(py 'edit("Cargo.lock", "name = \"arrow-ipc\"\nversion = \"58.4.0\"", "name = \"arrow-ipc\"\nversion = \"60.0.0\"")')" \
+	"has expired"
+
+run_case "audit: zstd moved out of the range its ignore was argued for" fail \
+	'./scripts/audit.sh' \
+	"$(py 'edit("Cargo.lock", "name = \"zstd\"\nversion = \"0.13.3\"", "name = \"zstd\"\nversion = \"0.14.3\"")')" \
+	"outside the range"
+
+run_case "audit: zstd-safe moved out of the range its ignore was argued for" fail \
+	'./scripts/audit.sh' \
+	"$(py 'edit("Cargo.lock", "name = \"zstd-safe\"\nversion = \"7.2.1\"", "name = \"zstd-safe\"\nversion = \"8.2.0\"")')" \
+	"outside the range"
+
+# A crate that starts to depend on zstd is a caller the reason was never argued
+# for: it may call the stream API the two advisories are about.
+run_case "audit: a new dependent of zstd that the ignore does not cover" fail \
+	'./scripts/audit.sh' \
+	"$(py 'import re
+s = open("Cargo.lock").read()
+t = re.sub(r"(name = \"arrow-select\"\nversion = \"[^\"]+\"\nsource = [^\n]+\nchecksum = [^\n]+\ndependencies = \[\n)", "\\1 \"zstd\",\n", s, count=1)
+assert t != s, "no arrow-select block in Cargo.lock"
+open("Cargo.lock", "w").write(t)')" \
+	"depends on it too"
+
+run_case "audit: a new dependent of zstd-safe that the ignore does not cover" fail \
+	'./scripts/audit.sh' \
+	"$(py 'import re
+s = open("Cargo.lock").read()
+t = re.sub(r"(name = \"arrow-select\"\nversion = \"[^\"]+\"\nsource = [^\n]+\nchecksum = [^\n]+\ndependencies = \[\n)", "\\1 \"zstd-safe\",\n", s, count=1)
+assert t != s, "no arrow-select block in Cargo.lock"
+open("Cargo.lock", "w").write(t)')" \
+	"depends on it too"
+
+# The subject taken away: zstd in no lockfile entry at all. An ignore that
+# matches nothing is the "measured nothing" answer, not a pass.
+run_case "audit: zstd in no lockfile, so its ignore matches nothing" fail \
+	'./scripts/audit.sh' \
+	"$(py 'edit("Cargo.lock", "name = \"zstd\"\nversion", "name = \"zstdx\"\nversion")')" \
+	"matches nothing"
+
+# An id with no recorded reason is still refused, now that there are three
+# kinds of reason to be recorded.
+run_case "audit: an ignored id with no recorded reason" fail \
+	'./scripts/audit.sh' \
+	"$(py 'edit(".cargo/audit.toml", "  \"RUSTSEC-2026-0403\",\n", "  \"RUSTSEC-2026-0403\",\n  \"RUSTSEC-2026-9999\",\n")')" \
+	"no reason is recorded"
+
+# Deliberately NOT here: a case that removes the two zstd ignores and requires
+# cargo-audit itself to name the advisories again. The job that runs this
+# harness has no cargo-audit, so audit.sh skips that half and exits 0, and such
+# a case would read TOOTHLESS about a gate that is working. The `cargo audit`
+# step of the other job is what pins that direction: it fails the day the
+# lockfile carries an advisory nobody ignored.
+
 echo
 echo "=== and what they must NOT catch ==="
 
@@ -291,6 +362,13 @@ run_case "audit: the same answer under a hook's environment" pass \
 # So the fail direction is pinned by the commit that found it and by the
 # measurement in audit.sh's own comment, and not by this harness. Said here
 # rather than left as an absence somebody reads as coverage.
+
+# The bounded reason on the lockfile exactly as it stands. A gate that failed
+# here would be refusing the one state the repository is meant to be in, and the
+# fail cases above would all pass for the wrong reason.
+run_case "audit: the zstd ignores hold on the lock as it stands" pass \
+	'./scripts/audit.sh' \
+	""
 
 run_case "no-unsafe: the word in a comment and in a string" pass \
 	'./scripts/no-unsafe.sh' \
