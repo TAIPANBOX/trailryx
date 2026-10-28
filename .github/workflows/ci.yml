@@ -82,7 +82,7 @@ jobs:
       # Free here. Actions cache is 10 GB per repository on a public one, and
       # GitHub evicts the oldest entries itself, so nothing starts metering.
       - name: cargo cache
-        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
 
       # `trailryx-federation-grpc` generates its wire types at build time, on
       # purpose: a checked-in copy is a second source of truth for the wire, and
@@ -258,7 +258,7 @@ jobs:
       # means each half evicting the other's artifacts, which is what made the
       # single-job version recompile work it had already done.
       - name: cargo cache
-        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
 
       - name: protoc
         run: |
