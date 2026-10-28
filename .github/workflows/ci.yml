@@ -113,6 +113,7 @@ jobs:
         uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           cache-on-failure: true
+          prefix-key: v0-rust-coldprobe-new
 
       # `trailryx-federation-grpc` generates its wire types at build time, on
       # purpose: a checked-in copy is a second source of truth for the wire, and
@@ -299,6 +300,7 @@ jobs:
         uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           cache-on-failure: true
+          prefix-key: v0-rust-coldprobe-new
 
       - name: protoc
         run: |
