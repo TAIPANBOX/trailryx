@@ -270,14 +270,30 @@ open(p, "w").write("#[test]\nfn teeth_planted() {}\n")')" \
 # The expiry is the one that matters most and has a case per crate: with only
 # one of them planted, the other half of EXPIRES_AT could be deleted and every
 # case here would still be red for the first.
+#
+# Both cases match the 58.x version rather than name it. They named 58.4.0, and
+# the first parquet patch release (58.4.1, which is also the first to take a
+# thrift without RUSTSEC-2026-0435) made every one of them fail with "pattern not
+# found" while the gate they test was fine. A case that breaks on a routine
+# lockfile bump gets deleted by the person it interrupts, so it is written to
+# survive one; `assert t != s` still makes it BROKEN, not green, if there is no
+# 58.x block to move.
 run_case "audit: the zstd ignores outlive parquet 60" fail \
 	'./scripts/audit.sh' \
-	"$(py 'edit("Cargo.lock", "name = \"parquet\"\nversion = \"58.4.0\"", "name = \"parquet\"\nversion = \"60.0.0\"")')" \
+	"$(py 'import re
+s = open("Cargo.lock").read()
+t = re.sub(r"(name = \"parquet\"\nversion = \")58\.[0-9]+\.[0-9]+", "\\g<1>60.0.0", s, count=1)
+assert t != s, "no parquet 58.x block in Cargo.lock"
+open("Cargo.lock", "w").write(t)')" \
 	"has expired"
 
 run_case "audit: the zstd ignores outlive arrow-ipc 60" fail \
 	'./scripts/audit.sh' \
-	"$(py 'edit("Cargo.lock", "name = \"arrow-ipc\"\nversion = \"58.4.0\"", "name = \"arrow-ipc\"\nversion = \"60.0.0\"")')" \
+	"$(py 'import re
+s = open("Cargo.lock").read()
+t = re.sub(r"(name = \"arrow-ipc\"\nversion = \")58\.[0-9]+\.[0-9]+", "\\g<1>60.0.0", s, count=1)
+assert t != s, "no arrow-ipc 58.x block in Cargo.lock"
+open("Cargo.lock", "w").write(t)')" \
 	"has expired"
 
 run_case "audit: zstd moved out of the range its ignore was argued for" fail \
