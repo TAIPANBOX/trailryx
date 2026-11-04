@@ -95,7 +95,10 @@ flowchart TB
   VCX ==>|"delegation_issued / denied / revoked"| BUS
   TF ==>|"agent-event NDJSON"| BUS{{"agent-event bus + Agent Passport"}}
   WX ==> BUS
-  Agent -->|"web fetch"| SCX["Scopyx: governed web egress"]
+  Agent -->|"web fetch: MCP tools/call"| BRK["TokenFuse MCP broker: the scopyx key from its vault, the run labelled from the act"]
+  BRK -->|"last hop"| SCX["Scopyx: governed web egress"]
+  BRK -->|"observed act"| TF
+  Agent -.->|"or direct, key in a header"| SCX
   SCX -->|"POST /v1/decide"| WX
   SCX ==>|"web_fetch / web_blocked"| BUS
   ENG["Engram: memory"] -->|"reflect via base_url"| TF
@@ -106,6 +109,7 @@ flowchart TB
   QX ==>|"crypto events"| BUS
   BUS ==> VX["Verdryx: quality / drift"]
   VX ==>|"quality events"| BUS
+  VX ==>|"slo_burn: a policy can hold the agent"| WX
   TF -->|"outcome-tagged traces"| VX
   MX["Mockryx: pre-prod safety rehearsal"] -->|"hostile scenarios"| TF
   MX ==>|"sim events"| BUS
@@ -116,7 +120,7 @@ flowchart TB
   HX -->|"one mail, a view and never an action"| OPS["your mailbox"]
   HX ==>|"alert_sent"| HJ[("heraldyx's own hash-chained journal, not this bus")]
   YOU(["you, in a browser over your own tunnel"]) --> GX[["Genaryx: the console over all of it"]]
-  GX -->|"signed commands: the kill, an approval, a policy"| CL
+  GX -->|"commands: the kill, an approval, a policy"| CL
   GX -->|"signed commands"| WX
   GX ==>|"console_command"| BUS
   GX -.->|"reads it"| IDX
@@ -136,8 +140,10 @@ flowchart TB
   SPEC[["agent-passport: the spec"]] -.->|governs| BUS
 ```
 
-`stack-up` runs the seal at 06:57 by default and the Kubernetes install has a
-nightly job that packs the ledger and verifies the pack before it exits. The one
+`stack-up` runs the seal at 06:57 by default, `stack-single` runs it once a day
+from its `record` profile (`RECORD_SEAL_INTERVAL`, 86400 seconds by default), and
+the Kubernetes install has a nightly job that packs the ledger and verifies the
+pack before it exits. The one
 gap left: the console has no panel for this plane, so what is sealed is read with
 the CLI rather than in a browser.
 
@@ -2375,7 +2381,7 @@ audit lasts forever.
 - [x] The offline verifier: a separate binary, zero dependencies, unsafe forbidden
 - [x] Reads the shared agent-event bus, and names the types it refuses
 - [x] A run that maps nothing does not advance its cursor
-- [x] Installed by `stack-up` and by the Kubernetes profile
+- [x] Installed by `stack-up`, by `stack-single` and by the Kubernetes profile
 - [ ] A panel in the console; today the record is read with the CLI
 - [ ] One box with several trust domains cannot be sealed in a single pass
 
