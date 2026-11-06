@@ -139,7 +139,7 @@ shapes="runs $num checks|runs the same $num|the same $num checks|gate.s $num (al
 while IFS= read -r f; do
   [ "$f" = "$readme" ] && continue
   [ -f "$f" ] || continue
-  file "$f" | grep -q text || continue
+  grep -q text <<<"$(file "$f")" || continue
   hits=$(grep -nEi "$shapes" "$f" || true)
   [ -n "$hits" ] || continue
   while IFS= read -r hit; do

@@ -2227,7 +2227,7 @@ use `git worktree`, `git config --worktree --get core.hooksPath` should answer w
 nothing, and `git config --worktree --unset core.hooksPath` if it does not. An
 absolute value there runs a different checkout's hook against your tree.
 
-`.githooks/pre-push` runs twenty-six checks and refuses the push if any fails:
+`.githooks/pre-push` runs twenty-seven checks and refuses the push if any fails:
 formatting, clippy with warnings as errors, the tests, a standalone build of the
 substrate crate, a zero-dependency check on every crate outside the SQL facade, a
 build and test of the core with the facade absent, an `unsafe` check, every temp path
@@ -2239,7 +2239,7 @@ criterion, the published seed corpus, the two verifiers agreeing on the same pac
 reproducible build of the verifier from two different paths, the TLS build of the HTTP
 client, the FIPS 140-3 build of the cryptographic provider, every parser against
 hostile bytes, every number this README states about the
-repository, the surface `compat/1.0.json` says this repository's 1.0 will freeze,
+repository, that no pipe ends in a grep that leaves early, the surface `compat/1.0.json` says this repository's 1.0 will freeze,
 a 200-seed durability sweep, and the advisories. How long that takes,
 measured rather than remembered, is in [`VALIDATION.md`](VALIDATION.md).
 

@@ -80,7 +80,7 @@ fi
 # through the comparison: two builds could agree and still both embed a path, if
 # the paths happened not to reach the binary in a length-sensitive way.
 if command -v strings >/dev/null 2>&1; then
-    if strings "$short/target/release/$BIN" | grep -q "$work"; then
+    if strings "$short/target/release/$BIN" | grep -c "$work" >/dev/null; then
         echo
         echo "FAIL: the build directory appears inside the binary, so the two matched by"
         echo "      luck rather than by being path-independent."

@@ -204,7 +204,7 @@ docs/planning/trailryx-roadmap.md 243 history"
   while IFS= read -r f; do
     [ "$f" = "$readme" ] && continue
     [ -f "$f" ] || continue
-    file "$f" | grep -q text || continue
+    grep -q text <<<"$(file "$f")" || continue
 
     # Paragraphs, except that a table row is its own paragraph: a row about the
     # dependency count sits in the same block as rows about seeds and cases, and
