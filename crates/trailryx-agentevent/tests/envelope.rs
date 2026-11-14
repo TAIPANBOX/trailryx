@@ -476,6 +476,37 @@ fn a_missing_severity_comes_from_the_registry_rather_than_from_nowhere() {
     assert_eq!(unit.meta.severity, Severity::Critical);
 }
 
+/// A hold closes three ways (wardryx invariant 52), and the two that are not a
+/// person's decision must not read as one. An expired hold is a decision that did
+/// not arrive in time, the same record as a timeout; a withdrawn hold is no
+/// verdict at all. Neither may read as `Denied`, which would put a refusal by a
+/// person into the record that no person made, and a missing severity comes from
+/// each type's own band in the registry.
+#[test]
+fn a_hold_closed_by_its_lifetime_or_its_agent_is_not_a_denial() {
+    let expired = map(OURS, &line("approval_expired", "")).expect("approval_expired maps");
+    assert_eq!(expired.meta.event_type, EventType::PolicyDecision);
+    assert_eq!(expired.meta.verdict, Some(Verdict::Failed));
+    assert_eq!(expired.meta.error, Some(ErrorCode::Timeout));
+    assert_eq!(expired.meta.mapper, MAPPER_VERSION);
+
+    let withdrawn = map(OURS, &line("approval_withdrawn", "")).expect("approval_withdrawn maps");
+    assert_eq!(withdrawn.meta.event_type, EventType::PolicyDecision);
+    assert_eq!(withdrawn.meta.verdict, Some(Verdict::NotApplicable));
+    assert_eq!(withdrawn.meta.error, None);
+    assert_eq!(withdrawn.meta.mapper, MAPPER_VERSION);
+
+    for (kind, band) in [
+        ("approval_expired", Severity::Warning),
+        ("approval_withdrawn", Severity::Info),
+    ] {
+        let no_severity = line(kind, "").replace(r#""severity":"critical","#, "");
+        let unit = map(OURS, &no_severity).expect("it maps");
+        assert_eq!(unit.meta.severity, band, "{kind}");
+        assert_ne!(unit.meta.verdict, Some(Verdict::Denied), "{kind}");
+    }
+}
+
 #[test]
 fn a_line_that_is_not_an_object_is_refused_rather_than_half_read() {
     for raw in [

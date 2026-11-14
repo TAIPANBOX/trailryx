@@ -476,7 +476,15 @@ use trailryx_record::{
 /// the schema, not at producers that were silent. The lines that stay refused
 /// do not change: the ten types the module doc names are refused by type under
 /// this reading as they were counted before it.
-pub const MAPPER_VERSION: MapperVersion = MapperVersion(114);
+///
+/// 115 is the reading that maps `approval_expired` and `approval_withdrawn`,
+/// registered under wardryx in SPEC 6.2 on 14 November 2026, when a hold gained
+/// an end other than a person's decision. Both were unknown types before it,
+/// refused and counted, so a hold that closed by its lifetime or by its own agent
+/// left its `Held` record with no closing record until 115. `approval_expired`
+/// reads as a timeout (`Failed`, `Timeout`) and `approval_withdrawn` as no
+/// verdict (`NotApplicable`); neither is a denial.
+pub const MAPPER_VERSION: MapperVersion = MapperVersion(115);
 
 /// The one subject agent-passport SPEC 6.2 reserves for a caller that named no
 /// agent (2026-10-14), e.g. a key scan TokenFuse refused for its client key.
@@ -874,6 +882,24 @@ fn mapping_for(kind: &str) -> Option<Mapping> {
             Some(Verdict::Failed),
             Some(ErrorCode::Timeout),
             Severity::Error,
+        ),
+        // A hold wardryx closed because nobody decided it within its lifetime
+        // (wardryx invariant 52): the same fact as a timeout, a decision that did
+        // not arrive in time, at the registry's medium band. No token exists for it.
+        "approval_expired" => m(
+            EventType::PolicyDecision,
+            Some(Verdict::Failed),
+            Some(ErrorCode::Timeout),
+            Severity::Warning,
+        ),
+        // A hold its own agent withdrew: nobody decided, and nothing failed. The
+        // held call did not go ahead and no verdict was given, which is what
+        // `NotApplicable` says, as it does for a retained reservation that closed.
+        "approval_withdrawn" => m(
+            EventType::PolicyDecision,
+            Some(Verdict::NotApplicable),
+            None,
+            Severity::Info,
         ),
         "tool_call" => m(EventType::ToolCall, None, None, Severity::Info),
         "run_killed" => m(
