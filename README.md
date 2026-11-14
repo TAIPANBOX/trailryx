@@ -7,7 +7,7 @@
 ![Stage](https://img.shields.io/badge/stage-13%20of%2013-blue.svg)
 ![Core](https://img.shields.io/badge/core-frozen-success.svg)
 ![Rust](https://img.shields.io/badge/rust-1.88%2B%2C%20SQL%20facade%201.89%2B-orange.svg)
-![Tests](https://img.shields.io/badge/tests-1332-success.svg)
+![Tests](https://img.shields.io/badge/tests-1333-success.svg)
 ![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)
 ![Dependencies](https://img.shields.io/badge/deps-0%20in%20the%20verifier-success.svg)
 ![Unsafe](https://img.shields.io/badge/unsafe-forbidden-success.svg)
@@ -757,7 +757,7 @@ not repeated here: a number written twice is a number that will disagree with it
 ## Try it
 
 ```bash
-cargo test                                    # 1332 tests
+cargo test                                    # 1333 tests
 cargo run --bin trailryx-sim-run -- --help
 ```
 
