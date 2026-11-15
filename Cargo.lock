@@ -4088,7 +4088,7 @@ dependencies = [
 
 [[package]]
 name = "trailryx-agentevent"
-version = "1.5.0"
+version = "1.6.0"
 dependencies = [
  "trailryx-contracts",
  "trailryx-json",
@@ -4097,7 +4097,7 @@ dependencies = [
 
 [[package]]
 name = "trailryx-anchor"
-version = "1.5.0"
+version = "1.6.0"
 dependencies = [
  "trailryx-asn1",
  "trailryx-contracts",
@@ -4108,11 +4108,11 @@ dependencies = [
 
 [[package]]
 name = "trailryx-asn1"
-version = "1.5.0"
+version = "1.6.0"
 
 [[package]]
 name = "trailryx-assemble"
-version = "1.5.0"
+version = "1.6.0"
 dependencies = [
  "trailryx-contracts",
  "trailryx-erasure",
@@ -4122,7 +4122,7 @@ dependencies = [
 
 [[package]]
 name = "trailryx-azure"
-version = "1.5.0"
+version = "1.6.0"
 dependencies = [
  "trailryx-contracts",
  "trailryx-crypto",
@@ -4131,35 +4131,35 @@ dependencies = [
 
 [[package]]
 name = "trailryx-compliance"
-version = "1.5.0"
+version = "1.6.0"
 dependencies = [
  "trailryx-verify",
 ]
 
 [[package]]
 name = "trailryx-contracts"
-version = "1.5.0"
+version = "1.6.0"
 dependencies = [
  "trailryx-record",
 ]
 
 [[package]]
 name = "trailryx-core"
-version = "1.5.0"
+version = "1.6.0"
 dependencies = [
  "trailryx-sim",
 ]
 
 [[package]]
 name = "trailryx-crypto"
-version = "1.5.0"
+version = "1.6.0"
 dependencies = [
  "trailryx-record",
 ]
 
 [[package]]
 name = "trailryx-crypto-aws"
-version = "1.5.0"
+version = "1.6.0"
 dependencies = [
  "aws-lc-rs",
  "trailryx-contracts",
@@ -4169,7 +4169,7 @@ dependencies = [
 
 [[package]]
 name = "trailryx-demo"
-version = "1.5.0"
+version = "1.6.0"
 dependencies = [
  "serde_json",
  "trailryx-assemble",
@@ -4192,7 +4192,7 @@ dependencies = [
 
 [[package]]
 name = "trailryx-erasure"
-version = "1.5.0"
+version = "1.6.0"
 dependencies = [
  "trailryx-contracts",
  "trailryx-crypto",
@@ -4203,7 +4203,7 @@ dependencies = [
 
 [[package]]
 name = "trailryx-federation"
-version = "1.5.0"
+version = "1.6.0"
 dependencies = [
  "trailryx-contracts",
  "trailryx-crypto",
@@ -4214,7 +4214,7 @@ dependencies = [
 
 [[package]]
 name = "trailryx-federation-grpc"
-version = "1.5.0"
+version = "1.6.0"
 dependencies = [
  "prost",
  "rcgen",
@@ -4234,7 +4234,7 @@ dependencies = [
 
 [[package]]
 name = "trailryx-fuzz"
-version = "1.5.0"
+version = "1.6.0"
 dependencies = [
  "trailryx-anchor",
  "trailryx-asn1",
@@ -4254,7 +4254,7 @@ dependencies = [
 
 [[package]]
 name = "trailryx-http"
-version = "1.5.0"
+version = "1.6.0"
 dependencies = [
  "rustls",
  "webpki-roots 0.26.11",
@@ -4262,7 +4262,7 @@ dependencies = [
 
 [[package]]
 name = "trailryx-index"
-version = "1.5.0"
+version = "1.6.0"
 dependencies = [
  "trailryx-crypto",
  "trailryx-record",
@@ -4270,7 +4270,7 @@ dependencies = [
 
 [[package]]
 name = "trailryx-ingest"
-version = "1.5.0"
+version = "1.6.0"
 dependencies = [
  "trailryx-contracts",
  "trailryx-crypto",
@@ -4282,7 +4282,7 @@ dependencies = [
 
 [[package]]
 name = "trailryx-journal"
-version = "1.5.0"
+version = "1.6.0"
 dependencies = [
  "trailryx-crypto",
  "trailryx-record",
@@ -4291,14 +4291,14 @@ dependencies = [
 
 [[package]]
 name = "trailryx-json"
-version = "1.5.0"
+version = "1.6.0"
 dependencies = [
  "trailryx-sim",
 ]
 
 [[package]]
 name = "trailryx-node"
-version = "1.5.0"
+version = "1.6.0"
 dependencies = [
  "trailryx-agentevent",
  "trailryx-assemble",
@@ -4319,7 +4319,7 @@ dependencies = [
 
 [[package]]
 name = "trailryx-otlp"
-version = "1.5.0"
+version = "1.6.0"
 dependencies = [
  "trailryx-assemble",
  "trailryx-contracts",
@@ -4331,7 +4331,7 @@ dependencies = [
 
 [[package]]
 name = "trailryx-projection"
-version = "1.5.0"
+version = "1.6.0"
 dependencies = [
  "trailryx-crypto",
  "trailryx-index",
@@ -4341,7 +4341,7 @@ dependencies = [
 
 [[package]]
 name = "trailryx-publish"
-version = "1.5.0"
+version = "1.6.0"
 dependencies = [
  "trailryx-contracts",
  "trailryx-crypto",
@@ -4351,11 +4351,11 @@ dependencies = [
 
 [[package]]
 name = "trailryx-record"
-version = "1.5.0"
+version = "1.6.0"
 
 [[package]]
 name = "trailryx-s3"
-version = "1.5.0"
+version = "1.6.0"
 dependencies = [
  "trailryx-contracts",
  "trailryx-crypto",
@@ -4364,7 +4364,7 @@ dependencies = [
 
 [[package]]
 name = "trailryx-sign"
-version = "1.5.0"
+version = "1.6.0"
 dependencies = [
  "trailryx-crypto",
  "trailryx-record",
@@ -4372,11 +4372,11 @@ dependencies = [
 
 [[package]]
 name = "trailryx-sim"
-version = "1.5.0"
+version = "1.6.0"
 
 [[package]]
 name = "trailryx-sql"
-version = "1.5.0"
+version = "1.6.0"
 dependencies = [
  "async-trait",
  "datafusion",
@@ -4396,7 +4396,7 @@ dependencies = [
 
 [[package]]
 name = "trailryx-store"
-version = "1.5.0"
+version = "1.6.0"
 dependencies = [
  "trailryx-anchor",
  "trailryx-compliance",
@@ -4413,7 +4413,7 @@ dependencies = [
 
 [[package]]
 name = "trailryx-verify"
-version = "1.5.0"
+version = "1.6.0"
 dependencies = [
  "trailryx-json",
 ]
