@@ -21,7 +21,7 @@
 //! those two is the entire trust model.
 
 use crate::otlp::{Dropped, Limits, decode_trace_request};
-use crate::semconv::{MAPPER_VERSION, MapperConfig, Rejection, Report, map_span};
+use crate::semconv::{MAPPER_VERSION, MapperConfig, Rejection, Report, TraceAgents, map_span};
 use std::collections::VecDeque;
 use trailryx_contracts::contracts::{
     AdapterResult, Delivery, Ordering, Source, SourceDescriptor, Trust,
@@ -57,6 +57,8 @@ pub struct OtlpSource {
     dropped: Dropped,
     wire: WireReport,
     anomalies_reported: u64,
+    /// The agent each recent trace names, for its spans that name none (#80).
+    trace_agents: TraceAgents,
 }
 
 impl OtlpSource {
@@ -75,6 +77,7 @@ impl OtlpSource {
             dropped: Dropped::default(),
             wire: WireReport::default(),
             anomalies_reported: 0,
+            trace_agents: TraceAgents::new(),
         }
     }
 
@@ -128,6 +131,17 @@ impl OtlpSource {
             .saturating_add(request.padded_varints);
         self.merge_dropped(request.dropped);
 
+        // Every span of the batch is learned before any is mapped, so a root
+        // that names no agent takes the one a child in the same batch names.
+        for resource_spans in &request.resource_spans {
+            for scope in &resource_spans.scopes {
+                for span in &scope.spans {
+                    self.trace_agents
+                        .learn(&self.cfg, &resource_spans.resource, span, caller);
+                }
+            }
+        }
+
         let mut produced = 0;
         let mut refused: Vec<(AgentId, RunId)> = Vec::new();
         for resource_spans in &request.resource_spans {
@@ -139,6 +153,8 @@ impl OtlpSource {
                         &resource_spans.resource,
                         &scope.scope_name,
                         span,
+                        self.trace_agents
+                            .agent_for(&resource_spans.resource, span, caller),
                         cursor,
                     ) {
                         Ok(ingest)

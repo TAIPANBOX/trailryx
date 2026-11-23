@@ -440,7 +440,7 @@ fn an_anomaly_never_moves_the_resume_point() {
     // The version the *records* were mapped under is in the breakdown, where it
     // is a fact about them rather than a claim about this one.
     let detail = diagnostic(&event);
-    assert!(detail.contains("mapper_version\t2"), "{detail}");
+    assert!(detail.contains("mapper_version\t3"), "{detail}");
     assert!(detail.contains("mode\treplay"), "{detail}");
     assert!(detail.contains("unknown_operation\t1"), "{detail}");
     assert!(detail.contains("anomalies_since_last\t1"), "{detail}");

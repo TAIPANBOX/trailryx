@@ -473,3 +473,30 @@ fn a_trace_naming_two_agents_lends_neither() {
         "agent://acme.example/front-door"
     );
 }
+
+#[test]
+fn a_service_in_the_same_trace_does_not_lend_its_agent_to_another() {
+    // A trace id crosses services in traceparent. The front door names its
+    // agent; the billing service, called inside the same trace, names none and
+    // stays under its own service rather than under the front door's agent.
+    let front = chat_span()
+        .str_attr("gen_ai.agent.name", "triage")
+        .span_id(vec![0x02; 8]);
+    let billing = SpanBuilder::new("invocation")
+        .str_attr("gen_ai.operation.name", "invoke_agent")
+        .span_id(vec![0x05; 8])
+        .parent(vec![0x02; 8]);
+    let mut src = source();
+    src.accept(&request(&service("front-door"), "scope", &[front]), NOW);
+    src.accept(&request(&service("billing-svc"), "scope", &[billing]), NOW);
+    let items = src.poll(10).unwrap();
+    assert_eq!(items.len(), 2);
+    assert_eq!(
+        items[0].meta.agent_id.as_str(),
+        "agent://acme.example/triage"
+    );
+    assert_eq!(
+        items[1].meta.agent_id.as_str(),
+        "agent://acme.example/billing-svc"
+    );
+}

@@ -46,7 +46,7 @@
 //! whether a 2026 record used `gen_ai.system` or `gen_ai.provider.name`.
 
 use crate::otlp::{Attr, Span, StatusCode, Value};
-use std::collections::BTreeSet;
+use std::collections::{BTreeSet, HashMap, VecDeque};
 use std::fmt;
 use trailryx_contracts::ingest::{Correlation, Cursor, Ingest, MetaDraft, PayloadPart, SourceKey};
 use trailryx_crypto::Sha384;
@@ -66,7 +66,14 @@ use trailryx_record::{
 /// omitting the field, so version 1 manufactured causal edges from them and
 /// reclassified unrelated roots as delegations. A record stamped 1 may carry an
 /// edge that was never named.
-pub const MAPPER_VERSION: MapperVersion = MapperVersion(2);
+///
+/// Version 3 lets a span that names no agent take the agent its trace names
+/// (see [`TraceAgents`]). Version 2 filed such a span under the resource's
+/// `service.name`, so one run of one agent appeared under two agent ids when an
+/// SDK put `gen_ai.agent.name` on some spans and not on the root (issue #80). A
+/// record stamped 2 whose agent came from `service.name` may name the service
+/// rather than the agent the rest of its run names.
+pub const MAPPER_VERSION: MapperVersion = MapperVersion(3);
 
 // ---------------------------------------------------------------------------
 // Configuration
@@ -329,11 +336,16 @@ fn error_code_for(raw: &str) -> ErrorCode {
 /// record is written, and the gap between it and the emitter's clock is
 /// assessed where both are known. A mapper that stamped a time would be a
 /// mapper that could get it wrong.
+///
+/// `trace_agent` is the one agent the span's trace names elsewhere, from
+/// [`TraceAgents::agent_for`], or `None`. It is used only when the span names no
+/// agent of its own, and it ranks above the resource's `service.name`.
 pub fn map_span(
     cfg: &MapperConfig,
     resource: &[Attr],
     scope_name: &str,
     span: &Span,
+    trace_agent: Option<&AgentId>,
     cursor: Cursor,
 ) -> Result<Ingest, Rejection> {
     let operation = span
@@ -354,7 +366,7 @@ pub fn map_span(
     let mut consumed: BTreeSet<&str> = BTreeSet::new();
     consumed.insert(OPERATION);
 
-    let agent_id = agent_from(cfg, resource, span, &mut consumed);
+    let agent_id = agent_from(cfg, resource, span, trace_agent, &mut consumed);
 
     let basis = basis_from(span, &mut consumed);
     let (verdict, error) = outcome_from(span, &mut consumed);
@@ -422,22 +434,24 @@ fn run_id_from(trace_id: &[u8]) -> Option<RunId> {
 /// The first candidate that parses as an agent identifier, else the default.
 ///
 /// Order matters: an explicit agent id beats a human-readable agent name, which
-/// beats the service that emitted the span. A candidate that does not parse is
-/// **not** repaired into one, and the attribute it came from stays unconsumed,
-/// so its value reaches the payload plane instead of being dropped.
+/// beats the one agent the rest of the span's trace names, which beats the
+/// service that emitted the span. A candidate that does not parse is **not**
+/// repaired into one, and the attribute it came from stays unconsumed, so its
+/// value reaches the payload plane instead of being dropped. The trace's agent
+/// consumes nothing: it is not an attribute of this span.
 fn agent_from(
     cfg: &MapperConfig,
     resource: &[Attr],
     span: &Span,
+    trace_agent: Option<&AgentId>,
     consumed: &mut BTreeSet<&'static str>,
 ) -> AgentId {
-    for key in ["gen_ai.agent.id", "gen_ai.agent.name"] {
-        if let Some(name) = span.attr(key).and_then(Value::as_str)
-            && let Ok(id) = AgentId::parse_strict(format!("agent://{}/{}", cfg.trust_domain, name))
-        {
-            consumed.insert(key);
-            return id;
-        }
+    if let Some((key, id)) = own_agent(cfg, span) {
+        consumed.insert(key);
+        return id;
+    }
+    if let Some(id) = trace_agent {
+        return id.clone();
     }
     if let Some(name) = resource
         .iter()
@@ -448,6 +462,136 @@ fn agent_from(
         return id;
     }
     cfg.default_agent.clone()
+}
+
+/// The agent a span names itself, and the attribute that named it.
+fn own_agent(cfg: &MapperConfig, span: &Span) -> Option<(&'static str, AgentId)> {
+    for key in ["gen_ai.agent.id", "gen_ai.agent.name"] {
+        if let Some(name) = span.attr(key).and_then(Value::as_str)
+            && let Ok(id) = AgentId::parse_strict(format!("agent://{}/{}", cfg.trust_domain, name))
+        {
+            return Some((key, id));
+        }
+    }
+    None
+}
+
+/// How many traces [`TraceAgents`] remembers before it forgets the oldest.
+pub const TRACE_AGENTS_REMEMBERED: usize = 4096;
+
+/// The agent each recent trace names, so a span that names none can take it.
+///
+/// An SDK can put `gen_ai.agent.name` on the model and `invoke_agent` spans and
+/// not on the root span of the same run (issue #80, measured with Google ADK
+/// 2.7.0). Mapped one span at a time, the root fell through to the resource's
+/// `service.name`, and when that was spelled differently from the agent name the
+/// one run was filed under two agent ids. A reader asking for the agent then
+/// missed the request that started each run.
+///
+/// A source learns every span of a batch before it maps any of them, so a root
+/// that arrives in the same batch as a named child takes the child's agent, and
+/// it keeps what it learned across batches, so a root exported after its
+/// children (the usual order, since a root ends last) takes it too.
+///
+/// What is lent, and to whom, is the narrow reading on purpose:
+/// - Only within one trace AND one emitting service (the resource's
+///   `service.name`) AND, at the agent-token door, one caller. A trace id
+///   travels across services in `traceparent`, so a trace can hold the spans of
+///   several agents on several services; lending across them would file one
+///   service's unnamed spans under another service's agent, and at the door
+///   would turn one caller's span into a refusal of another's.
+/// - Only a trace that names exactly ONE agent within that scope lends it. Two
+///   names (a supervisor and a sub-agent) leave an unnamed span ambiguous, so it
+///   keeps `service.name`, as before.
+/// - A span that arrives in an earlier batch than every named span of its trace
+///   has nothing to take yet and keeps `service.name`.
+/// - The memory is bounded and in process: the oldest of
+///   [`TRACE_AGENTS_REMEMBERED`] scopes is forgotten first, and a restart starts
+///   empty.
+#[derive(Debug, Default)]
+pub struct TraceAgents {
+    named: HashMap<Vec<u8>, Named>,
+    order: VecDeque<Vec<u8>>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum Named {
+    One(AgentId),
+    Several,
+}
+
+impl TraceAgents {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Note the agent `span` names, if it names one. `caller` is the agent the
+    /// transport proved is sending, or `None` at the fleet door.
+    pub fn learn(
+        &mut self,
+        cfg: &MapperConfig,
+        resource: &[Attr],
+        span: &Span,
+        caller: Option<&AgentId>,
+    ) {
+        let Some((_, id)) = own_agent(cfg, span) else {
+            return;
+        };
+        let Some(key) = scope_key(resource, span, caller) else {
+            return;
+        };
+        if let Some(entry) = self.named.get_mut(&key) {
+            if matches!(entry, Named::One(known) if *known != id) {
+                *entry = Named::Several;
+            }
+            return;
+        }
+        if self.order.len() >= TRACE_AGENTS_REMEMBERED
+            && let Some(oldest) = self.order.pop_front()
+        {
+            self.named.remove(&oldest);
+        }
+        self.order.push_back(key.clone());
+        self.named.insert(key, Named::One(id));
+    }
+
+    /// The one agent named in `span`'s trace, from the same service and caller,
+    /// or `None` when that scope names none or several.
+    pub fn agent_for(
+        &self,
+        resource: &[Attr],
+        span: &Span,
+        caller: Option<&AgentId>,
+    ) -> Option<&AgentId> {
+        match self.named.get(&scope_key(resource, span, caller)?) {
+            Some(Named::One(id)) => Some(id),
+            _ => None,
+        }
+    }
+}
+
+/// Trace id, `service.name` and caller, each length-prefixed so no two
+/// different triples share a key. `None` for a span with no usable trace id.
+fn scope_key(resource: &[Attr], span: &Span, caller: Option<&AgentId>) -> Option<Vec<u8>> {
+    if span.trace_id.is_empty() || span.trace_id.iter().all(|b| *b == 0) {
+        return None;
+    }
+    let service = resource
+        .iter()
+        .find(|a| a.key == "service.name")
+        .and_then(|a| a.value.as_str())
+        .unwrap_or("");
+    let caller = caller.map(AgentId::as_str).unwrap_or("");
+    let mut key = Vec::new();
+    for part in [
+        span.trace_id.as_slice(),
+        service.as_bytes(),
+        caller.as_bytes(),
+    ] {
+        key.extend_from_slice(&(part.len() as u64).to_be_bytes());
+        key.extend_from_slice(part);
+    }
+    Some(key)
 }
 
 fn basis_from(span: &Span, consumed: &mut BTreeSet<&'static str>) -> Basis {

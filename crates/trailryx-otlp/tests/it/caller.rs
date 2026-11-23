@@ -184,3 +184,27 @@ fn the_anomaly_record_counts_the_refusal() {
         diagnostic(&anomaly)
     );
 }
+
+#[test]
+fn one_caller_naming_an_agent_in_a_trace_does_not_refuse_another_callers_unnamed_span() {
+    // Two agents in one distributed trace, each at the door with its own token.
+    // a names itself; b's span names nobody and comes from service b. Lending
+    // a's name to it would turn b's own span into a refusal.
+    let mut src = source();
+    let named = chat(9).str_attr("gen_ai.agent.name", "a");
+    let produced = src.accept_as(
+        &request(&service("a"), "scope", &[named]),
+        NOW,
+        Some(&agent("a")),
+    );
+    assert_eq!(produced, 1);
+    let produced = src.accept_as(
+        &request(&service("b"), "scope", &[chat(9)]),
+        NOW,
+        Some(&agent("b")),
+    );
+    assert_eq!(produced, 1, "b's span is b's");
+    assert_eq!(src.report().not_the_caller, 0);
+    let items = src.poll(10).unwrap();
+    assert_eq!(items[1].meta.agent_id, agent("b"));
+}

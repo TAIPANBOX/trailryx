@@ -484,7 +484,16 @@ use trailryx_record::{
 /// left its `Held` record with no closing record until 115. `approval_expired`
 /// reads as a timeout (`Failed`, `Timeout`) and `approval_withdrawn` as no
 /// verdict (`NotApplicable`); neither is a denial.
-pub const MAPPER_VERSION: MapperVersion = MapperVersion(115);
+///
+/// 116 is the reading that maps two tokenfuse types registered in SPEC 6.2 in
+/// November 2026: `rate_limited`, the gateway answering 429 because a key went
+/// over its own requests-per-second or concurrency limit, and `price_fallback`,
+/// a call priced from the fallback rates because its model is not in the price
+/// book. Both were unknown types before it, refused and counted, so the trail of
+/// calls refused for a key's rate and of calls priced by a fallback starts at
+/// 116. A reader who finds none before it is looking at a reader that could not
+/// write them down, not at a gateway that never limited or never guessed a price.
+pub const MAPPER_VERSION: MapperVersion = MapperVersion(116);
 
 /// The one subject agent-passport SPEC 6.2 reserves for a caller that named no
 /// agent (2026-10-14), e.g. a key scan TokenFuse refused for its client key.
@@ -812,6 +821,32 @@ fn mapping_for(kind: &str) -> Option<Mapping> {
             Some(ErrorCode::PolicyDenied),
             Severity::Warning,
         ),
+        // The gateway answered 429 because the calling key went over its own
+        // limit, requests per second or concurrency (agent-passport SPEC 6.2,
+        // `rate_limited`). The `breaker_tripped` reading, one control over: a
+        // control the operator set refused the call before any provider saw it,
+        // so `PolicyDecision` and `Denied`. The error code is `RateLimited`
+        // rather than `PolicyDenied`, because the vocabulary has the exact word
+        // and the OTLP door already uses it for a 429. Which key, which
+        // principal, which limit and its value, the retry-after and how many
+        // refusals went unreported since the last line all stay in `data`, by
+        // the rule at the top of this file. `medium` is `Warning`, the band
+        // tokenfuse fixes, the same as `breaker_tripped`.
+        "rate_limited" => m(
+            EventType::PolicyDecision,
+            Some(Verdict::Denied),
+            Some(ErrorCode::RateLimited),
+            Severity::Warning,
+        ),
+        // The gateway priced a call from its fallback rates because the model
+        // is not in its price book, once per model per process (SPEC 6.2,
+        // `price_fallback`). Read with `budget_threshold` and `spend_spike`,
+        // the other informational money lines from this producer: spend was
+        // metered, so `BudgetCheck`, and nothing was decided or failed, so no
+        // verdict and no error. The call went ahead; what is uncertain is the
+        // amount, not the outcome. The model, the door and the rates used stay
+        // in `data`. `low` is `Notice`, the band tokenfuse fixes.
+        "price_fallback" => m(EventType::BudgetCheck, None, None, Severity::Notice),
         // The Breaker in shadow or warn mode: the run budget WOULD have refused
         // this call and the gateway forwarded it, because enforcement is off
         // (agent-passport SPEC 6.2, `breaker_shadow`, 2026-09-13). The same

@@ -47,7 +47,7 @@
 
 use crate::otlp::{Dropped, Limits as OtlpLimits};
 use crate::otlpjson::{ShapeReport, decode_traces_data};
-use crate::semconv::{MAPPER_VERSION, MapperConfig, Report, map_span};
+use crate::semconv::{MAPPER_VERSION, MapperConfig, Report, TraceAgents, map_span};
 use std::collections::VecDeque;
 use std::fmt;
 use trailryx_contracts::contracts::{
@@ -439,6 +439,8 @@ pub struct JsonlSource {
     /// Whether the reader is currently refusing chunks for a full queue, so the
     /// counter can charge the transition rather than every call.
     stalled: bool,
+    /// The agent each recent trace names, for its spans that name none (#80).
+    trace_agents: TraceAgents,
 }
 
 impl JsonlSource {
@@ -481,6 +483,7 @@ impl JsonlSource {
             tail_noted_at: None,
             stream_refused: false,
             stalled: false,
+            trace_agents: TraceAgents::new(),
         }
     }
 
@@ -632,6 +635,17 @@ impl JsonlSource {
             bump(&mut self.counters.lines.skew_not_assessed);
         }
 
+        // Every span of the line is learned before any is mapped, so a root
+        // that names no agent takes the one a child on the same line names.
+        for resource_spans in &decoded.request.resource_spans {
+            for scope in &resource_spans.scopes {
+                for span in &scope.spans {
+                    self.trace_agents
+                        .learn(&self.cfg, &resource_spans.resource, span, None);
+                }
+            }
+        }
+
         let mut produced = 0usize;
         for resource_spans in &decoded.request.resource_spans {
             for scope in &resource_spans.scopes {
@@ -645,6 +659,8 @@ impl JsonlSource {
                         &resource_spans.resource,
                         &scope.scope_name,
                         span,
+                        self.trace_agents
+                            .agent_for(&resource_spans.resource, span, None),
                         cursor,
                     ) {
                         Ok(ingest) => {

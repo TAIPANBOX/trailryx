@@ -25,3 +25,17 @@ Feature: One run of one agent is filed under one agent id
     When the spans are mapped
     Then each named span keeps its own agent, and the root is filed under front-door
     # bound: a_trace_naming_two_agents_lends_neither
+
+  Scenario: Another service in the same trace keeps its own service
+    Given a trace whose front-door service names the agent triage
+    And a span of the same trace from billing-svc that names no agent
+    When the spans are mapped
+    Then the billing-svc span is filed under billing-svc, not under triage
+    # bound: a_service_in_the_same_trace_does_not_lend_its_agent_to_another
+
+  Scenario: At the agent-token door one caller's name is not lent to another caller
+    Given agent a at the door naming itself on a span of one trace
+    And agent b at the door sending an unnamed span of the same trace from service b
+    When both are accepted
+    Then b's span is kept under b and nothing is refused
+    # bound: one_caller_naming_an_agent_in_a_trace_does_not_refuse_another_callers_unnamed_span
