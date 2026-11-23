@@ -2736,3 +2736,38 @@ fn hostile_data_on_a_refused_assertion_never_makes_it_a_record() {
         );
     }
 }
+
+/// A key over its own rate limit is refused at the gateway, as a spent budget
+/// is, and the record says which control: `RateLimited`, not `PolicyDenied`.
+/// A missing severity takes the registry's `medium`.
+#[test]
+fn a_call_refused_for_its_keys_rate_reads_as_a_rate_limited_denial() {
+    let data = r#","data":{"key_id":"k-7","principal":"key:k-7","limit":"rps","limit_value":5,"retry_after_secs":1,"unreported_since_last":3}"#;
+    let unit = map(OURS, &line("rate_limited", data)).expect("rate_limited maps");
+    assert_eq!(unit.meta.event_type, EventType::PolicyDecision);
+    assert_eq!(unit.meta.verdict, Some(Verdict::Denied));
+    assert_eq!(unit.meta.error, Some(ErrorCode::RateLimited));
+    assert_eq!(unit.meta.mapper, MAPPER_VERSION);
+    assert!(payload_text(&unit).contains("retry_after_secs"));
+
+    let no_severity = line("rate_limited", data).replace(r#""severity":"critical","#, "");
+    let unit = map(OURS, &no_severity).expect("it maps");
+    assert_eq!(unit.meta.severity, Severity::Warning);
+}
+
+/// A call priced from the fallback rates is spend metered with an uncertain
+/// amount: a budget line with no verdict and no error, at the registry's `low`.
+#[test]
+fn a_call_priced_from_the_fallback_rates_is_a_budget_line_with_no_verdict() {
+    let data = r#","data":{"model":"claude-opus-9","door":"anthropic","fallback_rates":{"input_per_mtok":15.0,"output_per_mtok":75.0}}"#;
+    let unit = map(OURS, &line("price_fallback", data)).expect("price_fallback maps");
+    assert_eq!(unit.meta.event_type, EventType::BudgetCheck);
+    assert_eq!(unit.meta.verdict, None);
+    assert_eq!(unit.meta.error, None);
+    assert_eq!(unit.meta.mapper, MAPPER_VERSION);
+    assert!(payload_text(&unit).contains("fallback_rates"));
+
+    let no_severity = line("price_fallback", data).replace(r#""severity":"critical","#, "");
+    let unit = map(OURS, &no_severity).expect("it maps");
+    assert_eq!(unit.meta.severity, Severity::Notice);
+}
