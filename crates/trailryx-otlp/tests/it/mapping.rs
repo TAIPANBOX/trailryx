@@ -373,3 +373,130 @@ fn an_all_zero_parent_span_id_is_not_a_parent() {
         "nothing was even claimed"
     );
 }
+
+/// The three spans of one run as Google ADK 2.7.0 exported them (issue #80):
+/// the agent's name on the model and `invoke_agent` spans, nothing on the root,
+/// and a resource `service.name` spelled differently from the agent's name.
+fn adk_run() -> (SpanBuilder, SpanBuilder, SpanBuilder) {
+    let root = SpanBuilder::new("invocation")
+        .str_attr("gen_ai.operation.name", "invoke_agent")
+        .span_id(vec![0x01; 8]);
+    let agent = SpanBuilder::new("invoke_agent billing_helper_gcp")
+        .str_attr("gen_ai.operation.name", "invoke_agent")
+        .str_attr("gen_ai.agent.name", "billing_helper_gcp")
+        .span_id(vec![0x02; 8])
+        .parent(vec![0x01; 8]);
+    let model = chat_span()
+        .str_attr("gen_ai.agent.name", "billing_helper_gcp")
+        .span_id(vec![0x03; 8])
+        .parent(vec![0x02; 8]);
+    (root, agent, model)
+}
+
+#[test]
+fn a_root_that_names_no_agent_takes_the_agent_its_trace_names() {
+    // Children first, root last, in one batch: the order a span processor
+    // exports them in, since a root ends after everything inside it.
+    let (root, agent, model) = adk_run();
+    let mut src = source();
+    src.accept(
+        &request(&service("billing-helper-gcp"), "adk", &[model, agent, root]),
+        NOW,
+    );
+    let items = src.poll(10).unwrap();
+    assert_eq!(items.len(), 3);
+    for item in &items {
+        assert_eq!(
+            item.meta.agent_id.as_str(),
+            "agent://acme.example/billing_helper_gcp",
+            "{:?} is filed under another agent",
+            item.meta.event_type
+        );
+    }
+    assert_eq!(items[2].meta.event_type, EventType::RequestReceived);
+}
+
+#[test]
+fn a_root_exported_after_its_children_takes_their_agent() {
+    // The root in a batch of its own, after the batch holding its children.
+    let (root, agent, model) = adk_run();
+    let mut src = source();
+    src.accept(
+        &request(&service("billing-helper-gcp"), "adk", &[model, agent]),
+        NOW,
+    );
+    src.accept(
+        &request(&service("billing-helper-gcp"), "adk", &[root]),
+        NOW,
+    );
+    let items = src.poll(10).unwrap();
+    assert_eq!(items.len(), 3);
+    assert_eq!(items[2].meta.event_type, EventType::RequestReceived);
+    assert_eq!(
+        items[2].meta.agent_id.as_str(),
+        "agent://acme.example/billing_helper_gcp"
+    );
+}
+
+#[test]
+fn a_trace_naming_two_agents_lends_neither() {
+    // A supervisor and a sub-agent in one trace: whose run an unnamed root is
+    // cannot be read off its children, so it keeps the service it came from.
+    let root = SpanBuilder::new("invocation")
+        .str_attr("gen_ai.operation.name", "invoke_agent")
+        .span_id(vec![0x01; 8]);
+    let triage = chat_span()
+        .str_attr("gen_ai.agent.name", "triage")
+        .span_id(vec![0x02; 8])
+        .parent(vec![0x01; 8]);
+    let billing = chat_span()
+        .str_attr("gen_ai.agent.name", "billing")
+        .span_id(vec![0x03; 8])
+        .parent(vec![0x01; 8]);
+    let mut src = source();
+    src.accept(
+        &request(&service("front-door"), "scope", &[triage, billing, root]),
+        NOW,
+    );
+    let items = src.poll(10).unwrap();
+    assert_eq!(items.len(), 3);
+    assert_eq!(
+        items[0].meta.agent_id.as_str(),
+        "agent://acme.example/triage"
+    );
+    assert_eq!(
+        items[1].meta.agent_id.as_str(),
+        "agent://acme.example/billing"
+    );
+    assert_eq!(
+        items[2].meta.agent_id.as_str(),
+        "agent://acme.example/front-door"
+    );
+}
+
+#[test]
+fn a_service_in_the_same_trace_does_not_lend_its_agent_to_another() {
+    // A trace id crosses services in traceparent. The front door names its
+    // agent; the billing service, called inside the same trace, names none and
+    // stays under its own service rather than under the front door's agent.
+    let front = chat_span()
+        .str_attr("gen_ai.agent.name", "triage")
+        .span_id(vec![0x02; 8]);
+    let billing = SpanBuilder::new("invocation")
+        .str_attr("gen_ai.operation.name", "invoke_agent")
+        .span_id(vec![0x05; 8])
+        .parent(vec![0x02; 8]);
+    let mut src = source();
+    src.accept(&request(&service("front-door"), "scope", &[front]), NOW);
+    src.accept(&request(&service("billing-svc"), "scope", &[billing]), NOW);
+    let items = src.poll(10).unwrap();
+    assert_eq!(items.len(), 2);
+    assert_eq!(
+        items[0].meta.agent_id.as_str(),
+        "agent://acme.example/triage"
+    );
+    assert_eq!(
+        items[1].meta.agent_id.as_str(),
+        "agent://acme.example/billing-svc"
+    );
+}

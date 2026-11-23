@@ -1,0 +1,36 @@
+# Weekly vulnerability scan of the dependency tree.
+#
+# ci.yml runs `scripts/audit.sh` on every push and pull request. That covers
+# what changes here, and nothing else: a new RustSec advisory against a crate in
+# Cargo.lock arrives without any push to this repository, and an audit that
+# nothing invokes at that moment reports nothing. This run is the half invoked
+# by the calendar. It calls the same script, so the ignore list and the reason
+# behind each entry stay in one place (.cargo/audit.toml), and it fails the run
+# on a finding, which GitHub mails to the owner.
+#
+# Public repository, standard runner: it costs nothing. `cargo audit` and
+# `cargo tree` read Cargo.lock and the metadata and compile nothing.
+name: vulnscan
+
+on:
+  schedule:
+    - cron: "37 5 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  cargo-audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: toolchain
+        run: rustup toolchain install stable --profile minimal
+      - name: cargo audit
+        run: |
+          cargo install cargo-audit --version 0.22.2 --locked --quiet
+          ./scripts/audit.sh

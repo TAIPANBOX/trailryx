@@ -258,10 +258,9 @@ fn a_loss_becomes_a_record() {
     // because it counts things that were about somebody.
     let detail = diagnostic(&event);
     assert!(detail.contains("unknown_operation\t1"), "{detail}");
-    // Version 2: version 1 treated an all-zero span id as a real correlation
-    // name, which manufactured causal edges out of the value OTLP defines as
-    // invalid. A record stamped 1 may carry an edge nobody named.
-    assert!(detail.contains("mapper_version\t2"), "{detail}");
+    // Version 3 since #80: a span that names no agent takes the one agent its
+    // trace names. Version 2 stopped treating an all-zero span id as a name.
+    assert!(detail.contains("mapper_version\t3"), "{detail}");
 
     // Reporting is not repeating: nothing new means no second record.
     assert!(src.anomaly_event(NOW).is_none());

@@ -74,5 +74,7 @@ pub use jsonl::{Class, Counter, Counters, JsonlSource, LineReport, Mode};
 pub use otlp::{Limits, Span, TraceRequest, Value, decode_trace_request};
 pub use otlpjson::{Decoded, ShapeReport, decode_traces_data};
 pub use protobuf::{Reader, Stats, WireError};
-pub use semconv::{MAPPER_VERSION, MapperConfig, Rejection, Report, map_span};
+pub use semconv::{
+    MAPPER_VERSION, MapperConfig, Rejection, Report, TRACE_AGENTS_REMEMBERED, TraceAgents, map_span,
+};
 pub use source::{OtlpSource, WireReport};
