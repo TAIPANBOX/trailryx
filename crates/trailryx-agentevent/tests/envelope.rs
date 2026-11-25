@@ -1741,6 +1741,50 @@ fn keyryxs_witness_findings_are_refused_by_name() {
 }
 
 // ---------------------------------------------------------------------------
+// keyryx custody's key changes: the operator kind, refused by name
+// ---------------------------------------------------------------------------
+
+/// A key change shaped after SPEC 6.2's keyryx bullet: custody's own synthetic
+/// subject, and `data` naming the key, its kid and its algorithm. Written from
+/// the specification, not copied from keyryx's output.
+fn custody_line(kind: &str, extra: &str) -> String {
+    format!(
+        r#"{{"schema":"taipanbox.dev/agent-event/v1.0","ts":"2026-11-25T09:14:02.000Z","source":"keyryx",
+            "type":"{kind}","severity":"info","agent_id":"agent://keyryx.internal/custody",
+            "data":{{"name":"wardryx-approval","kid":"_SVJp3yq5b6IfvEZBX_Tnm8C4XUKPW9jHkrpKpgaOa4","previous_kid":"","alg":"ES256"}}{extra}}}"#
+    )
+    .replace('\n', "")
+}
+
+/// Refused by type, under custody's own domain and the operator's, with a run
+/// and without one: a rotation is somebody acting on the stack, not a decision
+/// an agent took, and the module doc names both types as refused.
+#[test]
+fn keyryx_custodys_key_changes_are_refused_by_name() {
+    for kind in ["key_rotated", "key_revoked"] {
+        for (domain, extra) in [
+            ("keyryx.internal", ""),
+            ("keyryx.internal", r#","run_id":"run-invented-1""#),
+            (OURS, ""),
+            (OURS, r#","run_id":"run-invented-1""#),
+        ] {
+            match map(domain, &custody_line(kind, extra)) {
+                Err(Rejection::UnknownType) => {}
+                Err(other) => {
+                    panic!("{kind} under {domain} is refused for {other:?}, expected UnknownType")
+                }
+                Ok(unit) => panic!(
+                    "{kind} mapped to {:?}. An operator rotating a key is not a \
+                     decision an agent took, and the module doc names it as \
+                     refused; if that changed, the doc changes with it.",
+                    unit.meta.event_type
+                ),
+            }
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
 // SPEC 5.2: the proof is typed metadata, and survives an erasure
 // ---------------------------------------------------------------------------
 

@@ -94,7 +94,8 @@
 //! `witness_stream_rewritten`, `witness_stream_truncated`,
 //! `witness_chain_restarted`, `witness_checkpoint_invalid`,
 //! `witness_checkpoint_unsigned`, `witness_root_missing`,
-//! `witness_root_equivocated` and `agent_assertion_refused`.
+//! `witness_root_equivocated`, `key_rotated`, `key_revoked` and
+//! `agent_assertion_refused`.
 //!
 //! They are seven kinds and the sentence that used to cover them named one.
 //! Most are a finding or an observation about infrastructure rather than a
@@ -248,6 +249,16 @@
 //! `keyryx.ndjson`, and what the witness vouches for reaches this store by
 //! another door: the signed attestations a pack carries for the root they name
 //! (invariant 46).
+//!
+//! keyryx's custody writes the other two keyryx types, `key_rotated` and
+//! `key_revoked`, into a stream of its own, `keyryx-custody.ndjson`, under
+//! `agent://keyryx.internal/custody`. They are the operator kind, the kind of
+//! `policy_updated`: somebody on the machine rotated or revoked a signing key
+//! through custody's admin socket, a decision about the stack and not one an
+//! agent took, filed under a synthetic identity naming custody rather than an
+//! agent. They are refused by name for that reason. Neither is lost: both stay
+//! on the bus, with their own hash chain, where the notifier mails about them,
+//! and custody's use log holds each change.
 //!
 //! Both producers stamp `taipanbox.dev/agent-event/v1.0`, which [`SCHEMAS`] has
 //! listed since reading 114. A line from either is therefore read, its subject
