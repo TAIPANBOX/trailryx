@@ -64,7 +64,11 @@ fn a_writer_killed_three_times_loses_no_acked_record() {
 #[test]
 fn a_custodian_killed_twice_undoes_no_destruction_and_loses_no_wrap() {
     let (code, out) = kill_run(&["custody", "2"]);
-    assert_eq!(code, Some(0), "the custody run reported a violation:\n{out}");
+    assert_eq!(
+        code,
+        Some(0),
+        "the custody run reported a violation:\n{out}"
+    );
     let rounds = rounds(&out);
     assert_eq!(rounds.len(), 2, "two rounds were asked for:\n{out}");
     assert!(

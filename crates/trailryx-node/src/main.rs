@@ -865,8 +865,8 @@ mod tests {
         );
         assert_eq!(queries, [ok(), ok(), ok()]);
         assert_eq!(packed, ok(), "the pack was not written");
-        let report = trailryx_verify::verify(&bytes.expect("the pack is on disk"))
-            .expect("the pack parses");
+        let report =
+            trailryx_verify::verify(&bytes.expect("the pack is on disk")).expect("the pack parses");
         assert!(report.verified(), "the pack read writes does not verify");
         assert_eq!(
             usize::try_from(report.records_checked).ok(),
@@ -946,8 +946,18 @@ mod tests {
             code(events(args(&["--data", &data]))),
             code(events(args(&["--file", &missing, "--data", &data]))),
             code(events(args(&["--file", &missing, "--shard", "70000"]))),
-            code(events(args(&["--file", &missing, "--tenant", "Not A Tenant"]))),
-            code(events(args(&["--file", &missing, "--seal-records", "many"]))),
+            code(events(args(&[
+                "--file",
+                &missing,
+                "--tenant",
+                "Not A Tenant",
+            ]))),
+            code(events(args(&[
+                "--file",
+                &missing,
+                "--seal-records",
+                "many",
+            ]))),
             code(events(args(&["--file"]))),
             code(read(args(&["--shard", "x"]))),
             code(read(args(&["stray"]))),
@@ -1007,7 +1017,10 @@ mod tests {
         drop(taken);
         let _ = std::fs::remove_dir_all(&dir);
 
-        assert!(opened, "the plane was not opened before the port was offered");
+        assert!(
+            opened,
+            "the plane was not opened before the port was offered"
+        );
         assert_eq!(open_to_all, refused());
         assert_eq!(unreadable, refused());
         assert_eq!(blank, refused());

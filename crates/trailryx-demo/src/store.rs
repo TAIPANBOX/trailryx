@@ -141,9 +141,8 @@ fn azure(var: &dyn Fn(&str) -> Option<String>) -> Result<Chosen, String> {
     let endpoint = need(var, "TRAILRYX_AZURE_ENDPOINT")?;
     let container = need(var, "TRAILRYX_AZURE_CONTAINER")?;
     let account = need(var, "TRAILRYX_AZURE_ACCOUNT")?;
-    let credentials =
-        trailryx_azure::Credentials::new(account, &need(var, "TRAILRYX_AZURE_KEY")?)
-            .ok_or("TRAILRYX_AZURE_KEY is not base64")?;
+    let credentials = trailryx_azure::Credentials::new(account, &need(var, "TRAILRYX_AZURE_KEY")?)
+        .ok_or("TRAILRYX_AZURE_KEY is not base64")?;
     let store = trailryx_azure::Azure::new(&endpoint, container.clone(), credentials)
         .map_err(|e| e.to_string())?;
     Ok(Chosen {

@@ -126,7 +126,11 @@ fn the_shared_secret_and_the_agent_token_door_are_one_or_the_other() {
 #[test]
 fn an_agent_token_door_missing_a_flag_does_not_start() {
     let (code, _stdout, stderr) = run(&["--agent-token-issuer", "https://issuer.example"]);
-    assert_eq!(code, Some(2), "a door with one of four flags started: {stderr}");
+    assert_eq!(
+        code,
+        Some(2),
+        "a door with one of four flags started: {stderr}"
+    );
 }
 
 #[test]
@@ -152,9 +156,6 @@ fn a_port_somebody_else_holds_is_refused_with_a_credential_too() {
     let secret = dir.file("secret", "a-fleet-secret\n");
     let taken = std::net::TcpListener::bind("127.0.0.1:0").expect("a loopback port");
     let port = taken.local_addr().expect("its address").to_string();
-    refused(
-        &["--bind", &port, "--token-file", &secret],
-        "cannot bind: ",
-    );
+    refused(&["--bind", &port, "--token-file", &secret], "cannot bind: ");
     drop(taken);
 }

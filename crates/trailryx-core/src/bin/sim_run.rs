@@ -381,9 +381,24 @@ mod tests {
     #[test]
     fn every_flag_lands_on_the_field_it_names() {
         let o = options(&args(&[
-            "--seed", "7", "--steps", "200", "--shards", "3", "--sync-every", "4",
-            "--crash-ppm", "12000", "--crash-at", "50", "--sweep", "5", "--trace",
-            "--corpus-row", "--corpus", "x.tsv",
+            "--seed",
+            "7",
+            "--steps",
+            "200",
+            "--shards",
+            "3",
+            "--sync-every",
+            "4",
+            "--crash-ppm",
+            "12000",
+            "--crash-at",
+            "50",
+            "--sweep",
+            "5",
+            "--trace",
+            "--corpus-row",
+            "--corpus",
+            "x.tsv",
         ]))
         .expect("every flag is known");
         assert_eq!(o.cfg.seed, 7);
@@ -440,7 +455,13 @@ mod tests {
         assert_eq!(row, "99\t1500\t2\t2\t20000\thostile\tfd3383475e495889\t3");
         let (back, digest, violations) = parse_row(&row).expect("its own row parses");
         assert_eq!(
-            (back.seed, back.steps, back.shards, back.sync_every, back.crash_ppm),
+            (
+                back.seed,
+                back.steps,
+                back.shards,
+                back.sync_every,
+                back.crash_ppm
+            ),
             (99, 1_500, 2, 2, 20_000)
         );
         assert_eq!(back.io_faults, IoFaults::HOSTILE);
@@ -459,14 +480,29 @@ mod tests {
         let cases = [
             ("1\t400\t2\t8\t0\tplain\tabc", "7 fields, expected 8"),
             ("x\t400\t2\t8\t0\tplain\tabc\t0", "the seed is not a number"),
-            ("1\t400\t70000\t8\t0\tplain\tabc\t0", "the shard count does not fit a u16"),
-            ("1\t400\t2\t8\t5000000000\tplain\tabc\t0", "crash-ppm does not fit a u32"),
-            ("1\t400\t2\t8\t0\tgentle\tabc\t0", "unknown fault set \"gentle\""),
-            ("1\t400\t2\t8\t0\tplain\tabc\tmany", "the violation count is not a number"),
+            (
+                "1\t400\t70000\t8\t0\tplain\tabc\t0",
+                "the shard count does not fit a u16",
+            ),
+            (
+                "1\t400\t2\t8\t5000000000\tplain\tabc\t0",
+                "crash-ppm does not fit a u32",
+            ),
+            (
+                "1\t400\t2\t8\t0\tgentle\tabc\t0",
+                "unknown fault set \"gentle\"",
+            ),
+            (
+                "1\t400\t2\t8\t0\tplain\tabc\tmany",
+                "the violation count is not a number",
+            ),
         ];
         for (row, why) in cases {
             let refused = parse_row(row).err().unwrap_or_default();
-            assert!(refused.contains(why), "{row:?} gave {refused:?}, not {why:?}");
+            assert!(
+                refused.contains(why),
+                "{row:?} gave {refused:?}, not {why:?}"
+            );
         }
     }
 
