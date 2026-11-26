@@ -73,7 +73,15 @@ ci_only=$(grep -cE '^\s+run: \./scripts/gates-have-teeth\.sh' "$ci")
 # cache, protoc), and it has to look at the FIRST line: the advisories step installs
 # cargo-audit before calling the same script the hook calls. An environment variable
 # in front is still a check, which is how the fuzzer asks CI for ten times the volume.
+#
+# The `coverage` job is left out of the count, by name. It measures the suite the
+# other checks already run, under an instrumented build, and holds the total against
+# .coverage-floor; the hook cannot run it (Rust is never built on a laptop here, and
+# the instrumented build is the expensive one), so it is CI-only by design, like the
+# teeth run above, and counting it would make the hook look three checks short.
 ci_count=$(awk '
+  /^  [a-z0-9_-]+:$/ { job = $1; inrun = 0; next }
+  job == "coverage:" { next }
   /^      - name:/ { inrun = 0; next }
   /^        run:/ {
     rest = $0
