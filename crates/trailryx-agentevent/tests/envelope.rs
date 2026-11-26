@@ -2815,3 +2815,148 @@ fn a_call_priced_from_the_fallback_rates_is_a_budget_line_with_no_verdict() {
     let unit = map(OURS, &no_severity).expect("it maps");
     assert_eq!(unit.meta.severity, Severity::Notice);
 }
+
+/// The producer's five bands, each onto the record's own, and a band nobody
+/// defined falls back to the registry's rather than being guessed at.
+#[test]
+fn each_severity_band_lands_on_its_own_level_and_an_unknown_one_falls_back() {
+    let with = |band: &str| {
+        let raw = line("budget_exhausted", "").replace(
+            r#""severity":"critical""#,
+            &format!(r#""severity":"{band}""#),
+        );
+        map(OURS, &raw).map(|unit| unit.meta.severity)
+    };
+    assert_eq!(with("info"), Ok(Severity::Info));
+    assert_eq!(with("low"), Ok(Severity::Notice));
+    assert_eq!(with("medium"), Ok(Severity::Warning));
+    assert_eq!(with("high"), Ok(Severity::Error));
+    assert_eq!(with("critical"), Ok(Severity::Critical));
+
+    let unbanded = map(
+        OURS,
+        &line("budget_exhausted", "").replace(r#""severity":"critical","#, ""),
+    )
+    .map(|unit| unit.meta.severity);
+    assert!(
+        unbanded.is_ok(),
+        "a line with no severity is still a record"
+    );
+    assert_eq!(
+        with("urgent"),
+        unbanded,
+        "a band the schema does not define is read as no band"
+    );
+    assert_eq!(with("CRITICAL"), unbanded, "bands are compared exactly");
+}
+
+#[test]
+fn every_rejection_says_why_in_words_no_other_rejection_uses() {
+    let all = [
+        Rejection::NotAnEnvelope,
+        Rejection::UnknownSchema,
+        Rejection::NoAgent,
+        Rejection::ForeignTrustDomain,
+        Rejection::ClaimedSubject,
+        Rejection::UnknownType,
+        Rejection::NoRunId,
+        Rejection::BadTime,
+    ];
+    let said: std::collections::BTreeSet<String> = all.iter().map(|r| r.to_string()).collect();
+    assert_eq!(
+        said.len(),
+        all.len(),
+        "two rejections read the same: {said:?}"
+    );
+    assert!(said.iter().all(|s| !s.is_empty()));
+}
+
+#[test]
+fn a_report_counts_each_rejection_in_its_own_slot_and_never_wraps() {
+    use trailryx_agentevent::Report;
+
+    let mut report = Report::default();
+    for rejection in [
+        Rejection::NotAnEnvelope,
+        Rejection::UnknownSchema,
+        Rejection::UnknownSchema,
+        Rejection::NoAgent,
+        Rejection::ForeignTrustDomain,
+        Rejection::ClaimedSubject,
+        Rejection::UnknownType,
+        Rejection::NoRunId,
+        Rejection::BadTime,
+    ] {
+        report.note(rejection);
+    }
+    assert_eq!(
+        report,
+        Report {
+            mapped: 0,
+            not_an_envelope: 1,
+            unknown_schema: 2,
+            no_agent: 1,
+            foreign_trust_domain: 1,
+            claimed_subject: 1,
+            unknown_type: 1,
+            no_run_id: 1,
+            bad_time: 1,
+        }
+    );
+
+    let mut full = Report {
+        bad_time: u32::MAX,
+        ..Report::default()
+    };
+    full.note(Rejection::BadTime);
+    assert_eq!(
+        full.bad_time,
+        u32::MAX,
+        "a counter at its ceiling stays there"
+    );
+    full.note(Rejection::NoRunId);
+    assert_eq!(
+        full.lost(),
+        u32::MAX,
+        "the sum saturates rather than wrapping"
+    );
+}
+
+#[test]
+fn lost_sums_the_lines_that_produced_nothing_and_not_the_ones_that_mapped() {
+    use trailryx_agentevent::Report;
+
+    let report = Report {
+        mapped: 100,
+        not_an_envelope: 1,
+        unknown_schema: 2,
+        no_agent: 3,
+        foreign_trust_domain: 4,
+        unknown_type: 5,
+        no_run_id: 6,
+        bad_time: 7,
+        ..Report::default()
+    };
+    assert_eq!(report.lost(), 28);
+}
+
+#[test]
+fn a_trust_domain_that_cannot_form_an_agent_identifier_is_refused_at_start() {
+    use trailryx_agentevent::ConfigError;
+
+    let tenant = TenantId::parse("acme").expect("a constant tenant parses");
+    for bad in ["", "two words"] {
+        assert_eq!(
+            EnvelopeConfig::new(tenant.clone(), bad).err(),
+            Some(ConfigError::BadTrustDomain),
+            "{bad:?} was accepted as a trust domain"
+        );
+    }
+    assert_eq!(
+        ConfigError::BadTrustDomain.to_string(),
+        "trust domain does not form an agent identifier"
+    );
+    let good = config(OURS);
+    assert_eq!(good.trust_domain(), OURS);
+    assert_eq!(good.tenant().as_str(), "acme");
+}

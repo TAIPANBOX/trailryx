@@ -468,7 +468,11 @@ fn a_manifest_name_is_this_shards_and_nothing_that_merely_resembles_one() {
         "s00-000001.mf",
         "",
     ] {
-        assert_eq!(segment_of(shard, name), None, "{name:?} was read as a manifest");
+        assert_eq!(
+            segment_of(shard, name),
+            None,
+            "{name:?} was read as a manifest"
+        );
     }
 }
 
@@ -494,7 +498,9 @@ fn a_file_named_as_a_manifest_that_is_not_one_is_refused_by_the_plane_and_the_re
 
     let listed = listed.expect_err("garbage under a manifest's name was listed");
     assert!(
-        listed.to_string().contains("this is not a segment manifest"),
+        listed
+            .to_string()
+            .contains("this is not a segment manifest"),
         "{listed}"
     );
     assert!(read.is_err(), "the reader answered from a corrupt manifest");
@@ -535,7 +541,10 @@ fn a_manifest_moved_under_another_segments_number_is_refused_rather_than_adopted
 #[test]
 fn every_plane_error_says_what_happened() {
     use trailryx_node::PlaneError;
-    assert_eq!(PlaneError::Io("disk full".into()).to_string(), "io: disk full");
+    assert_eq!(
+        PlaneError::Io("disk full".into()).to_string(),
+        "io: disk full"
+    );
     assert_eq!(
         PlaneError::Refused("not this directory".into()).to_string(),
         "not this directory"

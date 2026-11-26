@@ -169,3 +169,58 @@ pub fn seal_segment<I: Io>(
 pub fn provable_dimensions() -> &'static [Dimension] {
     Dimension::ALL
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn hash(first: u8) -> Hash {
+        let mut bytes = [0u8; 48];
+        bytes[0] = first;
+        Hash(bytes)
+    }
+
+    #[test]
+    fn every_refusal_to_seal_says_which_one_it_is() {
+        let chain = StoreError::ChainDoesNotStartThere {
+            declared: hash(0xaa),
+            actual: hash(0xbb),
+        }
+        .to_string();
+        assert_eq!(
+            chain,
+            "the segment declares its chain begins at aa00000000000000 and its first record \
+             continues from bb00000000000000"
+        );
+        assert_eq!(
+            StoreError::DurabilityViolation {
+                promised: 9,
+                recovered: 7
+            }
+            .to_string(),
+            "promised 9 records, recovered 7"
+        );
+        assert_eq!(
+            StoreError::JournalSuspect(StoppedBecause::ChainBroken { at_seq: 3 }).to_string(),
+            "journal is suspect: ChainBroken { at_seq: 3 }"
+        );
+        assert_eq!(
+            StoreError::from(SealError::MixedAlgorithms).to_string(),
+            "seal: MixedAlgorithms"
+        );
+        assert_eq!(
+            StoreError::from(SealError::MixedAlgorithms),
+            StoreError::Seal(SealError::MixedAlgorithms),
+            "a seal error converts into the store's own"
+        );
+    }
+
+    #[test]
+    fn every_provable_dimension_is_one_the_index_builds() {
+        assert_eq!(provable_dimensions(), Dimension::ALL);
+        assert!(
+            provable_dimensions().contains(&Dimension::RunId),
+            "a run is a provable dimension, which invariant 34 rests on"
+        );
+    }
+}

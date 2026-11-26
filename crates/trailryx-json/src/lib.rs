@@ -423,10 +423,7 @@ mod tests {
             "line 3 byte 4: nesting depth",
             "a limit names the bound it hit"
         );
-        assert_eq!(
-            encoding.to_string(),
-            "line 3 byte 4: UTF-16 little-endian"
-        );
+        assert_eq!(encoding.to_string(), "line 3 byte 4: UTF-16 little-endian");
     }
 
     #[test]
@@ -434,8 +431,7 @@ mod tests {
         let err = validate(b"[1,]", Limits::default(), 9).expect_err("a trailing comma");
         assert_eq!(err.line, 9, "the line it was told is the line it reports");
         assert!(
-            err.to_string()
-                .ends_with(": a comma where a value belongs"),
+            err.to_string().ends_with(": a comma where a value belongs"),
             "{err}"
         );
         let boxed: Box<dyn std::error::Error> = Box::new(err);

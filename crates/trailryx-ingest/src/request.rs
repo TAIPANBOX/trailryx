@@ -1281,3 +1281,166 @@ mod tests {
         assert_eq!(trim_ows(b"\x0ba"), b"\x0ba");
     }
 }
+
+/// The small parsers under `parse_head`, each fed what a hostile client would send.
+#[cfg(test)]
+mod hostile_pieces {
+    use super::*;
+
+    fn why<T: std::fmt::Debug>(result: Result<T, Reject>) -> &'static str {
+        result.expect_err("these bytes must be refused").why
+    }
+
+    #[test]
+    fn a_host_is_a_host_and_a_port_is_digits_or_nothing() {
+        for ok in [
+            "collector.example",
+            "collector.example:4318",
+            "collector.example:",
+            "[::1]",
+            "[::1]:4318",
+            "[]",
+            "10.0.0.1:80",
+        ] {
+            assert_eq!(validate_host(ok.as_bytes()), Ok(()), "{ok:?} was refused");
+        }
+        let refused = [
+            ("", "an empty Host field"),
+            ("user@collector.example", "userinfo in a Host field"),
+            ("collector example", "whitespace in a Host field"),
+            ("collector\t.example", "whitespace in a Host field"),
+            ("[::1", "an unterminated IPv6 literal in a Host field"),
+            ("[::1]4318", "a malformed port in a Host field"),
+            ("[::1]:43a8", "a malformed port in a Host field"),
+            ("collector.example:43a8", "a malformed port in a Host field"),
+            ("collector.example:-1", "a malformed port in a Host field"),
+            (":4318", "a Host field with no host"),
+        ];
+        for (value, expected) in refused {
+            assert_eq!(why(validate_host(value.as_bytes())), expected, "{value:?}");
+        }
+    }
+
+    #[test]
+    fn a_percent_escape_is_two_hex_digits_and_never_a_control_byte() {
+        assert_eq!(percent_decode(b"/v1%2Ftraces"), Ok(b"/v1/traces".to_vec()));
+        assert_eq!(percent_decode(b"%7e%7E"), Ok(b"~~".to_vec()));
+        assert_eq!(percent_decode(b"%C3%A9"), Ok(vec![0xc3, 0xa9]));
+        assert_eq!(percent_decode(b""), Ok(Vec::new()));
+        let truncated: [&[u8]; 6] = [b"%", b"%2", b"/a%", b"%zz", b"%2g", b"%g2"];
+        for truncated in truncated {
+            assert_eq!(
+                why(percent_decode(truncated)),
+                "a truncated percent-escape",
+                "{truncated:?}"
+            );
+        }
+        let control: [&[u8]; 6] = [b"%00", b"%01", b"%1f", b"%1F", b"%7f", b"%0a"];
+        for control in control {
+            assert_eq!(
+                why(percent_decode(control)),
+                "a percent-escaped control byte in the request target",
+                "{control:?}"
+            );
+        }
+        assert_eq!(
+            percent_decode(b"%20"),
+            Ok(b" ".to_vec()),
+            "a space is not a control byte"
+        );
+    }
+
+    #[test]
+    fn a_target_is_origin_form_or_absolute_form_and_nothing_else() {
+        let parsed = |t: &str| parse_target(t.as_bytes());
+        assert_eq!(
+            parsed("/v1/traces?x=1"),
+            Ok(("/v1/traces".to_owned(), "/v1/traces".to_owned()))
+        );
+        assert_eq!(
+            parsed("/v1%2Ftraces"),
+            Ok(("/v1/traces".to_owned(), "/v1%2Ftraces".to_owned())),
+            "decoded for routing, kept as sent for what a proof is signed over"
+        );
+        assert_eq!(
+            parsed("http://collector.example/v1/traces"),
+            Ok(("/v1/traces".to_owned(), "/v1/traces".to_owned()))
+        );
+        assert_eq!(
+            parsed("HTTPS://collector.example"),
+            Ok(("/".to_owned(), "/".to_owned())),
+            "an absolute target with no path is the root"
+        );
+        for shape in ["collector.example/v1", "*", "http://", "ftp://h/v1"] {
+            assert_eq!(
+                why(parsed(shape)),
+                "a request target that is neither origin-form nor absolute-form",
+                "{shape:?}"
+            );
+        }
+        assert_eq!(
+            why(parse_target("/caf\u{e9}".as_bytes())),
+            "a control byte or non-ASCII byte in the request target"
+        );
+        assert_eq!(
+            why(parse_target(b"/a\x7fb")),
+            "a control byte or non-ASCII byte in the request target"
+        );
+        assert_eq!(
+            why(parsed("/%C3%28")),
+            "the request target is not valid UTF-8"
+        );
+    }
+
+    #[test]
+    fn a_request_line_is_three_fields_with_a_target_in_the_middle() {
+        assert_eq!(
+            split_request_line(b"POST /v1/traces HTTP/1.1"),
+            Ok((&b"POST"[..], &b"/v1/traces"[..], &b"HTTP/1.1"[..]))
+        );
+        assert_eq!(why(split_request_line(b"POST")), "no request target");
+        assert_eq!(why(split_request_line(b"POST /")), "no HTTP version");
+        assert_eq!(
+            why(split_request_line(b"POST / HTTP/1.1 extra")),
+            "more than three fields in the request line"
+        );
+        assert_eq!(
+            why(split_request_line(b"POST  HTTP/1.1")),
+            "an empty request target"
+        );
+    }
+
+    #[test]
+    fn a_length_is_plain_decimal_and_fits_sixty_four_bits_or_is_too_large() {
+        assert_eq!(parse_content_length(b"0"), Ok(0));
+        assert_eq!(parse_content_length(b"00012"), Ok(12));
+        assert_eq!(parse_content_length(b"18446744073709551615"), Ok(u64::MAX));
+        let overflow = parse_content_length(b"18446744073709551616").expect_err("one past");
+        assert_eq!(overflow.status, Status::PayloadTooLarge);
+        let bad: [&[u8]; 7] = [b"", b"+1", b"-1", b"0x10", b" 1", b"1 ", b"123456789012345678901"];
+        for bad in bad {
+            let refused = parse_content_length(bad).expect_err("not a plain number");
+            assert_eq!(refused.status, Status::BadRequest, "{bad:?}");
+        }
+    }
+
+    #[test]
+    fn a_method_is_spelled_as_it_was_sent_and_other_is_spelled_as_nothing() {
+        assert_eq!(Method::Post.as_str(), "POST");
+        assert_eq!(Method::Get.as_str(), "GET");
+        assert_eq!(Method::Other.as_str(), "");
+    }
+
+    #[test]
+    fn a_head_with_no_length_reads_no_body() {
+        let mut parsed = parse_head(
+            b"POST /v1/traces HTTP/1.1\r\nHost: h\r\n\r\n",
+            &Config::default(),
+        )
+        .expect("a minimal head");
+        assert_eq!(parsed.declared_length, None);
+        assert_eq!(parsed.body_length(), 0);
+        parsed.declared_length = Some(42);
+        assert_eq!(parsed.body_length(), 42);
+    }
+}
