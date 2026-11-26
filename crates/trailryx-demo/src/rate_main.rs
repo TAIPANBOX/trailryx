@@ -245,3 +245,39 @@ fn fail(message: &str) -> ! {
     eprintln!("trailryx-rate: {message}");
     std::process::exit(2);
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_run_with_no_time_left_stops_at_its_first_check_and_removes_what_it_wrote() {
+        let dir = std::env::temp_dir().join(format!("trailryx-rate-test-{}", std::process::id()));
+        let run = one(1, 0.0, &dir).expect("a run on a scratch directory");
+        let left_behind = dir.exists();
+        let _ = std::fs::remove_dir_all(&dir);
+
+        // The clock is read only every 64th append, so a run already out of time
+        // stops at the 64th record and not before.
+        assert_eq!(run.records, 64);
+        assert!(run.seconds >= 0.0);
+        assert!(
+            run.bytes >= 64,
+            "the journal held {} bytes for 64 records",
+            run.bytes
+        );
+        assert!(
+            !left_behind,
+            "the run left {} behind, and it says every path it writes is removed",
+            dir.display()
+        );
+    }
+
+    #[test]
+    fn records_are_numbered_by_their_argument() {
+        let a = rec(7);
+        assert_eq!(a.id, RecordId(7));
+        assert_eq!(a.run_id.as_str(), "run-7");
+        assert_eq!(a.recorded_at, Timestamp(1_007));
+    }
+}
