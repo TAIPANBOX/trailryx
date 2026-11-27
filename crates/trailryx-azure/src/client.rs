@@ -475,7 +475,10 @@ mod tests {
             ("a&amp;quot;b", "a&quot;b"),
             ("a&amp;apos;b", "a&apos;b"),
             ("a&amp;amp;b", "a&amp;b"),
-            ("runs/a&amp;b/&lt;seg&gt;&quot;1&quot;&apos;.trx", r#"runs/a&b/<seg>"1"'.trx"#),
+            (
+                "runs/a&amp;b/&lt;seg&gt;&quot;1&quot;&apos;.trx",
+                r#"runs/a&b/<seg>"1"'.trx"#,
+            ),
             ("a&b&amp;c", "a&b&c"),
             ("a&", "a&"),
             ("&#60;", "&#60;"),
