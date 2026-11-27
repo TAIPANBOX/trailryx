@@ -721,7 +721,10 @@ mod decoding {
         assert!(parts.iter().any(|p| p.bytes.is_empty()));
         let decoded = decode_parts(&encode_parts(&parts)).expect("its own encoding reads back");
         assert_eq!(shape(&decoded), shape(&parts));
-        assert_eq!(decode_parts(&encode_parts(&[])).map(|p| p.len()).ok(), Some(0));
+        assert_eq!(
+            decode_parts(&encode_parts(&[])).map(|p| p.len()).ok(),
+            Some(0)
+        );
     }
 
     #[test]
@@ -742,7 +745,10 @@ mod decoding {
         let mut version_two = encode_parts(&parts());
         version_two[4] = 0x02;
         assert_eq!(malformed(decode_parts(&version_two)), "not a payload blob");
-        assert_eq!(malformed(decode_parts(b"TRXA\x01\0\0\0\0")), "not a payload blob");
+        assert_eq!(
+            malformed(decode_parts(b"TRXA\x01\0\0\0\0")),
+            "not a payload blob"
+        );
 
         let mut unknown = b"TRXB\x01\x01\0\0\0".to_vec();
         unknown.push(7);
@@ -785,10 +791,7 @@ mod decoding {
             decode_manifest(&two).ok(),
             Some(vec![entry(0x11), entry(0x22)])
         );
-        assert_eq!(
-            decode_manifest(b"TRXE\x01\0\0\0\0").ok(),
-            Some(Vec::new())
-        );
+        assert_eq!(decode_manifest(b"TRXE\x01\0\0\0\0").ok(), Some(Vec::new()));
 
         let mut long = two.clone();
         long.push(0);
@@ -821,8 +824,7 @@ mod decoding {
             VaultError::ManifestMismatch,
             VaultError::Malformed("truncated"),
         ];
-        let said: std::collections::BTreeSet<String> =
-            all.iter().map(|e| e.to_string()).collect();
+        let said: std::collections::BTreeSet<String> = all.iter().map(|e| e.to_string()).collect();
         assert_eq!(said.len(), all.len(), "{said:?}");
         assert_eq!(
             VaultError::Unvalidated("the cipher").to_string(),

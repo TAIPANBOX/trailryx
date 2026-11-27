@@ -423,7 +423,10 @@ mod tests {
             ),
             ("generated_at=42", "no tenant"),
             ("tenant=acme", "no generated_at"),
-            ("tenant=Not A Tenant\ngenerated_at=1", "is not an identifier"),
+            (
+                "tenant=Not A Tenant\ngenerated_at=1",
+                "is not an identifier",
+            ),
             ("", "no tenant"),
         ];
         for (text, why) in refused {
@@ -434,8 +437,8 @@ mod tests {
 
     #[test]
     fn a_signed_entry_is_an_es384_signature_of_the_right_shape_or_it_is_refused() {
-        let ok = parse_signed(ROOT, &signed_text(&point(), &[0x22; 96]))
-            .expect("a well formed entry");
+        let ok =
+            parse_signed(ROOT, &signed_text(&point(), &[0x22; 96])).expect("a well formed entry");
         assert_eq!(ok.store_root, ROOT);
         assert_eq!(ok.generated_at, Timestamp(7));
         assert_eq!(ok.signature.algorithm, SigAlg::Es384);

@@ -1417,7 +1417,15 @@ mod hostile_pieces {
         assert_eq!(parse_content_length(b"18446744073709551615"), Ok(u64::MAX));
         let overflow = parse_content_length(b"18446744073709551616").expect_err("one past");
         assert_eq!(overflow.status, Status::PayloadTooLarge);
-        let bad: [&[u8]; 7] = [b"", b"+1", b"-1", b"0x10", b" 1", b"1 ", b"123456789012345678901"];
+        let bad: [&[u8]; 7] = [
+            b"",
+            b"+1",
+            b"-1",
+            b"0x10",
+            b" 1",
+            b"1 ",
+            b"123456789012345678901",
+        ];
         for bad in bad {
             let refused = parse_content_length(bad).expect_err("not a plain number");
             assert_eq!(refused.status, Status::BadRequest, "{bad:?}");
