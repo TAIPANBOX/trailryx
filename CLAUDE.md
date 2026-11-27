@@ -232,4 +232,4 @@ Total test coverage measured in CI may not fall below the number in `.coverage-f
 
 ## Mutation testing
 
-A weekly run (`.github/workflows/mutation.yml`, Sundays, also by hand with `workflow_dispatch`) breaks the product code one fault at a time with cargo-mutants 27.1.0, split into 4 shards with a time budget each, and puts the count of caught and missed mutants on the run page. Measured, not gated: no score is required yet.
+A weekly run (`.github/workflows/mutation.yml`, Sundays, also by hand with `workflow_dispatch`) breaks the product code one fault at a time with cargo-mutants 27.1.0, split into 8 shards with a time budget each, and puts the count of caught and missed mutants on the run page. Measured, not gated: no score is required yet.
