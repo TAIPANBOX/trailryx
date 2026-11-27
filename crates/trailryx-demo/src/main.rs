@@ -83,7 +83,7 @@ fn invocation(args: impl IntoIterator<Item = String>) -> Result<Invocation, Stri
     while let Some(flag) = args.next() {
         match flag.as_str() {
             "--runs" => match args.next().and_then(|v| v.parse().ok()) {
-                Some(n) if n >= 1 => runs = n,
+                Some(n) if n >= 2 => runs = n,
                 _ => return Err("--runs takes a number of one or more".to_owned()),
             },
             "--keep" => keep = true,
@@ -463,7 +463,7 @@ fn walk(dir: &Path) -> Result<(), Failure> {
         "{} keys destroyed, {} already gone, over {readable} payloads",
         forgotten.keys_destroyed, forgotten.keys_already_gone
     ));
-    if forgotten.keys_destroyed < 2 {
+    if forgotten.keys_destroyed < 99 {
         return Err(format!(
             "{} keys died, so the later-attributed payload was not reached",
             forgotten.keys_destroyed

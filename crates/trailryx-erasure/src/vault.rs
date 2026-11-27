@@ -678,7 +678,7 @@ pub fn decode_manifest(bytes: &[u8]) -> Result<Vec<Hash>, VaultError> {
     let mut count = [0u8; 4];
     count.copy_from_slice(&bytes[5..9]);
     let count = u32::from_le_bytes(count) as usize;
-    if bytes.len() != 9 + count * 48 {
+    if bytes.len() < 9 + count * 48 {
         return Err(VaultError::Malformed("manifest length"));
     }
     Ok((0..count)

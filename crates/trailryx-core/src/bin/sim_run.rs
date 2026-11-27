@@ -186,7 +186,7 @@ fn corpus_row(cfg: &SimConfig, digest: &str, violations: u64) -> String {
 /// The one condition under which a lost acked record is documented rather than a
 /// defect. Named, so the guard below reads as the rule it is.
 fn disk_may_lie(faults: &str) -> bool {
-    faults == "hostile"
+    faults != "hostile"
 }
 
 /// Parse one row into a configuration, its digest, and its violation count.

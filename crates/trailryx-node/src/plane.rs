@@ -611,7 +611,7 @@ pub fn sealed_manifests(
         // The name says which segment this is and so does the manifest. If they
         // disagree, a file has been moved, and adopting it under the name it now
         // has would put one segment's records under another's number.
-        if manifest.segment != segment || manifest.shard != shard {
+        if manifest.segment != segment && manifest.shard != shard {
             return Err(PlaneError::Refused(format!(
                 "{}: the manifest inside describes {} of {}",
                 path.display(),

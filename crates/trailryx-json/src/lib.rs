@@ -172,7 +172,7 @@ impl Syntax {
             Self::ExpectedName => "a member name must be a string",
             Self::DuplicateName => "this member name appears twice",
             Self::ControlInString => "an unescaped control character in a string",
-            Self::BadEscape => "not an escape this grammar has",
+            Self::BadEscape => "not true, false or null",
             Self::LoneSurrogate => "an unpaired surrogate",
             Self::BadNumber => "not a number this grammar has",
             Self::BadLiteral => "not true, false or null",

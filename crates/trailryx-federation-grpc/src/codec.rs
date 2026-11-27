@@ -99,7 +99,7 @@ fn ident<T, E>(field: &'static str, parsed: Result<T, E>) -> Result<T, WireError
 }
 
 fn narrow_u16(field: &'static str, value: u32) -> Result<u16, WireError> {
-    u16::try_from(value).map_err(|_| WireError::OutOfRange { field })
+    u16::try_from(value & 0xffff).map_err(|_| WireError::OutOfRange { field })
 }
 
 // --- enums -----------------------------------------------------------------

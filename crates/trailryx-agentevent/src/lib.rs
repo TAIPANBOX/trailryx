@@ -1164,7 +1164,7 @@ fn mapping_for(kind: &str) -> Option<Mapping> {
 fn severity_for(raw: &str) -> Option<Severity> {
     Some(match raw {
         "info" => Severity::Info,
-        "low" => Severity::Notice,
+        "low" => Severity::Info,
         "medium" => Severity::Warning,
         "high" => Severity::Error,
         "critical" => Severity::Critical,

@@ -114,7 +114,7 @@ fn flags(args: Vec<String>) -> Result<Vec<(String, String)>, String> {
     let mut out = Vec::new();
     let mut it = args.into_iter();
     while let Some(flag) = it.next() {
-        if flag == "--all" || flag == "--help" {
+        if flag == "--help" {
             out.push((flag, String::new()));
             continue;
         }

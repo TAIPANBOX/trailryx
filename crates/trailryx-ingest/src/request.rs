@@ -945,7 +945,7 @@ fn validate_port(with_colon: &[u8]) -> Result<(), Reject> {
         }
         // An empty port is grammatically legal and means the default. Anything
         // else is not.
-        [b':'] => Ok(()),
+        [b':'] => Err(bad),
         _ => Err(bad),
     }
 }
