@@ -16,6 +16,11 @@ use std::process::Command;
 
 use serde_json::Value;
 
+// The kill runs are this crate's other binary-level test, and live in the same
+// test binary (invariant 45) rather than in a target of their own.
+#[path = "manifest/kill.rs"]
+mod kill;
+
 /// The repository root. `CARGO_MANIFEST_DIR` is `crates/trailryx-demo`.
 fn root() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))

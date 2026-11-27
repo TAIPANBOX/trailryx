@@ -338,3 +338,112 @@ impl Default for Limits {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn every_kind() -> Vec<Kind> {
+        let syntax = [
+            Syntax::UnexpectedEof,
+            Syntax::UnexpectedByte,
+            Syntax::TrailingContent,
+            Syntax::TrailingComma,
+            Syntax::ExpectedColon,
+            Syntax::ExpectedName,
+            Syntax::DuplicateName,
+            Syntax::ControlInString,
+            Syntax::BadEscape,
+            Syntax::LoneSurrogate,
+            Syntax::BadNumber,
+            Syntax::BadLiteral,
+        ];
+        let bounds = [
+            Bound::Depth,
+            Bound::NumberDigits,
+            Bound::ObjectMembers,
+            Bound::LineTooLong,
+        ];
+        let encodings = [
+            Encoding::InvalidUtf8,
+            Encoding::IncompleteUtf8,
+            Encoding::Utf16Le,
+            Encoding::Utf16Be,
+            Encoding::Utf32Le,
+            Encoding::Utf32Be,
+        ];
+        syntax
+            .into_iter()
+            .map(Kind::Syntax)
+            .chain(bounds.into_iter().map(Kind::Limit))
+            .chain(encodings.into_iter().map(Kind::Encoding))
+            .collect()
+    }
+
+    fn rendered(kind: Kind) -> String {
+        JsonError {
+            kind,
+            line: 7,
+            byte_in_line: 12,
+        }
+        .to_string()
+    }
+
+    #[test]
+    fn every_refusal_says_where_and_says_something_no_other_refusal_says() {
+        let kinds = every_kind();
+        let mut seen = std::collections::BTreeSet::new();
+        for kind in &kinds {
+            let text = rendered(*kind);
+            let what = text
+                .strip_prefix("line 7 byte 12: ")
+                .unwrap_or_else(|| panic!("{kind:?} does not say where: {text:?}"));
+            assert!(!what.is_empty(), "{kind:?} says nothing");
+            assert!(
+                seen.insert(what.to_owned()),
+                "{kind:?} says {what:?}, which another refusal already says"
+            );
+        }
+        assert_eq!(seen.len(), 22, "twelve syntax, four limits, six encodings");
+    }
+
+    #[test]
+    fn the_constructors_build_the_kind_they_name_and_only_a_limit_is_a_limit() {
+        let syntax = JsonError::syntax(Syntax::TrailingComma, 3, 4);
+        let limit = JsonError::limit(Bound::Depth, 3, 4);
+        let encoding = JsonError::encoding(Encoding::Utf16Le, 3, 4);
+        assert_eq!(syntax.kind, Kind::Syntax(Syntax::TrailingComma));
+        assert_eq!(limit.kind, Kind::Limit(Bound::Depth));
+        assert_eq!(encoding.kind, Kind::Encoding(Encoding::Utf16Le));
+        assert_eq!((limit.line, limit.byte_in_line), (3, 4));
+        assert!(limit.is_limit());
+        assert!(!syntax.is_limit() && !encoding.is_limit());
+        assert_eq!(
+            limit.to_string(),
+            "line 3 byte 4: nesting depth",
+            "a limit names the bound it hit"
+        );
+        assert_eq!(encoding.to_string(), "line 3 byte 4: UTF-16 little-endian");
+    }
+
+    #[test]
+    fn a_real_refusal_renders_its_own_message() {
+        let err = validate(b"[1,]", Limits::default(), 9).expect_err("a trailing comma");
+        assert_eq!(err.line, 9, "the line it was told is the line it reports");
+        assert!(
+            err.to_string().ends_with(": a comma where a value belongs"),
+            "{err}"
+        );
+        let boxed: Box<dyn std::error::Error> = Box::new(err);
+        assert_eq!(boxed.to_string(), err.to_string());
+    }
+
+    #[test]
+    fn the_default_limits_are_the_documented_ones() {
+        let limits = Limits::default();
+        assert_eq!(limits.max_depth, 32);
+        assert_eq!(limits.max_number_bytes, 1024);
+        assert_eq!(limits.max_keys_per_object, 256);
+        assert_eq!(limits.max_line_bytes, 16 * 1024 * 1024);
+    }
+}

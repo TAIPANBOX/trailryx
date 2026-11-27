@@ -689,3 +689,147 @@ pub fn decode_manifest(bytes: &[u8]) -> Result<Vec<Hash>, VaultError> {
         })
         .collect())
 }
+
+/// The two formats this module writes and reads back, fed what a damaged or
+/// hostile object store would hand over.
+#[cfg(test)]
+mod decoding {
+    use super::*;
+
+    fn parts() -> Vec<PayloadPart> {
+        PayloadClass::ALL
+            .iter()
+            .enumerate()
+            .map(|(n, class)| PayloadPart::new(*class, vec![n as u8; n * 3]))
+            .collect()
+    }
+
+    fn shape(parts: &[PayloadPart]) -> Vec<(PayloadClass, Vec<u8>)> {
+        parts.iter().map(|p| (p.class, p.bytes.clone())).collect()
+    }
+
+    fn malformed<T: std::fmt::Debug>(result: Result<T, VaultError>) -> &'static str {
+        match result {
+            Err(VaultError::Malformed(what)) => what,
+            other => panic!("expected a malformed refusal, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn every_class_survives_the_round_trip_including_an_empty_part() {
+        let parts = parts();
+        assert!(parts.iter().any(|p| p.bytes.is_empty()));
+        let decoded = decode_parts(&encode_parts(&parts)).expect("its own encoding reads back");
+        assert_eq!(shape(&decoded), shape(&parts));
+        assert_eq!(
+            decode_parts(&encode_parts(&[])).map(|p| p.len()).ok(),
+            Some(0)
+        );
+    }
+
+    #[test]
+    fn every_truncation_of_a_blob_is_refused_rather_than_read_short() {
+        let blob = encode_parts(&parts());
+        for cut in 0..blob.len() {
+            let refused = malformed(decode_parts(&blob[..cut]));
+            assert!(
+                refused == "truncated" || refused == "not a payload blob",
+                "a blob cut at {cut} of {} gave {refused:?}",
+                blob.len()
+            );
+        }
+    }
+
+    #[test]
+    fn a_blob_with_the_wrong_magic_an_unknown_class_or_an_impossible_length_is_refused() {
+        let mut version_two = encode_parts(&parts());
+        version_two[4] = 0x02;
+        assert_eq!(malformed(decode_parts(&version_two)), "not a payload blob");
+        assert_eq!(
+            malformed(decode_parts(b"TRXA\x01\0\0\0\0")),
+            "not a payload blob"
+        );
+
+        let mut unknown = b"TRXB\x01\x01\0\0\0".to_vec();
+        unknown.push(7);
+        unknown.extend_from_slice(b"rumours");
+        unknown.extend_from_slice(&0u64.to_le_bytes());
+        assert_eq!(malformed(decode_parts(&unknown)), "unknown class");
+
+        let mut not_utf8 = b"TRXB\x01\x01\0\0\0".to_vec();
+        not_utf8.extend_from_slice(&[2, 0xff, 0xfe]);
+        assert_eq!(malformed(decode_parts(&not_utf8)), "class name");
+
+        let class = PayloadClass::ALL[0].as_str().as_bytes();
+        let mut endless = b"TRXB\x01\x01\0\0\0".to_vec();
+        endless.push(class.len() as u8);
+        endless.extend_from_slice(class);
+        endless.extend_from_slice(&u64::MAX.to_le_bytes());
+        let refused = malformed(decode_parts(&endless));
+        assert!(
+            refused == "length" || refused == "part length",
+            "a part claiming u64::MAX bytes gave {refused:?}"
+        );
+
+        let mut many = b"TRXB\x01".to_vec();
+        many.extend_from_slice(&u32::MAX.to_le_bytes());
+        assert_eq!(
+            malformed(decode_parts(&many)),
+            "truncated",
+            "a count of four billion parts with none present is refused, not allocated"
+        );
+    }
+
+    #[test]
+    fn a_manifest_is_its_magic_a_count_and_exactly_that_many_entries() {
+        let entry = |b: u8| Hash([b; 48]);
+        let mut two = b"TRXE\x01".to_vec();
+        two.extend_from_slice(&2u32.to_le_bytes());
+        two.extend_from_slice(&[0x11; 48]);
+        two.extend_from_slice(&[0x22; 48]);
+        assert_eq!(
+            decode_manifest(&two).ok(),
+            Some(vec![entry(0x11), entry(0x22)])
+        );
+        assert_eq!(decode_manifest(b"TRXE\x01\0\0\0\0").ok(), Some(Vec::new()));
+
+        let mut long = two.clone();
+        long.push(0);
+        assert_eq!(malformed(decode_manifest(&long)), "manifest length");
+        assert_eq!(
+            malformed(decode_manifest(&two[..two.len() - 1])),
+            "manifest length"
+        );
+        let mut wrong_magic = two.clone();
+        wrong_magic[3] = b'B';
+        assert_eq!(
+            malformed(decode_manifest(&wrong_magic)),
+            "not an erasure manifest"
+        );
+        assert_eq!(
+            malformed(decode_manifest(b"TRXE\x01\0\0\0")),
+            "not an erasure manifest",
+            "a count cut short"
+        );
+    }
+
+    #[test]
+    fn every_vault_error_says_something_of_its_own() {
+        let all = [
+            VaultError::Unvalidated("the cipher"),
+            VaultError::Missing,
+            VaultError::WrongKey,
+            VaultError::WrongContent,
+            VaultError::Erased,
+            VaultError::ManifestMismatch,
+            VaultError::Malformed("truncated"),
+        ];
+        let said: std::collections::BTreeSet<String> = all.iter().map(|e| e.to_string()).collect();
+        assert_eq!(said.len(), all.len(), "{said:?}");
+        assert_eq!(
+            VaultError::Unvalidated("the cipher").to_string(),
+            "the cipher is not a validated implementation"
+        );
+        assert_eq!(VaultError::Erased.to_string(), "the key was destroyed");
+    }
+}

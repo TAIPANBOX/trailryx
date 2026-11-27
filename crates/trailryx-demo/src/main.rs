@@ -67,31 +67,49 @@ const RUN: &str = "run-4471";
 /// person's name is not in this program and could not be.
 const SUBJECT: &str = "subject-8f21ac";
 
-fn main() -> ExitCode {
+/// What the command line asked for.
+#[derive(Debug, PartialEq, Eq)]
+enum Invocation {
+    Help,
+    Walk { runs: u32, keep: bool },
+}
+
+/// The arguments, read in order. `--help` answers as soon as it is reached, and
+/// anything this program does not know is refused rather than ignored.
+fn invocation(args: impl IntoIterator<Item = String>) -> Result<Invocation, String> {
     let mut runs = 1u32;
     let mut keep = false;
-    let mut args = std::env::args().skip(1);
+    let mut args = args.into_iter();
     while let Some(flag) = args.next() {
         match flag.as_str() {
             "--runs" => match args.next().and_then(|v| v.parse().ok()) {
                 Some(n) if n >= 1 => runs = n,
-                _ => return die("--runs takes a number of one or more"),
+                _ => return Err("--runs takes a number of one or more".to_owned()),
             },
             "--keep" => keep = true,
-            "--help" => {
-                println!(
-                    "trailryx-demo [--runs N] [--keep]\n\n\
-                     Walks the eight acceptance steps. Each run uses a fresh directory,\n\
-                     so --runs 2 is the criterion: twice in a row, from nothing.\n\n\
-                     TRAILRYX_DEMO_STORE=memory|s3|gcs|azure chooses where segments\n\
-                     are published; everything else comes from the environment, so no\n\
-                     credential reaches a command line. Default is memory."
-                );
-                return ExitCode::SUCCESS;
-            }
-            other => return die(&format!("unknown argument {other}")),
+            "--help" => return Ok(Invocation::Help),
+            other => return Err(format!("unknown argument {other}")),
         }
     }
+    Ok(Invocation::Walk { runs, keep })
+}
+
+fn main() -> ExitCode {
+    let (runs, keep) = match invocation(std::env::args().skip(1)) {
+        Ok(Invocation::Walk { runs, keep }) => (runs, keep),
+        Ok(Invocation::Help) => {
+            println!(
+                "trailryx-demo [--runs N] [--keep]\n\n\
+                 Walks the eight acceptance steps. Each run uses a fresh directory,\n\
+                 so --runs 2 is the criterion: twice in a row, from nothing.\n\n\
+                 TRAILRYX_DEMO_STORE=memory|s3|gcs|azure chooses where segments\n\
+                 are published; everything else comes from the environment, so no\n\
+                 credential reaches a command line. Default is memory."
+            );
+            return ExitCode::SUCCESS;
+        }
+        Err(why) => return die(&why),
+    };
 
     for run in 1..=runs {
         if runs > 1 {
@@ -1055,4 +1073,116 @@ fn otlp_batch() -> Vec<u8> {
     let mut resource_spans = field(1, &field(1, &attr("service.name", "billing")));
     resource_spans.extend_from_slice(&field(2, &scope));
     field(1, &resource_spans)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn args(list: &[&str]) -> Vec<String> {
+        list.iter().map(|s| (*s).to_owned()).collect()
+    }
+
+    #[test]
+    fn the_eight_steps_pass_from_an_empty_directory_and_leave_a_pack_that_verifies() {
+        let dir = std::env::temp_dir().join(format!("trailryx-demo-walk-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let outcome = walk(&dir);
+        let pack = std::fs::read(dir.join("incident-4471.trxevid"));
+        let _ = std::fs::remove_dir_all(&dir);
+
+        assert_eq!(outcome, Ok(()), "the acceptance walk failed");
+        let pack = pack.expect("step four writes the pack to the run's directory");
+        let report = trailryx_verify::verify(&pack).expect("the pack parses");
+        assert!(report.verified(), "the pack on disk does not verify");
+        assert_eq!(
+            report.segments_checked, 1,
+            "the pack holds the incident's one segment"
+        );
+        assert_eq!(
+            report.records_checked, 7,
+            "six incident records and the one that arrived over OTLP"
+        );
+    }
+
+    #[test]
+    fn no_arguments_walk_once_and_tidy_up() {
+        assert_eq!(
+            invocation(args(&[])),
+            Ok(Invocation::Walk {
+                runs: 1,
+                keep: false
+            })
+        );
+    }
+
+    #[test]
+    fn runs_and_keep_are_read_in_any_order() {
+        let expected = Ok(Invocation::Walk {
+            runs: 2,
+            keep: true,
+        });
+        assert_eq!(invocation(args(&["--runs", "2", "--keep"])), expected);
+        assert_eq!(invocation(args(&["--keep", "--runs", "2"])), expected);
+    }
+
+    #[test]
+    fn a_run_count_below_one_or_not_a_number_is_refused() {
+        let refusal = Err("--runs takes a number of one or more".to_owned());
+        assert_eq!(invocation(args(&["--runs", "0"])), refusal);
+        assert_eq!(invocation(args(&["--runs", "-1"])), refusal);
+        assert_eq!(invocation(args(&["--runs", "two"])), refusal);
+        assert_eq!(invocation(args(&["--runs"])), refusal);
+        assert_eq!(
+            invocation(args(&["--runs", "1"])),
+            Ok(Invocation::Walk {
+                runs: 1,
+                keep: false
+            }),
+            "one is the smallest count, and it is accepted"
+        );
+    }
+
+    #[test]
+    fn help_answers_where_it_is_reached_and_an_unknown_flag_is_refused() {
+        assert_eq!(invocation(args(&["--help"])), Ok(Invocation::Help));
+        assert_eq!(
+            invocation(args(&["--keep", "--help", "--bogus"])),
+            Ok(Invocation::Help),
+            "nothing after --help is read"
+        );
+        assert_eq!(
+            invocation(args(&["--bogus", "--help"])),
+            Err("unknown argument --bogus".to_owned())
+        );
+    }
+
+    #[test]
+    fn a_basis_is_described_by_what_it_holds() {
+        assert_eq!(
+            describe_basis(&Basis::default()),
+            "no basis: nothing says why this was allowed"
+        );
+        let basis = Basis {
+            policy_version: Some(PolicyVersion::parse("v-7").expect("a policy version")),
+            budget_remaining_micros: Some(900_000),
+            model: Some(ModelId::parse("gpt-4o-mini").expect("a model id")),
+            prompt_hash: Some(Hash::ZERO),
+            tool_manifest: vec![ToolName::parse("send_email").expect("a tool name")],
+            ..Basis::default()
+        };
+        assert_eq!(
+            describe_basis(&basis),
+            "policy=v-7 budget=900000 model=gpt-4o-mini prompt=hashed tools=1"
+        );
+    }
+
+    #[test]
+    fn a_short_hash_is_its_first_sixteen_hex_digits() {
+        assert_eq!(short(&Hash::ZERO), "0000000000000000");
+        let mut bytes = [0u8; 48];
+        bytes[0] = 0xab;
+        bytes[8] = 0xff;
+        assert_eq!(short(&Hash(bytes)), "ab00000000000000");
+    }
 }

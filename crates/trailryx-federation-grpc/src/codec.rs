@@ -700,4 +700,264 @@ mod tests {
             })
         );
     }
+
+    /// Every value of every other closed vocabulary, both ways, for the reason the
+    /// event-type test gives: a line mapping one name to another compiles.
+    #[test]
+    fn every_value_of_every_vocabulary_survives_the_wire_as_itself() {
+        let round = |record: &Record| from_wire(to_wire(record)).expect("our own record decodes");
+        for severity in Severity::ALL {
+            let mut r = a_fully_populated_record();
+            r.severity = *severity;
+            assert_eq!(round(&r).severity, *severity);
+        }
+        for verdict in Verdict::ALL {
+            let mut r = a_fully_populated_record();
+            r.outcome.verdict = Some(*verdict);
+            assert_eq!(round(&r).outcome.verdict, Some(*verdict));
+        }
+        for error in ErrorCode::ALL {
+            let mut r = a_fully_populated_record();
+            r.outcome.error = Some(*error);
+            assert_eq!(round(&r).outcome.error, Some(*error));
+        }
+        for class in PayloadClass::ALL {
+            let mut r = a_fully_populated_record();
+            if let Some(payload) = r.payload.as_mut() {
+                payload.class = *class;
+            }
+            assert_eq!(round(&r).payload.map(|p| p.class), Some(*class));
+        }
+        for hash in HashAlg::ALL {
+            let mut r = a_fully_populated_record();
+            r.algorithms.hash = *hash;
+            assert_eq!(round(&r).algorithms.hash, *hash);
+        }
+        for signature in SigAlg::ALL {
+            let mut r = a_fully_populated_record();
+            r.algorithms.signature = *signature;
+            assert_eq!(round(&r).algorithms.signature, *signature);
+        }
+        for kem in KemAlg::ALL {
+            let mut r = a_fully_populated_record();
+            r.algorithms.kem = *kem;
+            assert_eq!(round(&r).algorithms.kem, *kem);
+        }
+    }
+
+    /// The optional fields absent, which is a different encoding from present.
+    #[test]
+    fn a_record_with_nothing_optional_survives_the_wire() {
+        let mut r = a_fully_populated_record();
+        r.parent_run_id = None;
+        r.on_behalf_of = Vec::new();
+        r.decided_at = None;
+        r.knowledge_as_of = None;
+        r.clock_skew_nanos = None;
+        r.basis = Basis::default();
+        r.caused_by = Vec::new();
+        r.outcome = Outcome::default();
+        r.payload = None;
+        assert_eq!(from_wire(to_wire(&r)), Ok(r));
+    }
+
+    /// Each enum field a peer sends, as zero and as a number from a newer build.
+    #[test]
+    fn every_enum_field_refuses_unspecified_and_a_value_from_a_newer_peer() {
+        type Set = fn(&mut pb::Record, i32);
+        let fields: [(&str, Set); 8] = [
+            ("event_type", |w, v| w.event_type = v),
+            ("severity", |w, v| w.severity = v),
+            ("outcome.verdict", |w, v| {
+                if let Some(o) = w.outcome.as_mut() {
+                    o.verdict = Some(v);
+                }
+            }),
+            ("outcome.error", |w, v| {
+                if let Some(o) = w.outcome.as_mut() {
+                    o.error = Some(v);
+                }
+            }),
+            ("payload.class", |w, v| {
+                if let Some(p) = w.payload.as_mut() {
+                    p.class = v;
+                }
+            }),
+            ("algorithms.hash", |w, v| {
+                if let Some(a) = w.algorithms.as_mut() {
+                    a.hash = v;
+                }
+            }),
+            ("algorithms.signature", |w, v| {
+                if let Some(a) = w.algorithms.as_mut() {
+                    a.signature = v;
+                }
+            }),
+            ("algorithms.kem", |w, v| {
+                if let Some(a) = w.algorithms.as_mut() {
+                    a.kem = v;
+                }
+            }),
+        ];
+        for (field, set) in fields {
+            for raw in [0, 9_999, -1] {
+                let mut wire = to_wire(&a_fully_populated_record());
+                set(&mut wire, raw);
+                match from_wire(wire) {
+                    Err(WireError::UnknownEnum { field: named }) => assert!(
+                        field.ends_with(named) || named.ends_with(field),
+                        "{field} = {raw} was refused under the name {named}"
+                    ),
+                    other => panic!("{field} = {raw} was not refused as unknown: {other:?}"),
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn a_required_message_that_is_absent_is_named() {
+        let mut wire = to_wire(&a_fully_populated_record());
+        wire.basis = None;
+        assert_eq!(
+            from_wire(wire),
+            Err(WireError::MissingField { field: "basis" })
+        );
+        let mut wire = to_wire(&a_fully_populated_record());
+        wire.outcome = None;
+        assert_eq!(
+            from_wire(wire),
+            Err(WireError::MissingField { field: "outcome" })
+        );
+        let mut wire = to_wire(&a_fully_populated_record());
+        wire.algorithms = None;
+        assert_eq!(
+            from_wire(wire),
+            Err(WireError::MissingField {
+                field: "algorithms"
+            })
+        );
+    }
+
+    #[test]
+    fn a_number_wider_than_its_field_is_refused_rather_than_truncated() {
+        let mut wire = to_wire(&a_fully_populated_record());
+        wire.shard = u32::from(u16::MAX) + 1;
+        assert_eq!(
+            from_wire(wire),
+            Err(WireError::OutOfRange { field: "shard" })
+        );
+        let mut wire = to_wire(&a_fully_populated_record());
+        wire.mapper = u32::MAX;
+        assert_eq!(
+            from_wire(wire),
+            Err(WireError::OutOfRange { field: "mapper" })
+        );
+        let mut wire = to_wire(&a_fully_populated_record());
+        if let Some(basis) = wire.basis.as_mut() {
+            basis.temperature_milli = Some(70_000);
+        }
+        assert_eq!(
+            from_wire(wire),
+            Err(WireError::OutOfRange {
+                field: "basis.temperature_milli"
+            })
+        );
+        let mut wire = to_wire(&a_fully_populated_record());
+        wire.shard = u32::from(u16::MAX);
+        assert_eq!(
+            from_wire(wire).map(|r| r.shard),
+            Ok(ShardIx(u16::MAX)),
+            "the widest shard that fits is read as itself"
+        );
+    }
+
+    #[test]
+    fn an_id_or_a_cause_of_the_wrong_length_is_refused() {
+        let mut wire = to_wire(&a_fully_populated_record());
+        wire.id = vec![0x01; 15];
+        assert_eq!(
+            from_wire(wire),
+            Err(WireError::BadLength {
+                field: "id",
+                expected: 16,
+                got: 15
+            })
+        );
+        let mut wire = to_wire(&a_fully_populated_record());
+        wire.caused_by.push(vec![0x01; 17]);
+        assert_eq!(
+            from_wire(wire),
+            Err(WireError::BadLength {
+                field: "caused_by",
+                expected: 16,
+                got: 17
+            })
+        );
+        let mut wire = to_wire(&a_fully_populated_record());
+        if let Some(payload) = wire.payload.as_mut() {
+            payload.key_id = Vec::new();
+        }
+        assert_eq!(
+            from_wire(wire),
+            Err(WireError::BadLength {
+                field: "payload.key_id",
+                expected: 48,
+                got: 0
+            })
+        );
+    }
+
+    #[test]
+    fn an_identifier_anywhere_in_the_record_is_parsed_at_the_door() {
+        let mut wire = to_wire(&a_fully_populated_record());
+        wire.on_behalf_of.push("not a principal".to_owned());
+        assert_eq!(
+            from_wire(wire),
+            Err(WireError::BadIdentifier {
+                field: "on_behalf_of"
+            })
+        );
+        let mut wire = to_wire(&a_fully_populated_record());
+        if let Some(basis) = wire.basis.as_mut() {
+            basis.tool_manifest.push("two words".to_owned());
+        }
+        assert_eq!(
+            from_wire(wire),
+            Err(WireError::BadIdentifier {
+                field: "basis.tool_manifest"
+            })
+        );
+        let mut wire = to_wire(&a_fully_populated_record());
+        wire.tenant = String::new();
+        assert_eq!(
+            from_wire(wire),
+            Err(WireError::BadIdentifier { field: "tenant" })
+        );
+    }
+
+    #[test]
+    fn a_refusal_names_the_field_and_never_quotes_the_value() {
+        let shown = [
+            WireError::BadIdentifier { field: "run_id" }.to_string(),
+            WireError::BadLength {
+                field: "prev_hash",
+                expected: 48,
+                got: 47,
+            }
+            .to_string(),
+            WireError::UnknownEnum { field: "severity" }.to_string(),
+            WireError::MissingField { field: "basis" }.to_string(),
+            WireError::OutOfRange { field: "shard" }.to_string(),
+        ];
+        assert_eq!(
+            shown,
+            [
+                "run_id: not a legal identifier",
+                "prev_hash: expected 48 bytes, got 47",
+                "severity: unknown or unspecified variant",
+                "basis: required and absent",
+                "shard: out of range",
+            ]
+        );
+    }
 }

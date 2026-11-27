@@ -7,7 +7,7 @@
 ![Stage](https://img.shields.io/badge/stage-13%20of%2013-blue.svg)
 ![Core](https://img.shields.io/badge/core-frozen-success.svg)
 ![Rust](https://img.shields.io/badge/rust-1.88%2B%2C%20SQL%20facade%201.89%2B-orange.svg)
-![Tests](https://img.shields.io/badge/tests-1341-success.svg)
+![Tests](https://img.shields.io/badge/tests-1437-success.svg)
 ![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)
 ![Dependencies](https://img.shields.io/badge/deps-0%20in%20the%20verifier-success.svg)
 ![Unsafe](https://img.shields.io/badge/unsafe-forbidden-success.svg)
@@ -316,34 +316,34 @@ migration. What stage 13 still wants is measured absence rather than a guess, an
 | `trailryx-sim` | injectable clock, rng, io and bus; a crash model and fault injection | 18 |
 | `trailryx-record` | the canonical record, its schema, and the plane boundary | 31 |
 | `trailryx-crypto` | SHA-384 and the hash chain | 22 |
-| `trailryx-core` | the simulated store the determinism criterion runs against | 15 |
+| `trailryx-core` | the simulated store the determinism criterion runs against | 25 |
 | `trailryx-contracts` | eight adapter traits and a conformance suite | 27 |
 | `trailryx-journal` | wire format, append-only write path, recovery | 36 |
 | `trailryx-index` | Merkle history tree, completeness proofs, segment composition | 58 |
-| `trailryx-store` | sealing, the read surface, causal reconstruction, hot and cold tiering | 88 |
-| `trailryx-json` | a strict bounded RFC 8259 reader and a JSON Lines framer. Depends on nothing | 117 |
+| `trailryx-store` | sealing, the read surface, causal reconstruction, hot and cold tiering | 90 |
+| `trailryx-json` | a strict bounded RFC 8259 reader and a JSON Lines framer. Depends on nothing | 121 |
 | `trailryx-otlp` | two OTLP transports, one mapper: protobuf and JSON, the GenAI semconv, the file source | 152 |
 | `trailryx-assemble` | what a source handed over, made into records | 29 |
-| `trailryx-erasure` | payload envelopes, the key hierarchy, erasure | 44 |
+| `trailryx-erasure` | payload envelopes, the key hierarchy, erasure | 49 |
 | `trailryx-verify` | the offline verifier, including its own ECDSA and an RFC 3161 token reader, and the P-256 the ingest door checks agent tokens with. Depends on nothing | 55 |
 | `trailryx-projection` | Thrift, a Parquet writer with real lists, and columnar projections | 19 |
 | `trailryx-sign` | what gets signed, and what a witness attests to | 4 |
 | `trailryx-http` | the workspace's one HTTP/1.1 client. No TLS, no redirects, no reuse | 14 |
-| `trailryx-s3` | SigV4, S3 and Google Cloud Storage over that client. No cloud SDK | 35 |
-| `trailryx-azure` | Azure Blob Storage: Shared Key signing, and the four operations | 18 |
+| `trailryx-s3` | SigV4, S3 and Google Cloud Storage over that client. No cloud SDK | 43 |
+| `trailryx-azure` | Azure Blob Storage: Shared Key signing, and the four operations | 24 |
 | `trailryx-federation` | composing an answer across environments, refusing to call it complete when it is not, and verifying a peer's chain before adopting its records | 18 |
-| `trailryx-federation-grpc` | that composition over the wire: gRPC with mutual TLS, and a peer named by its certificate rather than by what it sent | 20 |
+| `trailryx-federation-grpc` | that composition over the wire: gRPC with mutual TLS, and a peer named by its certificate rather than by what it sent | 28 |
 | `trailryx-fuzz` | every hand-written parser, fed bytes it did not expect, from a seed | 5 |
 | `trailryx-publish` | atomic publication of a sealed segment, and the fault model for it | 11 |
 | `trailryx-crypto-aws` | the validated cipher, the hybrid X25519 + ML-KEM-768 exchange, and the two custodians that wrap a payload key with it: one that keeps its keys in memory and one that keeps them on a disk an operator holds the root key for. The one adapter with a dependency | 50 |
 | `trailryx-asn1` | a bounded DER reader, enough for RFC 3161 and nothing more. Depends on nothing | 30 |
 | `trailryx-anchor` | RFC 3161 timestamping: TSP, the CMS subset, and RSA over Montgomery arithmetic | 52 |
-| `trailryx-ingest` | the OTLP/HTTP server: HTTP/1.1, gzip, bearer auth and the agent-token door, all hand-written | 164 |
+| `trailryx-ingest` | the OTLP/HTTP server: HTTP/1.1, gzip, bearer auth and the agent-token door, all hand-written | 179 |
 | `trailryx-compliance` | a versioned map from what is proved to what a framework asks, and what it does not | 12 |
 | `trailryx-sql` | the SQL facade: DataFusion and the Postgres wire protocol, predicates pushed into the index, statements gated, reads authorised, connections bounded, four dialect extensions | 64 |
-| `trailryx-agentevent` | the estate's shared agent-event envelope, mapped into records: the same `agent://` grammar, the same run and delegation chain | 70 |
-| `trailryx-node` | the record plane as one process: ingest, journal, sealing on a schedule, a reader that rebuilds a segment from the journal, and a cursor that moves with every seal so an import is safe to repeat, and a root signed by Keyryx when configured, under the one key it is pinned to, with each signature checked before it is kept and the root queued while it cannot sign | 58 |
-| `trailryx-demo` | the eight acceptance steps, and a reader for a collector's file | 5 |
+| `trailryx-agentevent` | the estate's shared agent-event envelope, mapped into records: the same `agent://` grammar, the same run and delegation chain | 75 |
+| `trailryx-node` | the record plane as one process: ingest, journal, sealing on a schedule, a reader that rebuilds a segment from the journal, and a cursor that moves with every seal so an import is safe to repeat, and a root signed by Keyryx when configured, under the one key it is pinned to, with each signature checked before it is kept and the root queued while it cannot sign | 74 |
+| `trailryx-demo` | the eight acceptance steps, and a reader for a collector's file | 22 |
 
 **The verifier and the core have no third-party dependencies.** `unsafe` forbidden
 at the workspace level. Adapters and facades take what they need, deliberately, and
@@ -757,7 +757,7 @@ not repeated here: a number written twice is a number that will disagree with it
 ## Try it
 
 ```bash
-cargo test                                    # 1341 tests
+cargo test                                    # 1437 tests
 cargo run --bin trailryx-sim-run -- --help
 ```
 

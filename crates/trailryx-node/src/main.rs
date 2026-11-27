@@ -766,3 +766,265 @@ fn read(args: Vec<String>) -> ExitCode {
 
     ExitCode::SUCCESS
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const EVENTS: &str = concat!(
+        r#"{"schema":"taipanbox.dev/agent-event/v0.2","ts":"2026-07-09T03:12:44.100Z","source":"tokenfuse","type":"budget_exhausted","severity":"critical","agent_id":"agent://acme.example/support/tier1-bot","run_id":"run-8842","on_behalf_of":["user://acme.example/j.doe"],"data":{"budget_usd":2.0,"spent_usd":2.0}}"#,
+        "\n",
+        r#"{"schema":"taipanbox.dev/agent-event/v0.2","ts":"2026-07-09T03:12:45.000Z","source":"wardryx","type":"policy_deny","severity":"high","agent_id":"agent://acme.example/support/tier1-bot","run_id":"run-8842","data":{"policy":"prod-deploy"}}"#,
+        "\n",
+    );
+
+    /// An exit code, in the only form std lets two of them be compared.
+    fn code(exit: ExitCode) -> String {
+        format!("{exit:?}")
+    }
+
+    fn ok() -> String {
+        code(ExitCode::SUCCESS)
+    }
+
+    fn refused() -> String {
+        code(ExitCode::from(2))
+    }
+
+    fn args(list: &[&str]) -> Vec<String> {
+        list.iter().map(|s| (*s).to_owned()).collect()
+    }
+
+    /// A scratch directory for one test, unique to this process and to the test.
+    fn scratch(what: &str) -> PathBuf {
+        let dir =
+            std::env::temp_dir().join(format!("trailryx-node-main-{what}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("a scratch directory");
+        dir
+    }
+
+    fn text(path: &Path) -> String {
+        path.to_string_lossy().into_owned()
+    }
+
+    #[test]
+    fn events_then_read_seals_once_and_packs_what_the_verifier_accepts() {
+        let dir = scratch("round-trip");
+        let file = dir.join("events.ndjson");
+        std::fs::write(&file, EVENTS).expect("the events are written");
+        let data = dir.join("store");
+        let pack = dir.join("pack.trxevid");
+        let import = args(&[
+            "--file",
+            &text(&file),
+            "--data",
+            &text(&data),
+            "--tenant",
+            "acme",
+            "--trust-domain",
+            "acme.example",
+        ]);
+
+        let first = code(events(import.clone()));
+        let after_first = reader::read_sealed(&data, ShardIx(0))
+            .ok()
+            .map(|held| held.records());
+        let second = code(events(import));
+        let after_second = reader::read_sealed(&data, ShardIx(0))
+            .ok()
+            .map(|held| held.records());
+        let queries = [
+            code(read(args(&["--data", &text(&data), "--all"]))),
+            code(read(args(&[
+                "--data",
+                &text(&data),
+                "--agent",
+                "agent://acme.example/support/tier1-bot",
+            ]))),
+            code(read(args(&["--data", &text(&data), "--run", "run-8842"]))),
+        ];
+        let packed = code(read(args(&[
+            "--data",
+            &text(&data),
+            "--all",
+            "--pack",
+            &text(&pack),
+        ])));
+        let bytes = std::fs::read(&pack);
+        let _ = std::fs::remove_dir_all(&dir);
+
+        assert_eq!(first, ok(), "the import failed");
+        let sealed = after_first.expect("the directory reads back after the import");
+        assert!(sealed >= 2, "two lines sealed {sealed} records");
+        assert_eq!(second, ok(), "a second import of the same file failed");
+        assert_eq!(
+            after_second,
+            Some(sealed),
+            "a second import of an unchanged file stored its records again"
+        );
+        assert_eq!(queries, [ok(), ok(), ok()]);
+        assert_eq!(packed, ok(), "the pack was not written");
+        let report =
+            trailryx_verify::verify(&bytes.expect("the pack is on disk")).expect("the pack parses");
+        assert!(report.verified(), "the pack read writes does not verify");
+        assert_eq!(
+            usize::try_from(report.records_checked).ok(),
+            Some(sealed),
+            "the pack holds every sealed record and nothing else"
+        );
+    }
+
+    #[test]
+    fn a_directory_with_nothing_sealed_has_nothing_to_pack() {
+        let dir = scratch("empty");
+        let pack = dir.join("pack.trxevid");
+        let answer = code(read(args(&[
+            "--data",
+            &text(&dir.join("store")),
+            "--pack",
+            &text(&pack),
+        ])));
+        let written = pack.exists();
+        let _ = std::fs::remove_dir_all(&dir);
+        assert_eq!(answer, refused());
+        assert!(!written, "a pack of nothing was written");
+    }
+
+    #[test]
+    fn a_flag_without_its_value_or_an_argument_that_is_not_a_flag_is_refused() {
+        assert_eq!(
+            flags(args(&["--data"])),
+            Err("--data needs a value".to_owned())
+        );
+        assert_eq!(
+            flags(args(&["data", "dir"])),
+            Err("unexpected argument data".to_owned())
+        );
+        assert_eq!(
+            flags(args(&["--all", "--shard", "3", "--help"])),
+            Ok(vec![
+                ("--all".to_owned(), String::new()),
+                ("--shard".to_owned(), "3".to_owned()),
+                ("--help".to_owned(), String::new()),
+            ]),
+            "--all and --help take no value and the rest take one each"
+        );
+    }
+
+    #[test]
+    fn numbers_and_shards_are_read_strictly_and_fall_back_only_when_absent() {
+        let given = flags(args(&["--shard", "7", "--seal-records", "x"])).expect("flags");
+        assert_eq!(number(&given, "--drain-ms", 250), Ok(250));
+        assert_eq!(number(&given, "--shard", 0), Ok(7));
+        assert_eq!(
+            number(&given, "--seal-records", 4_096),
+            Err("--seal-records x is not a number".to_owned())
+        );
+        assert_eq!(shard_of(&given), Ok(ShardIx(7)));
+        let past = flags(args(&["--shard", "65536"])).expect("flags");
+        assert_eq!(
+            shard_of(&past),
+            Err("--shard 65536 is past the number of shards a store can have".to_owned())
+        );
+        let last = flags(args(&["--shard", "65535"])).expect("flags");
+        assert_eq!(shard_of(&last), Ok(ShardIx(65_535)));
+        assert_eq!(data_dir(&[]), PathBuf::from("trailryx-data"));
+    }
+
+    #[test]
+    fn each_command_answers_help_and_refuses_what_it_cannot_start_with() {
+        let dir = scratch("refusals");
+        let data = text(&dir.join("store"));
+        let missing = text(&dir.join("absent.ndjson"));
+        let answers = [
+            code(events(args(&["--help"]))),
+            code(read(args(&["--help"]))),
+            code(run(args(&["--help"]))),
+        ];
+        let refusals = [
+            code(events(args(&["--data", &data]))),
+            code(events(args(&["--file", &missing, "--data", &data]))),
+            code(events(args(&["--file", &missing, "--shard", "70000"]))),
+            code(events(args(&[
+                "--file",
+                &missing,
+                "--tenant",
+                "Not A Tenant",
+            ]))),
+            code(events(args(&[
+                "--file",
+                &missing,
+                "--seal-records",
+                "many",
+            ]))),
+            code(events(args(&["--file"]))),
+            code(read(args(&["--shard", "x"]))),
+            code(read(args(&["stray"]))),
+            code(run(args(&["--shard", "70000"]))),
+            code(run(args(&["--tenant", "Not A Tenant"]))),
+            code(run(args(&["--seal-records", "x"]))),
+            code(run(args(&["--seal-seconds", "x"]))),
+            code(run(args(&["--sync-every", "x"]))),
+            code(run(args(&["--drain-ms", "x"]))),
+            code(run(args(&["--bind", "not-an-address"]))),
+            code(run(args(&[
+                "--token-file",
+                &missing,
+                "--agent-token-issuer",
+                "https://issuer.example",
+            ]))),
+        ];
+        let _ = std::fs::remove_dir_all(&dir);
+        assert_eq!(answers, [ok(), ok(), ok()]);
+        for (n, answer) in refusals.iter().enumerate() {
+            assert_eq!(answer, &refused(), "case {n} was not refused");
+        }
+    }
+
+    #[test]
+    fn run_opens_the_plane_and_refuses_a_port_it_may_not_or_cannot_take() {
+        let dir = scratch("bind");
+        let data = text(&dir.join("store"));
+        let secret = dir.join("secret");
+        std::fs::write(&secret, "a-fleet-secret\n").expect("the secret is written");
+        let empty = dir.join("empty-secret");
+        std::fs::write(&empty, "\n").expect("the empty secret is written");
+        let taken = std::net::TcpListener::bind("127.0.0.1:0").expect("a loopback port");
+        let port = taken.local_addr().expect("its address").to_string();
+
+        // Routable with no credential: the server refuses to bind at all.
+        let open_to_all = code(run(args(&["--data", &data, "--bind", "0.0.0.0:0"])));
+        let opened = dir.join("store").exists();
+        // A credential that cannot be read, or holds nothing, is refused before any port.
+        let unreadable = code(run(args(&[
+            "--data",
+            &data,
+            "--token-file",
+            &text(&dir.join("absent")),
+        ])));
+        let blank = code(run(args(&["--data", &data, "--token-file", &text(&empty)])));
+        // A port somebody else holds, with and without a credential.
+        let busy = code(run(args(&["--data", &data, "--bind", &port])));
+        let busy_with_secret = code(run(args(&[
+            "--data",
+            &data,
+            "--bind",
+            &port,
+            "--token-file",
+            &text(&secret),
+        ])));
+        drop(taken);
+        let _ = std::fs::remove_dir_all(&dir);
+
+        assert!(
+            opened,
+            "the plane was not opened before the port was offered"
+        );
+        assert_eq!(open_to_all, refused());
+        assert_eq!(unreadable, refused());
+        assert_eq!(blank, refused());
+        assert_eq!(busy, refused());
+        assert_eq!(busy_with_secret, refused());
+    }
+}

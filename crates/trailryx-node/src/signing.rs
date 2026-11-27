@@ -365,3 +365,211 @@ fn create_parent(path: &Path) -> Result<(), PlaneError> {
         None => Ok(()),
     }
 }
+
+/// The queue is files on a disk an operator can reach, so every reader of it is
+/// held against what a torn write, a stray file or a hand edit would leave.
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const ROOT: Hash = Hash([0x5a; 48]);
+
+    fn hex(bytes: &[u8]) -> String {
+        hex_encode(bytes)
+    }
+
+    fn signed_text(public_key: &[u8], signature: &[u8]) -> String {
+        format!(
+            "generated_at=7\nalgorithm=es384\npublic_key={}\nsignature={}\n",
+            hex(public_key),
+            hex(signature)
+        )
+    }
+
+    fn point() -> Vec<u8> {
+        let mut key = vec![0x11; 97];
+        key[0] = 0x04;
+        key
+    }
+
+    #[test]
+    fn a_root_is_named_by_exactly_ninety_six_lowercase_hex_digits() {
+        let name = hex(ROOT.as_bytes());
+        assert_eq!(name.len(), 96);
+        assert_eq!(parse_root(&name), Some(ROOT));
+        assert_eq!(parse_root(&name.to_uppercase()), None, "upper case");
+        assert_eq!(parse_root(&name[..94]), None, "one byte short");
+        assert_eq!(parse_root(&format!("{name}00")), None, "one byte long");
+        assert_eq!(parse_root(&format!("{name}.part")), None, "a temporary");
+        assert_eq!(parse_root(&"zz".repeat(48)), None, "not hex");
+        assert_eq!(parse_root(""), None);
+    }
+
+    #[test]
+    fn a_pending_entry_names_its_tenant_and_time_and_nothing_else() {
+        let read = parse_pending(ROOT, "tenant=acme\ngenerated_at=42\n")
+            .map(|p| (p.root, p.tenant.as_str().to_owned(), p.generated_at));
+        assert_eq!(read, Ok((ROOT, "acme".to_owned(), Timestamp(42))));
+
+        let refused = [
+            ("tenant=acme\ngenerated_at=42\ntorn", "is not key=value"),
+            (
+                "tenant=acme\ngenerated_at=42\nsigner=x",
+                "is not one this queue writes",
+            ),
+            (
+                "tenant=acme\ngenerated_at=soon",
+                "generated_at \"soon\" is not a number",
+            ),
+            ("generated_at=42", "no tenant"),
+            ("tenant=acme", "no generated_at"),
+            (
+                "tenant=Not A Tenant\ngenerated_at=1",
+                "is not an identifier",
+            ),
+            ("", "no tenant"),
+        ];
+        for (text, why) in refused {
+            let got = parse_pending(ROOT, text).err().unwrap_or_default();
+            assert!(got.contains(why), "{text:?} gave {got:?}, not {why:?}");
+        }
+    }
+
+    #[test]
+    fn a_signed_entry_is_an_es384_signature_of_the_right_shape_or_it_is_refused() {
+        let ok =
+            parse_signed(ROOT, &signed_text(&point(), &[0x22; 96])).expect("a well formed entry");
+        assert_eq!(ok.store_root, ROOT);
+        assert_eq!(ok.generated_at, Timestamp(7));
+        assert_eq!(ok.signature.algorithm, SigAlg::Es384);
+        assert_eq!(ok.signature.public_key, point());
+        assert_eq!(ok.signature.signature, vec![0x22; 96]);
+
+        let mut compressed = point();
+        compressed[0] = 0x02;
+        let good = signed_text(&point(), &[0x22; 96]);
+        let refused = [
+            (
+                good.replace("es384", "es256"),
+                "the algorithm \"es256\" is not es384",
+            ),
+            (
+                good.replace("public_key=04", "public_key=zz"),
+                "public_key is not hex",
+            ),
+            (
+                good.replace("signature=22", "signature=2"),
+                "signature is not hex",
+            ),
+            (
+                good.replace("generated_at=7", "generated_at=x"),
+                "is not a number",
+            ),
+            (good.replace("algorithm=", "algorithm"), "is not key=value"),
+            (format!("{good}witness=x\n"), "is not one this queue writes"),
+            (
+                signed_text(&point()[..96], &[0x22; 96]),
+                "not an uncompressed P-384 point",
+            ),
+            (
+                signed_text(&compressed, &[0x22; 96]),
+                "not an uncompressed P-384 point",
+            ),
+            (
+                signed_text(&point(), &[0x22; 95]),
+                "signature is not 96 bytes",
+            ),
+            (
+                signed_text(&point(), &[0x22; 97]),
+                "signature is not 96 bytes",
+            ),
+        ];
+        for (text, why) in refused {
+            let got = parse_signed(ROOT, &text).err().unwrap_or_default();
+            assert!(got.contains(why), "{text:?} gave {got:?}, not {why:?}");
+        }
+        for missing in ["generated_at", "public_key", "signature"] {
+            let text: String = good
+                .lines()
+                .filter(|l| !l.starts_with(missing))
+                .map(|l| format!("{l}\n"))
+                .collect();
+            assert_eq!(
+                parse_signed(ROOT, &text).err(),
+                Some(format!("no {missing}")),
+                "an entry without {missing} was read"
+            );
+        }
+    }
+
+    #[test]
+    fn the_queue_on_disk_skips_temporaries_and_refuses_an_entry_it_cannot_read() {
+        let dir = std::env::temp_dir().join(format!(
+            "trailryx-node-signing-queue-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        let nothing_yet = (queued_roots(&dir).map(|r| r.len()), signed_root(&dir, ROOT));
+
+        let name = hex(ROOT.as_bytes());
+        let pending = pending_path(&dir, &name);
+        create_parent(&pending).expect("the queue folder");
+        std::fs::write(&pending, "tenant=acme\ngenerated_at=3\n").expect("an entry");
+        std::fs::write(pending_path(&dir, &format!("{name}.part")), "torn").expect("a temporary");
+        let one = queued_roots(&dir);
+
+        std::fs::write(&pending, "tenant=acme\n").expect("a torn entry");
+        let torn = queued_roots(&dir).map(|r| r.len());
+
+        let signed = signed_path(&dir, &name);
+        create_parent(&signed).expect("the signed folder");
+        std::fs::write(&signed, signed_text(&point(), &[0x22; 96])).expect("a signature");
+        let found = signed_root(&dir, ROOT).map(|s| s.map(|s| s.generated_at));
+        std::fs::write(&signed, "algorithm=es256\n").expect("a bad signature");
+        let bad = signed_root(&dir, ROOT).map(|s| s.is_some());
+        let _ = std::fs::remove_dir_all(&dir);
+
+        assert_eq!(
+            nothing_yet.0.ok(),
+            Some(0),
+            "no queue folder is an empty queue"
+        );
+        assert_eq!(
+            nothing_yet.1.ok(),
+            Some(None),
+            "no signature yet is not an error"
+        );
+        assert_eq!(
+            one.ok(),
+            Some(vec![ROOT]),
+            "the temporary was read as a root"
+        );
+        let torn = torn.expect_err("a torn entry was read as a root");
+        assert!(torn.to_string().contains("no generated_at"), "{torn}");
+        assert_eq!(found.ok(), Some(Some(Timestamp(7))));
+        let bad = bad.expect_err("a signature that is not es384 was kept");
+        assert!(bad.to_string().contains("is not es384"), "{bad}");
+    }
+
+    #[test]
+    fn no_attestation_on_disk_is_no_witness_rather_than_an_error() {
+        let dir = std::env::temp_dir().join(format!(
+            "trailryx-node-signing-witness-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        let tenant = TenantId::parse("acme").expect("a tenant");
+        let none = witnesses_for(&dir, &tenant, ROOT).map(|w| w.len());
+        let folder = dir.join("acme");
+        std::fs::create_dir_all(&folder).expect("the witness folder");
+        std::fs::write(
+            folder.join(format!("{}.json", hex(ROOT.as_bytes()))),
+            b"not json",
+        )
+        .expect("a corrupt attestation");
+        let corrupt = witnesses_for(&dir, &tenant, ROOT).map(|w| w.len());
+        let _ = std::fs::remove_dir_all(&dir);
+        assert_eq!(none.ok(), Some(0));
+        assert!(corrupt.is_err(), "a corrupt attestation was read as none");
+    }
+}

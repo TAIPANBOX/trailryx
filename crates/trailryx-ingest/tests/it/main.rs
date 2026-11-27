@@ -8,5 +8,6 @@
 
 mod agent_door;
 mod agent_token_vectors;
+mod cli;
 mod inflate;
 mod wire;

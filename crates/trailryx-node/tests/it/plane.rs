@@ -438,3 +438,120 @@ fn what_a_reader_hands_over_is_what_the_offline_verifier_checks() {
     assert_eq!(StoreTree::from_shards(&[shard]).shards(), 1);
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// Only this shard's manifest names are read as manifests, and the name a segment
+/// is written under is the name it is read back from.
+#[test]
+fn a_manifest_name_is_this_shards_and_nothing_that_merely_resembles_one() {
+    use trailryx_node::plane::{journal_name, manifest_name, segment_of};
+    use trailryx_record::SegmentId;
+
+    let shard = ShardIx(0);
+    assert_eq!(manifest_name(shard, SegmentId(42)), "s0-000042.mf");
+    assert_eq!(journal_name(shard, SegmentId(42)), "s0-000042.trlx");
+    assert_eq!(
+        segment_of(shard, &manifest_name(shard, SegmentId(42))),
+        Some(SegmentId(42))
+    );
+    assert_eq!(
+        segment_of(ShardIx(7), &manifest_name(ShardIx(7), SegmentId(1_000_000))),
+        Some(SegmentId(1_000_000)),
+        "a number wider than the padding still reads back"
+    );
+    for name in [
+        "s1-000001.mf",
+        "s0-000001.trlx",
+        "s0-000001.mf.part",
+        "s0-.mf",
+        "s0-00x001.mf",
+        "s0000001.mf",
+        "s00-000001.mf",
+        "",
+    ] {
+        assert_eq!(
+            segment_of(shard, name),
+            None,
+            "{name:?} was read as a manifest"
+        );
+    }
+}
+
+#[test]
+fn a_directory_that_does_not_exist_yet_holds_no_sealed_segments() {
+    let dir = scratch("absent-dir");
+    let found = trailryx_node::plane::sealed_manifests(&dir, ShardIx(0))
+        .expect("an absent directory is a fact, not a failure");
+    assert!(found.is_empty());
+}
+
+#[test]
+fn a_file_named_as_a_manifest_that_is_not_one_is_refused_by_the_plane_and_the_reader() {
+    let dir = scratch("not-a-manifest");
+    std::fs::create_dir_all(&dir).expect("a scratch directory");
+    std::fs::write(dir.join("s0-000001.mf"), b"not a manifest").expect("written");
+
+    let listed = trailryx_node::plane::sealed_manifests(&dir, ShardIx(0)).map(|f| f.len());
+    let read = reader::read_sealed(&dir, ShardIx(0)).map(|held| held.records());
+    let opened = Plane::open(&dir, ShardIx(0), tenant(), TRUST_DOMAIN, policy(1), 1).map(|_| ());
+    let other_shard = trailryx_node::plane::sealed_manifests(&dir, ShardIx(1)).map(|f| f.len());
+    let _ = std::fs::remove_dir_all(&dir);
+
+    let listed = listed.expect_err("garbage under a manifest's name was listed");
+    assert!(
+        listed
+            .to_string()
+            .contains("this is not a segment manifest"),
+        "{listed}"
+    );
+    assert!(read.is_err(), "the reader answered from a corrupt manifest");
+    assert!(opened.is_err(), "the plane opened over a corrupt manifest");
+    assert_eq!(
+        other_shard.ok(),
+        Some(0),
+        "another shard's directory listing is not this shard's business"
+    );
+}
+
+#[test]
+fn a_manifest_moved_under_another_segments_number_is_refused_rather_than_adopted() {
+    let dir = scratch("moved-manifest");
+    let (mut plane, _) = open(&dir, policy(2));
+    plane
+        .accept(units(2), Timestamp(T0))
+        .expect("two units are taken");
+    let sealed = plane
+        .tick(Timestamp(T0))
+        .expect("the schedule runs")
+        .expect("a sealed segment");
+    drop(plane);
+    std::fs::copy(&sealed.manifest_path, dir.join("s0-000009.mf")).expect("the copy");
+
+    let listed = trailryx_node::plane::sealed_manifests(&dir, ShardIx(0)).map(|f| f.len());
+    let _ = std::fs::remove_dir_all(&dir);
+
+    let refused = listed.expect_err("a manifest under another segment's name was adopted");
+    assert!(
+        refused
+            .to_string()
+            .contains("the manifest inside describes seg-0000000000000001 of s0"),
+        "{refused}"
+    );
+}
+
+#[test]
+fn every_plane_error_says_what_happened() {
+    use trailryx_node::PlaneError;
+    assert_eq!(
+        PlaneError::Io("disk full".into()).to_string(),
+        "io: disk full"
+    );
+    assert_eq!(
+        PlaneError::Refused("not this directory".into()).to_string(),
+        "not this directory"
+    );
+    let stalled = PlaneError::Stalled { after: 4 }.to_string();
+    assert!(
+        stalled.contains("after 4 attempts") && stalled.contains("the gap is counted"),
+        "{stalled}"
+    );
+}

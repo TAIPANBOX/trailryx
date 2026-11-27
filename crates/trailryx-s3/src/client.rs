@@ -671,3 +671,271 @@ impl ObjectStore for S3 {
         self.remember(outcome)
     }
 }
+
+/// The client against a store that answers from a script, so every status the
+/// operations branch on is reached without a server.
+#[cfg(test)]
+mod scripted {
+    use super::*;
+    use std::collections::VecDeque;
+
+    /// Answers in order, and a transport failure once the script runs out.
+    struct Script(VecDeque<Response>);
+
+    impl Http for Script {
+        fn send(&mut self, _request: &HttpRequest) -> Result<Response, String> {
+            self.0
+                .pop_front()
+                .ok_or_else(|| "connection refused".to_owned())
+        }
+    }
+
+    fn answer(status: u16, body: &str) -> Response {
+        Response {
+            status,
+            headers: Vec::new(),
+            body: body.as_bytes().to_vec(),
+        }
+    }
+
+    fn store(conditional: Conditional, answers: Vec<Response>) -> S3 {
+        S3::with_transport(
+            Box::new(Script(answers.into())),
+            "s3.example",
+            "evidence",
+            "us-east-1",
+            Credentials::new("AKIDEXAMPLE", "secret"),
+            Addressing::Path,
+            conditional,
+        )
+    }
+
+    fn listing(keys: &[&str], next: Option<&str>) -> Response {
+        let mut body = String::from("<ListBucketResult>");
+        for key in keys {
+            body.push_str(&format!("<Contents><Key>{key}</Key></Contents>"));
+        }
+        match next {
+            Some(token) => body.push_str(&format!(
+                "<IsTruncated>true</IsTruncated><NextContinuationToken>{token}</NextContinuationToken>"
+            )),
+            None => body.push_str("<IsTruncated>false</IsTruncated>"),
+        }
+        body.push_str("</ListBucketResult>");
+        answer(200, &body)
+    }
+
+    #[test]
+    fn a_store_with_no_conditional_write_is_refused_before_anything_is_sent() {
+        let mut s3 = store(Conditional::Absent, Vec::new());
+        assert!(matches!(
+            s3.put_object_if_absent("segments/1", b"one"),
+            Err(Failure::Unsupported(_))
+        ));
+    }
+
+    #[test]
+    fn a_put_is_written_with_its_version_or_loses_the_race_or_carries_the_stores_refusal() {
+        let mut written = answer(200, "");
+        written
+            .headers
+            .push(("X-Amz-Version-Id".to_owned(), "v-7".to_owned()));
+        let mut s3 = store(
+            Conditional::IfNoneMatchStar,
+            vec![
+                written,
+                answer(412, ""),
+                answer(
+                    403,
+                    "<Error><Code>AccessDenied</Code><Message>no entry</Message></Error>",
+                ),
+                answer(503, "  slow down  "),
+            ],
+        );
+        assert!(matches!(
+            s3.put_object_if_absent("k", b"1"),
+            Ok((PutOutcome::Written, Some(VersionId(v)))) if v == "v-7"
+        ));
+        assert!(matches!(
+            s3.put_object_if_absent("k", b"1"),
+            Ok((PutOutcome::AlreadyExists, None))
+        ));
+        assert!(matches!(
+            s3.put_object_if_absent("k", b"1"),
+            Err(Failure::Store { status: 403, code, message })
+                if code == "AccessDenied" && message == "no entry"
+        ));
+        assert!(matches!(
+            s3.put_object_if_absent("k", b"1"),
+            Err(Failure::Store { status: 503, code, message })
+                if code == "unknown" && message == "slow down"
+        ));
+        assert!(matches!(
+            s3.put_object_if_absent("k", b"1"),
+            Err(Failure::Transport(why)) if why == "connection refused"
+        ));
+    }
+
+    #[test]
+    fn a_read_is_the_object_or_nothing_or_the_stores_refusal() {
+        let mut s3 = store(
+            Conditional::IfNoneMatchStar,
+            vec![answer(200, "bytes"), answer(404, ""), answer(500, "")],
+        );
+        assert!(matches!(s3.get_object("k"), Ok(Some(b)) if b == b"bytes"));
+        assert!(matches!(s3.get_object("k"), Ok(None)));
+        assert!(matches!(
+            s3.get_object("k"),
+            Err(Failure::Store { status: 500, .. })
+        ));
+    }
+
+    #[test]
+    fn a_versioned_read_tells_a_delete_marker_and_an_unversioned_bucket_apart_from_absence() {
+        let version = VersionId("v-1".to_owned());
+        let mut s3 = store(
+            Conditional::IfNoneMatchStar,
+            vec![
+                answer(200, "old"),
+                answer(404, ""),
+                answer(405, ""),
+                answer(400, ""),
+                answer(403, ""),
+            ],
+        );
+        assert!(matches!(s3.get_object_version("k", &version), Ok(Some(b)) if b == b"old"));
+        assert!(matches!(s3.get_object_version("k", &version), Ok(None)));
+        assert!(matches!(
+            s3.get_object_version("k", &version),
+            Err(Failure::Store { status: 405, code, .. }) if code == "MethodNotAllowed"
+        ));
+        assert!(matches!(
+            s3.get_object_version("k", &version),
+            Err(Failure::Unsupported(_))
+        ));
+        assert!(matches!(
+            s3.get_object_version("k", &version),
+            Err(Failure::Store { status: 403, .. })
+        ));
+    }
+
+    #[test]
+    fn a_listing_follows_every_page_and_refuses_one_it_cannot_continue_or_read() {
+        let mut s3 = store(
+            Conditional::IfNoneMatchStar,
+            vec![listing(&["a", "b"], Some("t-1")), listing(&["c"], None)],
+        );
+        assert_eq!(
+            s3.list_objects("").ok(),
+            Some(vec!["a".to_owned(), "b".to_owned(), "c".to_owned()])
+        );
+
+        let truncated = answer(
+            200,
+            "<ListBucketResult><Contents><Key>a</Key></Contents>\
+             <IsTruncated>true</IsTruncated></ListBucketResult>",
+        );
+        let mut s3 = store(Conditional::IfNoneMatchStar, vec![truncated]);
+        assert!(matches!(s3.list_objects(""), Err(Failure::Malformed(_))));
+
+        let keyless = answer(
+            200,
+            "<ListBucketResult><Contents><Size>3</Size></Contents></ListBucketResult>",
+        );
+        let mut s3 = store(Conditional::IfNoneMatchStar, vec![keyless]);
+        assert!(matches!(s3.list_objects(""), Err(Failure::Malformed(_))));
+
+        let mut s3 = store(Conditional::IfNoneMatchStar, vec![answer(403, "")]);
+        assert!(matches!(
+            s3.list_objects(""),
+            Err(Failure::Store { status: 403, .. })
+        ));
+    }
+
+    #[test]
+    fn the_conditional_write_probe_requires_the_second_write_to_be_refused() {
+        let mut honest = store(
+            Conditional::IfNoneMatchStar,
+            vec![answer(200, ""), answer(412, "")],
+        );
+        assert!(honest.verify_conditional_writes("probe").is_ok());
+        let mut ignoring = store(
+            Conditional::IfNoneMatchStar,
+            vec![answer(200, ""), answer(200, "")],
+        );
+        assert!(matches!(
+            ignoring.verify_conditional_writes("probe"),
+            Err(Failure::Unsupported(_))
+        ));
+    }
+
+    #[test]
+    fn a_failure_is_retryable_exactly_when_waiting_could_change_it() {
+        let store = |status| Failure::Store {
+            status,
+            code: "X".to_owned(),
+            message: "y".to_owned(),
+        };
+        for status in [409, 500, 503] {
+            assert!(
+                matches!(
+                    AdapterError::from(store(status)),
+                    AdapterError::Unavailable(_)
+                ),
+                "{status} is a store having a bad minute"
+            );
+        }
+        for status in [400, 403, 404, 412, 499] {
+            assert!(
+                matches!(AdapterError::from(store(status)), AdapterError::Rejected(_)),
+                "{status} will not change on a retry"
+            );
+        }
+        assert!(matches!(
+            AdapterError::from(Failure::Transport("down".to_owned())),
+            AdapterError::Unavailable(_)
+        ));
+        assert!(matches!(
+            AdapterError::from(Failure::Malformed("x".to_owned())),
+            AdapterError::Unavailable(_)
+        ));
+        assert_eq!(
+            AdapterError::from(Failure::Unsupported("no versions")),
+            AdapterError::Unsupported("no versions")
+        );
+    }
+
+    #[test]
+    fn the_contract_narrows_a_failure_and_keeps_the_stores_own_words_for_the_operator() {
+        let mut s3 = store(
+            Conditional::IfNoneMatchStar,
+            vec![answer(
+                403,
+                "<Error><Code>SignatureDoesNotMatch</Code><Message>m</Message></Error>",
+            )],
+        );
+        assert_eq!(
+            s3.get("k"),
+            Err(AdapterError::Rejected(
+                "the object store refused the request"
+            ))
+        );
+        let kept = s3.last_failure().map(ToString::to_string);
+        assert_eq!(
+            kept.as_deref(),
+            Some("the object store answered 403 SignatureDoesNotMatch: m")
+        );
+        assert_eq!(
+            Failure::Transport("down".to_owned()).to_string(),
+            "the object store could not be reached: down"
+        );
+        assert_eq!(
+            Failure::Malformed("x".to_owned()).to_string(),
+            "the object store's answer was unreadable: x"
+        );
+        assert_eq!(
+            Failure::Unsupported("y").to_string(),
+            "this deployment cannot do that: y"
+        );
+    }
+}
