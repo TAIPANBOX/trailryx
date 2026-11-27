@@ -656,7 +656,9 @@ mod scripted {
         )]);
         assert_eq!(
             az.get("k"),
-            Err(AdapterError::Rejected("the blob service refused the request"))
+            Err(AdapterError::Rejected(
+                "the blob service refused the request"
+            ))
         );
         assert_eq!(
             az.last_failure().map(ToString::to_string).as_deref(),

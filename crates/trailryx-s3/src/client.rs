@@ -737,7 +737,9 @@ mod scripted {
     #[test]
     fn a_put_is_written_with_its_version_or_loses_the_race_or_carries_the_stores_refusal() {
         let mut written = answer(200, "");
-        written.headers.push(("X-Amz-Version-Id".to_owned(), "v-7".to_owned()));
+        written
+            .headers
+            .push(("X-Amz-Version-Id".to_owned(), "v-7".to_owned()));
         let mut s3 = store(
             Conditional::IfNoneMatchStar,
             vec![
@@ -876,7 +878,10 @@ mod scripted {
         };
         for status in [409, 500, 503] {
             assert!(
-                matches!(AdapterError::from(store(status)), AdapterError::Unavailable(_)),
+                matches!(
+                    AdapterError::from(store(status)),
+                    AdapterError::Unavailable(_)
+                ),
                 "{status} is a store having a bad minute"
             );
         }
@@ -911,7 +916,9 @@ mod scripted {
         );
         assert_eq!(
             s3.get("k"),
-            Err(AdapterError::Rejected("the object store refused the request"))
+            Err(AdapterError::Rejected(
+                "the object store refused the request"
+            ))
         );
         let kept = s3.last_failure().map(ToString::to_string);
         assert_eq!(
