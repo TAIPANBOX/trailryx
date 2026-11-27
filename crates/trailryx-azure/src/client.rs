@@ -441,12 +441,37 @@ fn blocks<'a>(xml: &'a str, tag: &str) -> Vec<&'a str> {
     out
 }
 
+/// The five predefined XML entities, each decoded once, in one pass.
+///
+/// Chained `replace` calls decoded `&amp;` first and then decoded the result
+/// again, so a blob named `a&lt;b` (sent as `a&amp;lt;b`) came back as `a<b`.
+/// An ampersand that begins no entity is kept as it is.
 fn decode_entities(text: &str) -> String {
-    text.replace("&amp;", "&")
-        .replace("&lt;", "<")
-        .replace("&gt;", ">")
-        .replace("&quot;", "\"")
-        .replace("&apos;", "'")
+    const ENTITIES: [(&str, char); 5] = [
+        ("&amp;", '&'),
+        ("&lt;", '<'),
+        ("&gt;", '>'),
+        ("&quot;", '"'),
+        ("&apos;", '\''),
+    ];
+    let mut out = String::with_capacity(text.len());
+    let mut rest = text;
+    while let Some(at) = rest.find('&') {
+        out.push_str(&rest[..at]);
+        rest = &rest[at..];
+        match ENTITIES.iter().find(|(entity, _)| rest.starts_with(entity)) {
+            Some((entity, ch)) => {
+                out.push(*ch);
+                rest = &rest[entity.len()..];
+            }
+            None => {
+                out.push('&');
+                rest = &rest[1..];
+            }
+        }
+    }
+    out.push_str(rest);
+    out
 }
 
 #[cfg(test)]
