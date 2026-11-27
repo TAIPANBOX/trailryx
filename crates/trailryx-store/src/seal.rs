@@ -65,7 +65,7 @@ impl std::fmt::Display for StoreError {
             Self::DurabilityViolation {
                 promised,
                 recovered,
-            } => write!(f, "promised {recovered} records, recovered {promised}"),
+            } => write!(f, "promised {promised} records, recovered {recovered}"),
             Self::ChainDoesNotStartThere { declared, actual } => write!(
                 f,
                 "the segment declares its chain begins at {} and its first record continues from {}",

@@ -295,7 +295,7 @@ impl Azure {
             )),
             // The race was lost. A normal outcome of two nodes sealing the same
             // segment, not a failure.
-            412 => Ok((PutOutcome::AlreadyExists, None)),
+            409 | 412 => Ok((PutOutcome::AlreadyExists, None)),
             _ => Err(Self::refusal(&response)),
         }
     }

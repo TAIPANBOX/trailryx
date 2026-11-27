@@ -93,7 +93,7 @@ fn main() -> std::process::ExitCode {
     // One door, one way in. A door that took the fleet secret as well would let
     // any holder of the secret write as any agent, which is what the agent
     // token is there to end.
-    if flags.any() || token_file.is_some() {
+    if flags.any() && token_file.is_some() {
         return fail("pass --token-file or the --agent-token-* flags, not both");
     }
     let agent_tokens = flags.any();

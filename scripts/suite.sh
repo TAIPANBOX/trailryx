@@ -182,7 +182,7 @@ run() {
   # results), libtest is asked for its terse form so the log stays readable, and the
   # build messages go to the record but not to the log. `tee` would hide cargo's exit
   # status, so it is read from PIPESTATUS before anything else runs.
-  cargo test --workspace --no-fail-fast --message-format json-render-diagnostics -- --quiet 2>&1 |
+  cargo test --workspace --message-format json-render-diagnostics -- --quiet 2>&1 |
     tee -a "$rec" |
     grep -v '^{"reason":'
   local status=${PIPESTATUS[0]}

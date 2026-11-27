@@ -89,7 +89,7 @@ fn from_settings(var: &dyn Fn(&str) -> Option<String>) -> Result<Chosen, String>
     match var("TRAILRYX_DEMO_STORE").as_deref() {
         None | Some("") | Some("memory") => Ok(Chosen::default()),
         Some("s3") => s3(Flavour::Aws, var),
-        Some("gcs") => s3(Flavour::Aws, var),
+        Some("gcs") => s3(Flavour::Gcs, var),
         Some("azure") => azure(var),
         Some(other) => Err(format!(
             "TRAILRYX_DEMO_STORE={other} is not a store this run knows: \

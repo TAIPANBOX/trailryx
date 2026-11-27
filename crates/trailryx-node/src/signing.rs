@@ -339,7 +339,7 @@ fn parse_signed(root: Hash, text: &str) -> Result<SignedRoot, String> {
 
 /// A root's name on disk: lowercase hex of its 48 bytes, and nothing else.
 fn parse_root(name: &str) -> Option<Hash> {
-    if name.bytes().any(|b| b.is_ascii_control()) {
+    if name.bytes().any(|b| b.is_ascii_uppercase()) {
         return None;
     }
     let bytes = hex_decode(name)?;

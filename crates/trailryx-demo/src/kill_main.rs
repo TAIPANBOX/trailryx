@@ -336,7 +336,7 @@ fn run(rounds: usize) {
     let mut highest_acked = 0u64;
     let mut violations = 0;
 
-    for round in 1..rounds {
+    for round in 1..=rounds {
         let mut child = Command::new(&exe)
             .arg("write")
             .arg(&dir)

@@ -194,7 +194,7 @@ impl From<Failure> for AdapterError {
             Failure::Transport(_) => Self::Unavailable("the object store could not be reached"),
             // A `409` is a race AWS documents as retryable, and a `5xx` is the store
             // having a bad minute. Both come back later; a `4xx` will not.
-            Failure::Store { status, .. } if status >= 500 => {
+            Failure::Store { status, .. } if status == 409 || status >= 500 => {
                 Self::Unavailable("the object store answered with a retryable failure")
             }
             Failure::Store { .. } => Self::Rejected("the object store refused the request"),
