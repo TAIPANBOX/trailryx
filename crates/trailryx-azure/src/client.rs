@@ -464,6 +464,27 @@ mod tests {
         assert_eq!(http_date(4_107_542_400), "Mon, 01 Mar 2100 00:00:00 GMT");
     }
 
+    /// Each entity is decoded once. A blob named `a&lt;b` comes back from the
+    /// service as `a&amp;lt;b`; decoding `&amp;` first and then `&lt;` over the
+    /// result turned it into `a<b`, a name that does not exist.
+    #[test]
+    fn an_escaped_entity_in_a_name_is_decoded_once_not_twice() {
+        for (wire, name) in [
+            ("a&amp;lt;b", "a&lt;b"),
+            ("a&amp;gt;b", "a&gt;b"),
+            ("a&amp;quot;b", "a&quot;b"),
+            ("a&amp;apos;b", "a&apos;b"),
+            ("a&amp;amp;b", "a&amp;b"),
+            ("runs/a&amp;b/&lt;seg&gt;&quot;1&quot;&apos;.trx", r#"runs/a&b/<seg>"1"'.trx"#),
+            ("a&b&amp;c", "a&b&c"),
+            ("a&", "a&"),
+            ("&#60;", "&#60;"),
+        ] {
+            let xml = format!("<Blob><Name>{wire}</Name></Blob>");
+            assert_eq!(text_of(&xml, "Name").as_deref(), Some(name), "{wire:?}");
+        }
+    }
+
     #[test]
     fn a_listing_reads_names_and_stops_on_an_empty_marker() {
         let xml = "<EnumerationResults><Blobs>\

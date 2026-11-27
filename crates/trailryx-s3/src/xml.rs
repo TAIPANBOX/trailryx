@@ -145,6 +145,23 @@ mod tests {
         );
     }
 
+    /// Each entity is decoded once: a key named `a&lt;b` arrives as
+    /// `a&amp;lt;b` and must not come back as `a<b`.
+    #[test]
+    fn an_escaped_entity_in_a_key_is_decoded_once_not_twice() {
+        for (wire, key) in [
+            ("a&amp;lt;b", "a&lt;b"),
+            ("a&amp;gt;b", "a&gt;b"),
+            ("a&amp;quot;b", "a&quot;b"),
+            ("a&amp;apos;b", "a&apos;b"),
+            ("a&amp;amp;b", "a&amp;b"),
+            ("&#60;", "&#60;"),
+        ] {
+            let xml = format!("<Key>{wire}</Key>");
+            assert_eq!(text_of(&xml, "Key").as_deref(), Some(key), "{wire:?}");
+        }
+    }
+
     #[test]
     fn an_ampersand_that_begins_nothing_is_kept() {
         assert_eq!(
