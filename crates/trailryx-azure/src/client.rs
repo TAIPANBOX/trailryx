@@ -521,20 +521,24 @@ mod scripted {
         for name in names {
             body.push_str(&format!("<Blob><Name>{name}</Name></Blob>"));
         }
-        body.push_str(&format!("</Blobs><NextMarker>{next}</NextMarker></EnumerationResults>"));
+        body.push_str(&format!(
+            "</Blobs><NextMarker>{next}</NextMarker></EnumerationResults>"
+        ));
         answer(200, &body)
     }
 
     #[test]
     fn a_put_is_written_or_loses_the_race_either_way_azure_says_so_or_is_refused() {
         let mut created = answer(201, "");
-        created
-            .headers
-            .push(("x-ms-version-id".to_owned(), "2026-11-26T00:00:00Z".to_owned()));
+        created.headers.push((
+            "x-ms-version-id".to_owned(),
+            "2026-11-26T00:00:00Z".to_owned(),
+        ));
         let mut denied = answer(403, "");
-        denied
-            .headers
-            .push(("x-ms-error-code".to_owned(), "AuthorizationFailure".to_owned()));
+        denied.headers.push((
+            "x-ms-error-code".to_owned(),
+            "AuthorizationFailure".to_owned(),
+        ));
         let mut az = azure(vec![
             created,
             answer(409, ""),
