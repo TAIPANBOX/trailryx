@@ -441,12 +441,37 @@ fn blocks<'a>(xml: &'a str, tag: &str) -> Vec<&'a str> {
     out
 }
 
+/// The five predefined XML entities, each decoded once, in one pass.
+///
+/// Chained `replace` calls decoded `&amp;` first and then decoded the result
+/// again, so a blob named `a&lt;b` (sent as `a&amp;lt;b`) came back as `a<b`.
+/// An ampersand that begins no entity is kept as it is.
 fn decode_entities(text: &str) -> String {
-    text.replace("&amp;", "&")
-        .replace("&lt;", "<")
-        .replace("&gt;", ">")
-        .replace("&quot;", "\"")
-        .replace("&apos;", "'")
+    const ENTITIES: [(&str, char); 5] = [
+        ("&amp;", '&'),
+        ("&lt;", '<'),
+        ("&gt;", '>'),
+        ("&quot;", '"'),
+        ("&apos;", '\''),
+    ];
+    let mut out = String::with_capacity(text.len());
+    let mut rest = text;
+    while let Some(at) = rest.find('&') {
+        out.push_str(&rest[..at]);
+        rest = &rest[at..];
+        match ENTITIES.iter().find(|(entity, _)| rest.starts_with(entity)) {
+            Some((entity, ch)) => {
+                out.push(*ch);
+                rest = &rest[entity.len()..];
+            }
+            None => {
+                out.push('&');
+                rest = &rest[1..];
+            }
+        }
+    }
+    out.push_str(rest);
+    out
 }
 
 #[cfg(test)]
@@ -462,6 +487,30 @@ mod tests {
         assert_eq!(http_date(0), "Thu, 01 Jan 1970 00:00:00 GMT");
         assert_eq!(http_date(951_782_400), "Tue, 29 Feb 2000 00:00:00 GMT");
         assert_eq!(http_date(4_107_542_400), "Mon, 01 Mar 2100 00:00:00 GMT");
+    }
+
+    /// Each entity is decoded once. A blob named `a&lt;b` comes back from the
+    /// service as `a&amp;lt;b`; decoding `&amp;` first and then `&lt;` over the
+    /// result turned it into `a<b`, a name that does not exist.
+    #[test]
+    fn an_escaped_entity_in_a_name_is_decoded_once_not_twice() {
+        for (wire, name) in [
+            ("a&amp;lt;b", "a&lt;b"),
+            ("a&amp;gt;b", "a&gt;b"),
+            ("a&amp;quot;b", "a&quot;b"),
+            ("a&amp;apos;b", "a&apos;b"),
+            ("a&amp;amp;b", "a&amp;b"),
+            (
+                "runs/a&amp;b/&lt;seg&gt;&quot;1&quot;&apos;.trx",
+                r#"runs/a&b/<seg>"1"'.trx"#,
+            ),
+            ("a&b&amp;c", "a&b&c"),
+            ("a&", "a&"),
+            ("&#60;", "&#60;"),
+        ] {
+            let xml = format!("<Blob><Name>{wire}</Name></Blob>");
+            assert_eq!(text_of(&xml, "Name").as_deref(), Some(name), "{wire:?}");
+        }
     }
 
     #[test]

@@ -2940,6 +2940,42 @@ fn lost_sums_the_lines_that_produced_nothing_and_not_the_ones_that_mapped() {
     assert_eq!(report.lost(), 28);
 }
 
+/// Every refusal is a line that produced nothing, so each one, noted once,
+/// adds exactly one to `lost()`. The test above built its report with
+/// `..Report::default()` and so never set `claimed_subject`, which is how
+/// `lost()` came to leave it out and `trailryx-node events` to print fewer
+/// refused lines than it had just listed by name.
+#[test]
+fn every_rejection_noted_once_is_one_lost_line() {
+    use trailryx_agentevent::{Rejection, Report};
+
+    let all = [
+        Rejection::NotAnEnvelope,
+        Rejection::UnknownSchema,
+        Rejection::NoAgent,
+        Rejection::ForeignTrustDomain,
+        Rejection::ClaimedSubject,
+        Rejection::UnknownType,
+        Rejection::NoRunId,
+        Rejection::BadTime,
+    ];
+    let mut total = Report::default();
+    for rejection in all {
+        let mut one = Report::default();
+        one.note(rejection);
+        assert_eq!(one.lost(), 1, "{rejection:?} was not counted as lost");
+        total.note(rejection);
+    }
+    assert_eq!(total.lost(), all.len() as u32);
+
+    let only_claims = Report {
+        mapped: 5,
+        claimed_subject: 3,
+        ..Report::default()
+    };
+    assert_eq!(only_claims.lost(), 3);
+}
+
 #[test]
 fn a_trust_domain_that_cannot_form_an_agent_identifier_is_refused_at_start() {
     use trailryx_agentevent::ConfigError;

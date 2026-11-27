@@ -699,14 +699,33 @@ impl Report {
     /// All of them, unlike the OTLP mapper's, and the difference is the stream: a
     /// database span in an OTLP batch is traffic that was never ours, while every
     /// line here is addressed to this envelope by its own `schema` member.
+    ///
+    /// Every field is named, so a refusal reason added to [`Report`] does not
+    /// compile until somebody decides whether it is lost.
     pub fn lost(&self) -> u32 {
-        self.not_an_envelope
-            .saturating_add(self.unknown_schema)
-            .saturating_add(self.no_agent)
-            .saturating_add(self.foreign_trust_domain)
-            .saturating_add(self.unknown_type)
-            .saturating_add(self.no_run_id)
-            .saturating_add(self.bad_time)
+        let Self {
+            mapped: _,
+            not_an_envelope,
+            unknown_schema,
+            no_agent,
+            foreign_trust_domain,
+            claimed_subject,
+            unknown_type,
+            no_run_id,
+            bad_time,
+        } = *self;
+        [
+            not_an_envelope,
+            unknown_schema,
+            no_agent,
+            foreign_trust_domain,
+            claimed_subject,
+            unknown_type,
+            no_run_id,
+            bad_time,
+        ]
+        .into_iter()
+        .fold(0, u32::saturating_add)
     }
 }
 
