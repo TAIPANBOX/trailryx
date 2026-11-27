@@ -481,3 +481,198 @@ mod tests {
         );
     }
 }
+
+/// The client against a blob service that answers from a script, so every status
+/// the operations branch on is reached without a server.
+#[cfg(test)]
+mod scripted {
+    use super::*;
+    use std::collections::VecDeque;
+
+    /// Answers in order, and a transport failure once the script runs out.
+    struct Script(VecDeque<Response>);
+
+    impl Http for Script {
+        fn send(&mut self, _request: &HttpRequest) -> Result<Response, String> {
+            self.0
+                .pop_front()
+                .ok_or_else(|| "connection refused".to_owned())
+        }
+    }
+
+    fn answer(status: u16, body: &str) -> Response {
+        Response {
+            status,
+            headers: Vec::new(),
+            body: body.as_bytes().to_vec(),
+        }
+    }
+
+    fn azure(answers: Vec<Response>) -> Azure {
+        Azure::with_transport(
+            Box::new(Script(answers.into())),
+            "evidence",
+            Credentials::new("devstoreaccount1", "a2V5").expect("a base64 key"),
+        )
+    }
+
+    fn page(names: &[&str], next: &str) -> Response {
+        let mut body = String::from("<EnumerationResults><Blobs>");
+        for name in names {
+            body.push_str(&format!("<Blob><Name>{name}</Name></Blob>"));
+        }
+        body.push_str(&format!("</Blobs><NextMarker>{next}</NextMarker></EnumerationResults>"));
+        answer(200, &body)
+    }
+
+    #[test]
+    fn a_put_is_written_or_loses_the_race_either_way_azure_says_so_or_is_refused() {
+        let mut created = answer(201, "");
+        created
+            .headers
+            .push(("x-ms-version-id".to_owned(), "2026-11-26T00:00:00Z".to_owned()));
+        let mut denied = answer(403, "");
+        denied
+            .headers
+            .push(("x-ms-error-code".to_owned(), "AuthorizationFailure".to_owned()));
+        let mut az = azure(vec![
+            created,
+            answer(409, ""),
+            answer(412, ""),
+            denied,
+            answer(
+                400,
+                "<Error><Code>InvalidHeaderValue</Code><Message>bad</Message></Error>",
+            ),
+        ]);
+        assert!(matches!(
+            az.put_blob_if_absent("k", b"1"),
+            Ok((PutOutcome::Written, Some(VersionId(v)))) if v == "2026-11-26T00:00:00Z"
+        ));
+        for _ in 0..2 {
+            assert!(matches!(
+                az.put_blob_if_absent("k", b"1"),
+                Ok((PutOutcome::AlreadyExists, None))
+            ));
+        }
+        assert!(matches!(
+            az.put_blob_if_absent("k", b"1"),
+            Err(AzureFailure::Store { status: 403, code, .. }) if code == "AuthorizationFailure"
+        ));
+        assert!(matches!(
+            az.put_blob_if_absent("k", b"1"),
+            Err(AzureFailure::Store { status: 400, code, message })
+                if code == "InvalidHeaderValue" && message == "bad"
+        ));
+        assert!(matches!(
+            az.put_blob_if_absent("k", b"1"),
+            Err(AzureFailure::Transport(_))
+        ));
+    }
+
+    #[test]
+    fn a_read_and_a_versioned_read_are_the_blob_or_nothing_or_the_refusal() {
+        let version = VersionId("v".to_owned());
+        let mut az = azure(vec![
+            answer(200, "now"),
+            answer(404, ""),
+            answer(500, "busy"),
+            answer(200, "then"),
+            answer(404, ""),
+            answer(403, ""),
+        ]);
+        assert!(matches!(az.get_blob("k"), Ok(Some(b)) if b == b"now"));
+        assert!(matches!(az.get_blob("k"), Ok(None)));
+        assert!(matches!(
+            az.get_blob("k"),
+            Err(AzureFailure::Store { status: 500, code, message })
+                if code == "unknown" && message == "busy"
+        ));
+        assert!(matches!(az.get_blob_version("k", &version), Ok(Some(b)) if b == b"then"));
+        assert!(matches!(az.get_blob_version("k", &version), Ok(None)));
+        assert!(matches!(
+            az.get_blob_version("k", &version),
+            Err(AzureFailure::Store { status: 403, .. })
+        ));
+    }
+
+    #[test]
+    fn a_listing_follows_the_marker_and_refuses_an_entry_with_no_name() {
+        let mut az = azure(vec![page(&["a/1", "a/2"], "m-1"), page(&["a/3"], "")]);
+        assert_eq!(
+            az.list_blobs("a/").ok(),
+            Some(vec!["a/1".to_owned(), "a/2".to_owned(), "a/3".to_owned()])
+        );
+        let mut az = azure(vec![answer(
+            200,
+            "<EnumerationResults><Blobs><Blob><Size>1</Size></Blob></Blobs></EnumerationResults>",
+        )]);
+        assert!(matches!(az.list_blobs(""), Err(AzureFailure::Malformed(_))));
+        let mut az = azure(vec![answer(404, "")]);
+        assert!(matches!(
+            az.list_blobs(""),
+            Err(AzureFailure::Store { status: 404, .. })
+        ));
+    }
+
+    #[test]
+    fn a_failure_is_retryable_exactly_when_waiting_could_change_it() {
+        let store = |status| AzureFailure::Store {
+            status,
+            code: "X".to_owned(),
+            message: "y".to_owned(),
+        };
+        for status in [409, 500, 503] {
+            assert!(matches!(
+                AdapterError::from(store(status)),
+                AdapterError::Unavailable(_)
+            ));
+        }
+        for status in [400, 403, 404, 412] {
+            assert!(matches!(
+                AdapterError::from(store(status)),
+                AdapterError::Rejected(_)
+            ));
+        }
+        assert!(matches!(
+            AdapterError::from(AzureFailure::Transport("down".to_owned())),
+            AdapterError::Unavailable(_)
+        ));
+        assert!(matches!(
+            AdapterError::from(AzureFailure::Malformed("x".to_owned())),
+            AdapterError::Unavailable(_)
+        ));
+    }
+
+    #[test]
+    fn the_contract_narrows_a_failure_and_keeps_the_services_own_words() {
+        let mut az = azure(vec![answer(
+            403,
+            "<Error><Code>AuthenticationFailed</Code><Message>m</Message></Error>",
+        )]);
+        assert_eq!(
+            az.get("k"),
+            Err(AdapterError::Rejected("the blob service refused the request"))
+        );
+        assert_eq!(
+            az.last_failure().map(ToString::to_string).as_deref(),
+            Some("the blob service answered 403 AuthenticationFailed: m")
+        );
+        assert_eq!(
+            AzureFailure::Transport("down".to_owned()).to_string(),
+            "the blob service could not be reached: down"
+        );
+        assert_eq!(
+            AzureFailure::Malformed("x".to_owned()).to_string(),
+            "the blob service's answer was unreadable: x"
+        );
+    }
+
+    #[test]
+    fn a_query_value_keeps_the_unreserved_characters_and_escapes_the_rest_in_upper_case() {
+        assert_eq!(encode("AZaz09-_.~"), "AZaz09-_.~");
+        assert_eq!(encode("a b/c"), "a%20b%2Fc");
+        assert_eq!(encode("\u{fc}"), "%C3%BC");
+        assert_eq!(encode(""), "");
+    }
+}
