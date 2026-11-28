@@ -681,16 +681,13 @@ that nobody has to have read this page.
 - **One shard per process.** The plane is single-writer by construction, which is
   what the journal's sequence requires; more shards means more processes.
 
-Two more absences worth naming, because they are the ones somebody would assume
-away. The receiver and `run` have still not been measured for throughput; the
-agent-event importer now has been, on 2026-08-25, at 50,000 records in 1.63 s
-with the commands and the limits in [`VALIDATION.md`](VALIDATION.md), and the
-limits are the half worth reading. And a segment that has been sealed is never
-re-read into memory by `run`, so the process holds one open journal and nothing
-else.
+A segment that has been sealed is never re-read into memory by `run`, so the
+process holds one open journal and nothing else.
 
-Throughput was the other absence on this list until 8 August 2026, when
-`./scripts/append-rate.sh` measured the APPEND rate across five `sync_every`
+Two throughput figures were measured. The agent-event importer, on 2026-08-25,
+ran 50,000 records in 1.63 s, with the commands and the limits in
+[`VALIDATION.md`](VALIDATION.md), and the limits are the half worth reading. On
+8 August 2026 `./scripts/append-rate.sh` measured the APPEND rate across five `sync_every`
 policies, which is a different question from the importer's end-to-end figure
 above: this one is the field between "durable before the next record is
 written" and "durable in batches". The figures live in
@@ -2182,19 +2179,13 @@ proves and erases. That is the test of whose engine it is.
 command that produced it and the date it was run, split into the ones the gate
 re-measures on every push and the ones somebody has to run.
 
-It also has a section called *not yet measured*, which is the more useful half: no
-machine ever died as opposed to a process, no second I/O backend to compare the first
-against, no run against a live cloud bucket, no years of simulated time, no external
-audit of the cryptographic layer.
-
-Two headlines from the half that is measured, and they only mean anything together.
+Two headlines from it, and they only mean anything together.
 
 **A hundred and twenty processes killed with `SIGKILL` mid-write, forty each on
 apfs, ext4 and xfs, and not one acked record lost.** That is the sentence the whole
 design is built on, tested by something other than the simulator that was written to
 believe it. The limit is named in the same place as the number: a `SIGKILL` is a
-process dying, not a machine, so the page cache survives it and power loss is a
-harsher test that has not been run.
+process dying, not a machine, so the page cache survives it.
 
 **Pointed at real object stores, the S3 adapter failed three ways, and every test
 here was green.** It sent two `Host` headers, which RFC 9112 requires a server to
